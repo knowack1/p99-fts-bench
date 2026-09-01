@@ -27,6 +27,7 @@ refuses to summarize an empty window.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 
@@ -54,7 +55,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-state", default="warm")
     parser.add_argument("--rep", type=int, default=0)
     parser.add_argument("--engine-version", default="")
+    parser.add_argument("--extra", action="append", default=[],
+                        metavar="KEY=VALUE",
+                        help="extra fields recorded verbatim in the summary "
+                             "(e.g. churn_ops_per_s=2000 for the S28 grid)")
     return parser.parse_args()
+
+
+def extra_fields(pairs: list[str]) -> dict:
+    fields = {}
+    for pair in pairs:
+        key, _, value = pair.partition("=")
+        try:
+            fields[key] = json.loads(value)
+        except json.JSONDecodeError:
+            fields[key] = value
+    return fields
 
 
 def cell_header(args: argparse.Namespace, query_set: dict) -> dict:
@@ -91,6 +107,7 @@ def run_cell(args: argparse.Namespace) -> dict:
         "first_error": tally.first_error,
         "achieved_qps": round(tally.completed / wall, 2) if wall > 0 else 0.0,
         "queue_p99_ms": queue_p99_ms(tally),
+        **extra_fields(args.extra),
         **summary,
     }
 
