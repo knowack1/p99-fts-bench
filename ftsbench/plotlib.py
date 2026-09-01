@@ -86,6 +86,11 @@ CHART_CLAIMS = {
     "GROWTH-RSS": "RSS over the same build shows the in-RAM Tantivy index "
                   "growing with the corpus against OpenSearch's heap-bounded "
                   "profile — at equal, disclosed budgets.",
+    "READ-SWEEP": "Closed-loop concurrency sweep: p99 flat until queueing "
+                  "takes over, and the SLA crossing read down to achieved "
+                  "throughput is each engine's max under the SLA.",
+    "READ-HEATMAP": "p99 against the SLA across the read-path grid: where "
+                    "each engine's under-SLA region ends.",
 }
 
 CONFIDENCE_TIERS = {
@@ -106,6 +111,10 @@ CONFIDENCE_TIERS = {
                   "(WRITE-PATH-TEST-PLAN.md)",
     "GROWTH-RSS": "assess per run — introduced for the AWS fleet campaign "
                   "(WRITE-PATH-TEST-PLAN.md)",
+    "READ-SWEEP": "assess per run — introduced for the AWS fleet campaign "
+                  "(READ-PATH-TEST-PLAN.md)",
+    "READ-HEATMAP": "assess per run — introduced for the AWS fleet campaign "
+                    "(READ-PATH-TEST-PLAN.md)",
 }
 
 AWS_DELTAS = {
@@ -133,6 +142,10 @@ AWS_DELTAS = {
                   "loader-bound build.",
     "GROWTH-RSS": "laptop RSS measured the docker/.env budgets, not appetite; "
                   "no comparison is valid.",
+    "READ-SWEEP": "no laptop baseline: the closed-loop convention replaced "
+                  "the open-loop C7 sweep for the AWS pass.",
+    "READ-HEATMAP": "no laptop baseline: the read-path grid is new for the "
+                    "AWS pass.",
 }
 
 CONFIG_STYLES = {
