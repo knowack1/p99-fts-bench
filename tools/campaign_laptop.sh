@@ -306,7 +306,14 @@ set_make_args() {
 # left a half-written latency log and no complaint at all. Recorded through
 # gate_log so results_tree shows it beside the real gates.
 make_step() {
-  local target="${*: -1}"
+  # The recorded name must be the make TARGET, not whatever VAR=VAL override
+  # happened to come last: mk c1-os C1_UNTIL_DOCS=20000 once produced a gate
+  # named make_C1_UNTIL_DOCS=20000_succeeded.
+  local target="" arg
+  for arg in "$@"; do
+    [[ "$arg" == make || "$arg" == *=* ]] || target="$arg"
+  done
+  target="${target:-${*: -1}}"
   if [[ "$DRY_RUN" == 1 ]]; then echo "+ $*" >&2; return 0; fi
   "$@" && return 0
   "$PYTHON" -m ftsbench.gate_log --manifest "$(manifest_path)" \
