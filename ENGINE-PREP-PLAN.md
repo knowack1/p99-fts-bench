@@ -118,10 +118,11 @@ C7 is measuring the client.
 - **IAM role + S3 bucket** (eu-north-1) — corpus staging; until then a
   harness stop costs a ~3 h re-download+prepare (fully scripted, see
   `tools/parallel_fetch_remaining.sh` for the 2-connection fetch).
-- **Publish the vector-store build** properly before quoting numbers
-  (fork branch is public; consider an upstream PR or a registry push).
-- Commit the uncommitted laptop work: parallel `prepare_corpus` + tests,
-  `FREEZE.md` enwiki section, `SUT-CONFIG.md`, this file.
+- Reproducibility publication: DONE 2026-09-01 — harness at
+  https://github.com/knowack1/p99-fts-bench (public extract of `bench/`,
+  no results/ or internal planning docs; re-export after material harness
+  changes), vector-store source on the public fork branch. Optional remainder:
+  push the built image to a registry so reproducers can skip the build.
 - Scylla `2026.3.0-rc3` exists; staying on rc2 unless retested.
 
 ## Notes for the AI running the next session
