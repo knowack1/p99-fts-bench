@@ -96,8 +96,14 @@ run() {
 
 # --- Preflight -------------------------------------------------------------
 
+# Memoized: on enwiki this is a wc -l over a 35 GB file, and the gates call it
+# per repetition.
+CORPUS_DOCS_CACHE=""
 corpus_docs() {
-  wc -l < data/corpus.jsonl
+  if [[ -z "$CORPUS_DOCS_CACHE" ]]; then
+    CORPUS_DOCS_CACHE="$(wc -l < data/corpus.jsonl)"
+  fi
+  echo "$CORPUS_DOCS_CACHE"
 }
 
 expected_docs() {
@@ -519,6 +525,10 @@ run_scylla() {
 run_config() {
   case "$1" in
     opensearch)           run_opensearch opensearch 1s ;;
+    # The SUT parity configuration: refresh_interval=3s matches the
+    # vector-store's 3 s commit interval with the 10k threshold disabled
+    # (docker/.env.sut) — the write-path campaign's OpenSearch config.
+    opensearch-refresh3)  run_opensearch opensearch-refresh3 3s ;;
     opensearch-refresh30) run_opensearch opensearch-refresh30 30s ;;
     scylla-bootstrap)     run_scylla scylla-bootstrap bootstrap ;;
     scylla-cdc)           run_scylla scylla-cdc cdc ;;

@@ -34,13 +34,17 @@ PIDFILE="/tmp/$remote_name.pid"
 
 case "$CMD" in
   start)
+    # The braces around nohup are load-bearing: without them the remote
+    # shell's & backgrounds the WHOLE cd-&&-if-&&-nohup list, echo races the
+    # existence check over the pidfile, and the recorded pid is the
+    # subshell's, not the probe's.
     ssh "$SUT" "cd $BENCH_ON_SUT && \
       if [ -f $PIDFILE ] && kill -0 \$(cat $PIDFILE) 2>/dev/null; then \
         echo 'probe already running' >&2; exit 1; fi && \
       rm -f $REMOTE_OUT && \
-      nohup $PYTHON_ON_SUT -m ftsbench.resource_probe $ARGS \
-        --output $REMOTE_OUT >/tmp/$remote_name.log 2>&1 & \
-      echo \$! > $PIDFILE"
+      { nohup $PYTHON_ON_SUT -m ftsbench.resource_probe $ARGS \
+          --output $REMOTE_OUT </dev/null >/tmp/$remote_name.log 2>&1 & \
+        echo \$! > $PIDFILE; }"
     ;;
   stop)
     ssh "$SUT" "if [ -f $PIDFILE ]; then \
