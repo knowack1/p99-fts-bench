@@ -33,12 +33,13 @@ AXIS_CAVEAT = (
     "one batch (driver-held). Compare the ceilings, not equal-x points."
 )
 COMMIT_NOTE = (
-    "OpenSearch runs refresh_interval=3s to match the vector-store's "
-    "COMMIT_INTERVAL=3s. scylla-cdc is stock 1.10.0, where commits also fire at "
-    "MAX_UNCOMMITTED_THRESHOLD=10,000 docs — the trigger that actually binds "
-    "above ~3,300 docs/s. scylla-cdc-nothreshold is 1.10.0 with that threshold "
-    "raised to usize::MAX, so the 3s interval is the only trigger and the "
-    "refresh parity with OpenSearch holds across the whole ladder."
+    "OpenSearch runs refresh_interval=3s to match the vector-store's 3 s "
+    "commit interval. The vector-store is the published-source tunables build "
+    "(1.10.0-43-ge242fa3) with VECTOR_STORE_FTS_COMMIT_THRESHOLD=0: the "
+    "compiled-in 10,000-uncommitted-docs trigger is disabled, so commits are "
+    "purely interval-driven and the refresh parity with OpenSearch holds "
+    "across the whole ladder. DEVIATION FROM RELEASE BEHAVIOUR, per "
+    "SUT-CONFIG.md."
 )
 
 CSV_COLUMNS = (
