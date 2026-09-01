@@ -27,6 +27,7 @@ services:
       --memory ${SCYLLA_MEMORY}
       --overprovisioned ${SCYLLA_OVERPROVISIONED:-1}
       --vector-store-primary-uri http://vector-store:6080
+      ${SCYLLA_BROADCAST_RPC:+--broadcast-rpc-address ${SCYLLA_BROADCAST_RPC}}
     ports:
       # Host side is overridable: a devcontainer port-forward may already
       # hold 9042. Container side is fixed — vector-store dials scylla:9042.
