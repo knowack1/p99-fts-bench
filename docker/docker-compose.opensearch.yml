@@ -1,0 +1,42 @@
+# Single-node OpenSearch for the local pipeline shakeout.
+# Heap / refresh / container caps come from docker/.env and are laptop values —
+# the real benchmark must run tuned, published settings on i3en-class hardware
+# (concept doc §7 fairness rules). Do not quote a number produced with these.
+services:
+  opensearch:
+    image: ${OPENSEARCH_IMAGE}
+    container_name: fts-bench-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=${OS_HEAP}
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      # Lucene's indexing buffer for the node, divided among active shards — the
+      # counterpart to tantivy's memory_budget_per_thread. Node-level and NOT
+      # dynamic, so it has to arrive as an environment variable; a _cluster/settings
+      # PUT is silently ignored for it. Unset leaves the 10%-of-heap default
+      # (~410 MB on a 4 GB heap), which is what every earlier run used.
+      - indices.memory.index_buffer_size${OS_INDEX_BUFFER:+=${OS_INDEX_BUFFER}}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    # Must stay above the JVM heap in OS_HEAP: the JVM needs off-heap room on
+    # top of it, and an OOM-kill mid-run silently truncates a C1 series.
+    mem_limit: ${OS_MEM_LIMIT}
+    cpus: ${OS_CPUS}
+    # Quota (cpus) says how much; cpuset says where. Without the cpuset an
+    # engine thread can be scheduled onto the 2.5 GHz LP-E cores, a 1.92x
+    # frequency step that would show up as engine tail latency.
+    cpuset: ${ENGINE_CPUSET}
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+volumes:
+  opensearch-data:

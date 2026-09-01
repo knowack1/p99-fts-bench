@@ -1,0 +1,93 @@
+# Single-node ScyllaDB + vector-store for the local pipeline shakeout.
+# Modelled on vector-store/docs/examples/docker/docker-compose.yml.
+#
+# The two services are wired in both directions and both halves are required:
+# Scylla is told where the index service lives (--vector-store-primary-uri) so
+# it can route fulltext_index DDL and queries; vector-store is told where the
+# cluster lives (VECTOR_STORE_SCYLLADB_URI) so it can scan the base table and
+# tail CDC. Neither direction alone produces a working FTS setup.
+#
+# Sizing comes from docker/.env and is LAPTOP-SIMULATION ONLY — not the
+# benchmark's published tuning. See the header of that file.
+#
+# --overprovisioned 1 stays ON for the laptop campaign and must come OFF on
+# AWS. It is not a handicap here, it is the correct setting: Scylla does not
+# own this machine — it holds a 3-of-12-logical-CPU quota and shares the P-core
+# set with vector-store. Without the flag Scylla assumes dedicated cores and
+# busy-polls, which would burn its whole quota on spin, starve vector-store on
+# the same cpuset, and put a fictional number on the C4 CPU chart. On a
+# dedicated i4i/im4gn box the flag becomes the wrong setting and is removed.
+
+services:
+  scylla:
+    image: ${SCYLLA_IMAGE}
+    container_name: fts-bench-scylla
+    command: >
+      --smp ${SCYLLA_SMP}
+      --memory ${SCYLLA_MEMORY}
+      --overprovisioned 1
+      --vector-store-primary-uri http://vector-store:6080
+    ports:
+      # Host side is overridable: a devcontainer port-forward may already
+      # hold 9042. Container side is fixed — vector-store dials scylla:9042.
+      - "${SCYLLA_HOST_PORT:-9042}:9042"
+    # cqlsh, not a TCP probe: the port is listening well before CQL will
+    # answer, and vector-store's depends_on gates on this.
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'SELECT now() FROM system.local'"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    mem_limit: ${SCYLLA_MEM_LIMIT}
+    cpus: ${SCYLLA_CPUS}
+    # See the OpenSearch compose file: the quota is how much, the cpuset is
+    # where. Both engine-side services share the P-core set, with quotas that
+    # sum to the OpenSearch quota.
+    cpuset: ${ENGINE_CPUSET}
+    volumes:
+      - scylla-data:/var/lib/scylla
+    networks:
+      - fts-net
+
+  vector-store:
+    image: ${VECTOR_STORE_IMAGE}
+    container_name: fts-bench-vector-store
+    environment:
+      - VECTOR_STORE_URI=0.0.0.0:6080
+      - VECTOR_STORE_SCYLLADB_URI=scylla:9042
+      # Blank VS_MEMORY_LIMIT drops the variable instead of passing an empty
+      # string, so the service applies its own default budget.
+      - VECTOR_STORE_MEMORY_LIMIT${VS_MEMORY_LIMIT:+=${VS_MEMORY_LIMIT}}
+      # FTS ingest tuning and CDC pacing, for locating the index-ingest
+      # bottleneck by configuration rather than by rebuilding per hypothesis.
+      # The `${VAR:+=${VAR}}` form drops the variable entirely when unset, so an
+      # empty value is never passed and the service keeps its own default.
+      - VECTOR_STORE_FTS_COMMIT_INTERVAL${VS_FTS_COMMIT_INTERVAL:+=${VS_FTS_COMMIT_INTERVAL}}
+      - VECTOR_STORE_FTS_COMMIT_THRESHOLD${VS_FTS_COMMIT_THRESHOLD:+=${VS_FTS_COMMIT_THRESHOLD}}
+      - VECTOR_STORE_FTS_ADD_LOCK${VS_FTS_ADD_LOCK:+=${VS_FTS_ADD_LOCK}}
+      - VECTOR_STORE_FTS_METRICS_INTERVAL${VS_FTS_METRICS_INTERVAL:+=${VS_FTS_METRICS_INTERVAL}}
+      - VECTOR_STORE_FTS_WRITER_MEMORY_MB${VS_FTS_WRITER_MEMORY_MB:+=${VS_FTS_WRITER_MEMORY_MB}}
+      - VECTOR_STORE_FTS_MERGE_THREADS${VS_FTS_MERGE_THREADS:+=${VS_FTS_MERGE_THREADS}}
+      - VECTOR_STORE_CDC_FINE_SLEEP_INTERVAL${VS_CDC_FINE_SLEEP:+=${VS_CDC_FINE_SLEEP}}
+      - VECTOR_STORE_CDC_FINE_SAFETY_INTERVAL${VS_CDC_FINE_SAFETY:+=${VS_CDC_FINE_SAFETY}}
+      - VECTOR_STORE_CDC_SLEEP_INTERVAL${VS_CDC_SLEEP:+=${VS_CDC_SLEEP}}
+      - VECTOR_STORE_CDC_SAFETY_INTERVAL${VS_CDC_SAFETY:+=${VS_CDC_SAFETY}}
+    ports:
+      - "${VS_HOST_PORT:-6080}:6080"
+    depends_on:
+      scylla:
+        condition: service_healthy
+    mem_limit: ${VS_MEM_LIMIT}
+    cpus: ${VS_CPUS}
+    cpuset: ${ENGINE_CPUSET}
+    networks:
+      - fts-net
+
+# The index lives in RAM today and is rebuilt on restart, so there is no
+# vector-store volume to persist.
+volumes:
+  scylla-data:
+
+networks:
+  fts-net:
+    driver: bridge

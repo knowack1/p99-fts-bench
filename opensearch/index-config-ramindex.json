@@ -1,0 +1,51 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "3s"
+    },
+    "analysis": {
+      "filter": {
+        "english_stop": {
+          "type": "stop",
+          "stopwords": "_english_"
+        }
+      },
+      "tokenizer": {
+        "alnum_split": {
+          "type": "pattern",
+          "pattern": "[^\\p{IsAlphabetic}\\p{N}]+"
+        }
+      },
+      "analyzer": {
+        "m1_parity": {
+          "type": "custom",
+          "tokenizer": "alnum_split",
+          "filter": [
+            "lowercase",
+            "english_stop"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "page_id": {
+        "type": "long"
+      },
+      "title": {
+        "type": "text",
+        "index": false
+      },
+      "body": {
+        "type": "text",
+        "analyzer": "m1_parity"
+      }
+    },
+    "_source": {
+      "enabled": false
+    }
+  }
+}

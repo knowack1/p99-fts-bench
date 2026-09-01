@@ -1,0 +1,26 @@
+# Overlay that moves OpenSearch's index into RAM, for the parity experiment
+# against ScyllaDB FTS (documents durable on disk, index RAM-resident only).
+#
+# There is no supported in-RAM store type to use instead: index.store.type
+# accepts only fs / niofs / mmapfs / hybridfs / simplefs on OpenSearch 3.8, and
+# `memory` / `ram` were removed upstream in Elasticsearch 5.0. A tmpfs mount over
+# the data path is the remaining way to make the segment files RAM-resident.
+#
+# Sized to match VECTOR_STORE_MEMORY_LIMIT so neither side gets a larger RAM
+# budget for its index than the other. tmpfs pages count against the container's
+# memory, so OS_MEM_LIMIT must stay above OS_HEAP + OS_RAM_INDEX_SIZE.
+#
+# Everything in this path is lost when the container stops — which is the point:
+# it is the same non-durability the vector-store's in-RAM Tantivy index has.
+# Do NOT use this overlay for a durability or restart-cost comparison.
+services:
+  opensearch:
+    volumes:
+      - type: tmpfs
+        target: /usr/share/opensearch/data
+        tmpfs:
+          size: ${OS_RAM_INDEX_SIZE:-2147483648}
+          # Docker mounts a tmpfs root-owned at mode 755 and the image runs as
+          # uid 1000, so without this OpenSearch dies on startup with
+          # AccessDeniedException on its own data directory.
+          mode: 01777

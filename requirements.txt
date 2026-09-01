@@ -1,0 +1,5 @@
+requests>=2.32
+scylla-driver>=3.26
+matplotlib>=3.8
+pytest>=8.0
+regex>=2024.0
