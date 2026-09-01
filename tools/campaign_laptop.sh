@@ -41,6 +41,9 @@ REP_LIST=""
 # full-corpus campaign that had to be killed by hand.
 DRY_RUN="${DRY_RUN:-0}"
 SMOKE=0
+# Write-path campaign (WRITE-PATH-TEST-PLAN.md): ingest + its gates only, no
+# freshness, no query phase, no paced C3 run.
+INGEST_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,6 +65,7 @@ while [[ $# -gt 0 ]]; do
       shift; CONFIGS=""
       while [[ $# -gt 0 && "$1" != --* ]]; do CONFIGS="${CONFIGS:+$CONFIGS }$1"; shift; done
       [[ -n "$CONFIGS" ]] || { echo "--configs needs at least one name" >&2; exit 2; } ;;
+    --ingest-only) INGEST_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -207,7 +211,7 @@ assert_not_oom_killed() {
 assert_opensearch_doc_count() {
   local want actual
   want="$(expected_docs)"
-  actual="$(curl -fsS "http://localhost:9200/wiki-articles/_count" \
+  actual="$(curl -fsS "${OS_URL:-http://localhost:9200}/wiki-articles/_count" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')"
   echo "OpenSearch holds $actual docs, expected $want"
   [[ "$actual" == "$want" ]]
@@ -220,7 +224,7 @@ assert_scylla_index_complete() {
   local want status count allocation_errors
   want="$(expected_docs)"
   read -r count status <<<"$(curl -fsS \
-    "http://localhost:16080/api/v1/indexes/wiki/articles_body_fts/status" \
+    "${VS_URL:-http://localhost:16080}/api/v1/indexes/wiki/articles_body_fts/status" \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("count",-1), d.get("status",""))')"
   allocation_errors="$(vector_store_allocation_errors)"
   echo "index count=$count status=$status (want $want/SERVING), " \
@@ -335,15 +339,42 @@ scylla_cold_stack() {
 
 # C4 samples the peak, which is during ingest, so the probe brackets the ingest
 # run rather than the whole session.
+#
+# On the fleet (SUT_IP set — tools/fleet_env.sh) the probe cannot run here:
+# it reads /sys/fs/cgroup on the machine it runs on, and the containers are on
+# the SUT. tools/sut_probe.sh runs it there and copies the series back on
+# stop, so gates and plots read the same file either way. The probe's engine
+# URLs are localhost in that case — its own box.
+FLEET_PROBE_OUT=""
+
+fleet_probe_args() {
+  local target="$1"
+  case "$target" in
+    c4-os) echo "--engine opensearch --containers fts-bench-opensearch:opensearch --os-url http://localhost:9200 --os-index wiki-articles" ;;
+    c4-scylla) echo "--engine scylladb --containers fts-bench-scylla:scylladb --containers fts-bench-vector-store:vector-store --vs-url http://localhost:16080 --keyspace wiki --vs-index articles_body_fts" ;;
+    *) echo "unknown probe target: $target" >&2; return 2 ;;
+  esac
+}
+
 start_resource_probe() {
   local target="$1"
   [[ "$DRY_RUN" == 1 ]] && { echo "+ make $target (background)" >&2; return 0; }
+  if [[ -n "${SUT_IP:-}" ]]; then
+    FLEET_PROBE_OUT="data/c4-$CONFIG-$REP.jsonl"
+    tools/sut_probe.sh start "$FLEET_PROBE_OUT" $(fleet_probe_args "$target")       --interval 1 --duration 0 --cache-state cold --corpus data/corpus.jsonl       --label "$LABEL"
+    return 0
+  fi
   make "${MAKE_ARGS[@]}" "${SMOKE_OVERRIDES[@]+"${SMOKE_OVERRIDES[@]}"}" "$target" &
   RESOURCE_PROBE_PID=$!
 }
 
 stop_resource_probe() {
   [[ "$DRY_RUN" == 1 ]] && return 0
+  if [[ -n "${SUT_IP:-}" && -n "$FLEET_PROBE_OUT" ]]; then
+    tools/sut_probe.sh stop "$FLEET_PROBE_OUT"
+    FLEET_PROBE_OUT=""
+    return 0
+  fi
   [[ -n "${RESOURCE_PROBE_PID:-}" ]] || return 0
   kill -TERM "$RESOURCE_PROBE_PID" 2>/dev/null || true
   wait "$RESOURCE_PROBE_PID" 2>/dev/null || true
@@ -407,7 +438,7 @@ run_opensearch() {
   local config="$1" refresh="$2"
   CONFIG="$config"
   OS_REFRESH="$refresh"
-  set_make_args "C1-C8 laptop simplewiki, $config, refresh=$refresh"
+  set_make_args "${CAMPAIGN_LABEL:-C1-C8 laptop simplewiki}, $config, refresh=$refresh"
   # OS_CONFIG names every OpenSearch artifact. Without it the refresh=30s
   # configuration writes over the refresh=1s one and the chart draws one
   # configuration twice.
@@ -422,14 +453,16 @@ run_opensearch() {
   gate opensearch_not_oom_killed assert_not_oom_killed fts-bench-opensearch
   gate c1_series_complete assert_series_complete "data/c1-$config-$REP.jsonl" "$(expected_docs)"
 
-  say "$config rep $REP: freshness (C8) and queries (C5, C6, C7)"
-  mk_warm c8-os OS_REFRESH="$refresh"
-  query_phase os
+  if [[ "$INGEST_ONLY" == 0 ]]; then
+    say "$config rep $REP: freshness (C8) and queries (C5, C6, C7)"
+    mk_warm c8-os OS_REFRESH="$refresh"
+    query_phase os
 
-  say "$config rep $REP: paced ingest (C3)"
-  opensearch_cold_stack
-  mk c3-os
-  gate c3_opensearch_not_oom_killed assert_not_oom_killed fts-bench-opensearch
+    say "$config rep $REP: paced ingest (C3)"
+    opensearch_cold_stack
+    mk c3-os
+    gate c3_opensearch_not_oom_killed assert_not_oom_killed fts-bench-opensearch
+  fi
 
   mk os-down
 }
@@ -438,7 +471,7 @@ run_scylla() {
   trap leave_no_engine_running EXIT
   local config="$1" path="$2"
   CONFIG="$config"
-  set_make_args "C1-C8 laptop simplewiki, $config"
+  set_make_args "${CAMPAIGN_LABEL:-C1-C8 laptop simplewiki}, $config"
   # C1, C3 and C8 name the path in the target; C4, C5 and C7 are shared by both
   # paths, so without this the CDC repetitions overwrite the bootstrap ones and
   # the bootstrap path's resource and query data is gone with no error.
@@ -461,19 +494,21 @@ run_scylla() {
   gate vector_store_not_oom_killed assert_not_oom_killed fts-bench-vector-store
   gate c1_series_complete assert_series_complete "data/c1-$config-$REP.jsonl" "$(expected_docs)"
 
-  say "$config rep $REP: freshness (C8) and queries (C5, C6, C7)"
-  mk_warm "c8-scylla-$path"
-  query_phase scylla
+  if [[ "$INGEST_ONLY" == 0 ]]; then
+    say "$config rep $REP: freshness (C8) and queries (C5, C6, C7)"
+    mk_warm "c8-scylla-$path"
+    query_phase scylla
 
-  # C3 is the CDC path only: on the bootstrap path the write being timed is a
-  # plain base-table insert with no index attached, which is not what C3 claims.
-  if [[ "$path" == cdc ]]; then
-    say "$config rep $REP: paced ingest (C3)"
-    scylla_cold_stack
-    mk scylla-index
-    mk scylla-serving
-    mk c3-scylla-cdc
-    gate c3_vector_store_not_oom_killed assert_not_oom_killed fts-bench-vector-store
+    # C3 is the CDC path only: on the bootstrap path the write being timed is a
+    # plain base-table insert with no index attached, which is not what C3 claims.
+    if [[ "$path" == cdc ]]; then
+      say "$config rep $REP: paced ingest (C3)"
+      scylla_cold_stack
+      mk scylla-index
+      mk scylla-serving
+      mk c3-scylla-cdc
+      gate c3_vector_store_not_oom_killed assert_not_oom_killed fts-bench-vector-store
+    fi
   fi
 
   mk scylla-down

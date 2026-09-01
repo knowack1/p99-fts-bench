@@ -77,6 +77,15 @@ CHART_CLAIMS = {
           "offered QPS, with a visible knee.",
     "C8": "CDC write-to-searchable freshness is seconds, comparable to "
           "OpenSearch, whose freshness depends on how refresh_interval was tuned.",
+    "GROWTH-RATE": "Rate against index size shows WHAT limits each engine as "
+                   "the index grows: merge dips on the Lucene side, a flat "
+                   "line where the engine is nowhere near its boundary.",
+    "GROWTH-CPU": "CPU over the same build says whether a flat rate is an "
+                  "engine ceiling (pinned CPU) or a client artifact (idle "
+                  "engine).",
+    "GROWTH-RSS": "RSS over the same build shows the in-RAM Tantivy index "
+                  "growing with the corpus against OpenSearch's heap-bounded "
+                  "profile — at equal, disclosed budgets.",
 }
 
 CONFIDENCE_TIERS = {
@@ -91,6 +100,12 @@ CONFIDENCE_TIERS = {
     "C7": "Tier 3 — the knee on this host may be the generator, not the engine",
     "C8": "Tier 1 — ordering likely survives AWS (governed by refresh "
           "interval and CDC design)",
+    "GROWTH-RATE": "assess per run — introduced for the AWS fleet campaign "
+                   "(WRITE-PATH-TEST-PLAN.md)",
+    "GROWTH-CPU": "assess per run — introduced for the AWS fleet campaign "
+                  "(WRITE-PATH-TEST-PLAN.md)",
+    "GROWTH-RSS": "assess per run — introduced for the AWS fleet campaign "
+                  "(WRITE-PATH-TEST-PLAN.md)",
 }
 
 AWS_DELTAS = {
@@ -112,6 +127,12 @@ AWS_DELTAS = {
           "generator ceiling until proven otherwise.",
     "C8": "Refresh-interval-governed numbers should carry over; CDC lag needs "
           "confirmation at enwiki scale and on N=5.",
+    "GROWTH-RATE": "no laptop baseline: the laptop build was too short to show "
+                   "growth shape (30 s); this chart exists for enwiki scale.",
+    "GROWTH-CPU": "no laptop baseline; the laptop CPU numbers measured a "
+                  "loader-bound build.",
+    "GROWTH-RSS": "laptop RSS measured the docker/.env budgets, not appetite; "
+                  "no comparison is valid.",
 }
 
 CONFIG_STYLES = {

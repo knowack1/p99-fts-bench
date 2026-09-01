@@ -10,13 +10,13 @@
 # Sizing comes from docker/.env and is LAPTOP-SIMULATION ONLY — not the
 # benchmark's published tuning. See the header of that file.
 #
-# --overprovisioned 1 stays ON for the laptop campaign and must come OFF on
-# AWS. It is not a handicap here, it is the correct setting: Scylla does not
+# --overprovisioned defaults to 1 (laptop) and docker/.env.sut sets it to 0:
+# on the laptop it is the correct setting, not a handicap — Scylla does not
 # own this machine — it holds a 3-of-12-logical-CPU quota and shares the P-core
 # set with vector-store. Without the flag Scylla assumes dedicated cores and
 # busy-polls, which would burn its whole quota on spin, starve vector-store on
-# the same cpuset, and put a fictional number on the C4 CPU chart. On a
-# dedicated i4i/im4gn box the flag becomes the wrong setting and is removed.
+# the same cpuset, and put a fictional number on the C4 CPU chart. On the
+# dedicated SUT box the flag becomes the wrong setting and .env.sut removes it.
 
 services:
   scylla:
@@ -25,7 +25,7 @@ services:
     command: >
       --smp ${SCYLLA_SMP}
       --memory ${SCYLLA_MEMORY}
-      --overprovisioned 1
+      --overprovisioned ${SCYLLA_OVERPROVISIONED:-1}
       --vector-store-primary-uri http://vector-store:6080
     ports:
       # Host side is overridable: a devcontainer port-forward may already
@@ -41,9 +41,10 @@ services:
     mem_limit: ${SCYLLA_MEM_LIMIT}
     cpus: ${SCYLLA_CPUS}
     # See the OpenSearch compose file: the quota is how much, the cpuset is
-    # where. Both engine-side services share the P-core set, with quotas that
-    # sum to the OpenSearch quota.
-    cpuset: ${ENGINE_CPUSET}
+    # where. On the laptop both engine-side services share the P-core set
+    # (SCYLLA_CPUSET unset falls back to ENGINE_CPUSET); on the SUT each
+    # service gets its own half of the box (docker/.env.sut).
+    cpuset: ${SCYLLA_CPUSET:-${ENGINE_CPUSET}}
     volumes:
       - scylla-data:/var/lib/scylla
     networks:
@@ -79,7 +80,7 @@ services:
         condition: service_healthy
     mem_limit: ${VS_MEM_LIMIT}
     cpus: ${VS_CPUS}
-    cpuset: ${ENGINE_CPUSET}
+    cpuset: ${VS_CPUSET:-${ENGINE_CPUSET}}
     networks:
       - fts-net
 

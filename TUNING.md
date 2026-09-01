@@ -30,6 +30,21 @@ symmetry, or judgement, and not yet tested).
 
 ## 2. Engine knobs
 
+> **SUT supersessions (AWS campaign, 2026-09-01).** The rows below record the
+> laptop pass. On the SUT box (`docker/.env.sut`, `SUT-CONFIG.md`) three of
+> them are superseded:
+>
+> - **vector-store image** is `scylladb/vector-store:1.10.0-43-ge242fa3-arm64`
+>   (published-source build, knowack1/vector-store branch
+>   `p99-fts-no-commit-threshold` @ `e242fa3b`) — not the 1.10.0 release.
+> - **`VECTOR_STORE_FTS_COMMIT_THRESHOLD=0`** disables the compiled-in
+>   10,000-uncommitted-docs commit trigger, so commits are purely
+>   interval-driven (3 s) at every load level. This removes the
+>   threshold-bound regime described in the refresh row below. DEVIATION FROM
+>   RELEASE BEHAVIOUR — disclosed on every chart footer.
+> - **OpenSearch `refresh_interval: 3s`** is therefore clean parity across the
+>   whole load range, and is the SUT default for every build-rate measurement.
+
 | Knob | OpenSearch | ScyllaDB + vector-store | Why | Evidence |
 |---|---|---|---|---|
 | Image | `opensearchproject/opensearch:3.8.0` (Lucene 10.5.0) | `scylladb/scylla:2026.3.0-rc2` + `scylladb/vector-store:1.10.0` | Pinned, not `:latest`, so a chart traces to a build. | measured (probed live) |

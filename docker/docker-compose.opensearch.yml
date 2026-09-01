@@ -33,8 +33,9 @@ services:
     cpus: ${OS_CPUS}
     # Quota (cpus) says how much; cpuset says where. Without the cpuset an
     # engine thread can be scheduled onto the 2.5 GHz LP-E cores, a 1.92x
-    # frequency step that would show up as engine tail latency.
-    cpuset: ${ENGINE_CPUSET}
+    # frequency step that would show up as engine tail latency. On the SUT,
+    # OS_CPUSET pins OpenSearch to its half of the 50/50 split (.env.sut).
+    cpuset: ${OS_CPUSET:-${ENGINE_CPUSET}}
     volumes:
       - opensearch-data:/usr/share/opensearch/data
 
