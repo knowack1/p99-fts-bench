@@ -8,8 +8,12 @@ an appendix wants. If the two ever disagree, `TUNING.md` wins and this file
 has a bug.
 
 Status: resource values below implement the 50/50 cgroup split (see
-"Resource budgets") and are **proposed** until the phase-D memory validation
-passes on the SUT. Version pins are current as of 2026-09-01.
+"Resource budgets") — **validated by the Phase-D memory run on the SUT
+(2026-09-01)**: 10% of enwiki (896,762 docs) through the CDC path, all gates
+pass, vector-store RSS peak 2.46 GiB → linear ×10 extrapolation 24.4 GiB.
+Under the <26 GiB keep-the-split rule, but over the original 24 GiB
+in-process budget, so `VECTOR_STORE_MEMORY_LIMIT` was raised to **26 GiB**
+(2 GiB headroom to the 28 GiB cgroup). Version pins current as of 2026-09-01.
 
 ## Versions
 
@@ -37,7 +41,7 @@ disclosed on every chart footer.
 | Config | Service | cpuset | cgroup mem | In-process budget |
 |---|---|---|---|---|
 | `scylla` | ScyllaDB | `0-3` | 28 GiB | `--memory 24G` |
-| `scylla` | vector-store | `4-7` | 28 GiB | `VECTOR_STORE_MEMORY_LIMIT=25769803776` (24 GiB) |
+| `scylla` | vector-store | `4-7` | 28 GiB | `VECTOR_STORE_MEMORY_LIMIT=27917287424` (26 GiB) |
 | `opensearch` | OpenSearch | `4-7` | 28 GiB | JVM heap `-Xms14g -Xmx14g` |
 | `opensearch` | (database slot) | `0-3` | 28 GiB | deliberately idle — models the database OpenSearch deploys beside |
 
@@ -64,7 +68,7 @@ remap is not needed).
 ```
 VECTOR_STORE_URI=0.0.0.0:6080
 VECTOR_STORE_SCYLLADB_URI=scylla:9042
-VECTOR_STORE_MEMORY_LIMIT=25769803776      # 24 GiB
+VECTOR_STORE_MEMORY_LIMIT=27917287424      # 26 GiB (raised from 24 after Phase D)
 VECTOR_STORE_FTS_COMMIT_THRESHOLD=0
 # ^ 0 disables the 10k-uncommitted-docs commit trigger (release default:
 #   10,000, compiled-in). Commits become purely interval-driven — every 3 s —
