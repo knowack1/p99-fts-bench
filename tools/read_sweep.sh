@@ -92,7 +92,7 @@ run_cell() {
     return 0
   fi
   local status=0
-  $PYTHON -m ftsbench.cell_bench "${CONN[@]}" \
+  $PYTHON -m ftsbench.cell_bench_mp --processes "${CELL_PROCESSES:-6}" "${CONN[@]}" \
     --queries "$QUERIES" --query-class "$cls" --limit "$topn" \
     --concurrency "$conc" --warmup "$WARMUP" --duration "$DURATION" \
     --rep "$rep" --cache-state warm \

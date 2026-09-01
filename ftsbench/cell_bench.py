@@ -94,7 +94,12 @@ def run_cell(args: argparse.Namespace) -> dict:
     tally = drive_ops(engine, plan, saturating_ops(args.duration), settings,
                       origin)
     wall = time.perf_counter() - origin
-    summary = summarize_or_empty(tally.latency_ms)
+    # service_ms, not latency_ms: with unpaced dispatch the work queue holds
+    # QUEUE_DEPTH_PER_WORKER extra ops whose latency clock starts at enqueue,
+    # so latency_ms would bill the client's own queue to the engine (a c=64
+    # cell measured p50=79 ms while Little's law puts 64 in flight at ~16 ms —
+    # the difference was the queue, disclosed in queue_p99_ms).
+    summary = summarize_or_empty(tally.service_ms)
     return {
         "record": "cell_summary",
         "query_class": args.query_class,
