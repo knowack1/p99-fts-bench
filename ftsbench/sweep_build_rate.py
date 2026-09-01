@@ -74,6 +74,11 @@ def parse_args() -> argparse.Namespace:
                         help="per-run metric plotted and aggregated")
     parser.add_argument("--title", default="Build rate saturation sweep")
     parser.add_argument("--footer-extra", default="")
+    parser.add_argument("--no-preliminary-stamp", dest="stamp",
+                        action="store_false",
+                        help="drop the PRELIMINARY stamp; only legitimate for "
+                             "a run on benchmark hardware with published "
+                             "tuning")
     return parser.parse_args()
 
 
@@ -236,7 +241,8 @@ def annotate(figure, axes, args: argparse.Namespace) -> None:
     footer = "\n".join(part for part in (AXIS_CAVEAT, COMMIT_NOTE, args.footer_extra) if part)
     figure.text(0.01, -0.02, footer, fontsize=7.8, color="#444444", ha="left", va="top",
                 wrap=True)
-    plotlib.stamp(figure)
+    if args.stamp:
+        plotlib.stamp(figure)
 
 
 def main() -> int:
