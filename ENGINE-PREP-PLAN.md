@@ -135,8 +135,13 @@ C7 is measuring the client.
   long job in a bare SSH call.
 - `pkill -f` on a remote host can match the SSH session's own command line —
   it killed a session once. Prefer `tmux kill-session` / exact `pgrep` ids.
-- The laptop repo is the source of truth; boxes get rsync copies. Don't edit
-  files on the boxes.
+- `bench/` on the laptop is a clone of https://github.com/knowack1/p99-fts-bench
+  (the p99 talk repo no longer tracks it) — commit and push harness changes
+  there; boxes still get rsync copies. Don't edit files on the boxes.
+  Internal-only files stay untracked locally: PROGRESS.md, REPAIR-PLAN.md,
+  env backups (via .git/info/exclude) and results/, data/ (via .gitignore).
+  When the AWS results are ready to publish, drop `results/` from .gitignore
+  and restore the old rule "track results/ except results/**/raw*/".
 - Every measured run must trace to `SUT-CONFIG.md` + `FREEZE.md` values; if a
   knob changes mid-campaign, change the doc in the same breath.
 - Session memory (`~/.claude/.../memory/`) has the fleet history:
