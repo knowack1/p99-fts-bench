@@ -73,6 +73,15 @@ start_stack() {
   esac
 }
 
+# One engine at a time is the campaign's central premise; a sweep that leaves
+# its stack up hands the next engine a neighbour competing for the box.
+stop_stack() {
+  probe_stop || true
+  make os-down >/dev/null 2>&1 || true
+  make scylla-down >/dev/null 2>&1 || true
+}
+trap stop_stack EXIT
+
 # Every point starts from an empty index. For OpenSearch that is a drop and
 # recreate; for ScyllaDB the base table has to go too, or the next load would
 # write the corpus into a table that already holds it.
