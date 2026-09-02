@@ -166,7 +166,16 @@ def plot_sweep(args: Any, configs: list[plotlib.ConfigSeries]
                     "per_config": per_config, "layout_top": 0.93}
 
 
-def heatmap_axes_values(args: Any) -> tuple[str, list, str, list]:
+def churn_values(configs: list["plotlib.ConfigSeries"]) -> list[int]:
+    values = {int(run.records[-1].get("churn_ops_per_s", -1))
+              for config in configs for run in config.runs}
+    return sorted(v for v in values if v >= 0)
+
+
+def heatmap_axes_values(args: Any, configs: list["plotlib.ConfigSeries"]
+                        ) -> tuple[str, list, str, list]:
+    if args.rows == "churn":
+        return "churn, ops/s", churn_values(configs), "concurrency", []
     if args.rows == "limit":
         return "top-N", [10, 100, 1000], "concurrency", []
     if args.cols == "limit":
@@ -176,6 +185,9 @@ def heatmap_axes_values(args: Any) -> tuple[str, list, str, list]:
 
 def heatmap_cell_filter(args: Any, row: Any, col: Any) -> dict[str, Any]:
     want: dict[str, Any] = {}
+    if args.rows == "churn":
+        return {"query_class": args.query_class, "limit": args.limit,
+                "churn_ops_per_s": row, "concurrency": col}
     if args.rows == "limit":
         want.update(query_class=args.query_class, limit=row)
     else:
@@ -196,7 +208,7 @@ def concurrency_values(configs: list[plotlib.ConfigSeries]) -> list[int]:
 
 def plot_heatmap(args: Any, configs: list[plotlib.ConfigSeries]
                  ) -> tuple[Any, dict[str, Any]]:
-    row_label, rows, col_label, cols = heatmap_axes_values(args)
+    row_label, rows, col_label, cols = heatmap_axes_values(args, configs)
     if not cols:
         cols = concurrency_values(configs)
     figure, panels = plotlib.plt.subplots(
@@ -257,7 +269,8 @@ def main() -> int:
     parser.add_argument("--query-class", default="rare_term")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--concurrency", type=int, default=64)
-    parser.add_argument("--rows", choices=["class", "limit"], default="class")
+    parser.add_argument("--rows", choices=["class", "limit", "churn"],
+                        default="class")
     parser.add_argument("--cols", choices=["concurrency", "limit"],
                         default="concurrency")
     parser.add_argument("--sla-ms", type=float, default=DEFAULT_SLA_MS)
