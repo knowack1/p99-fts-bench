@@ -29,6 +29,7 @@ import argparse
 import collections
 import itertools
 import json
+import signal
 import sys
 import time
 import uuid
@@ -38,6 +39,15 @@ import requests
 from . import runmeta
 
 BULK_OPS = 200
+STOP = False
+
+
+def _handle_term(signum, frame) -> None:
+    """The grid driver stops the stream with SIGTERM once its row's query
+    cells are done; the summary must still be written or the row gate reads
+    an empty artifact and fails a healthy row."""
+    global STOP
+    STOP = True
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,7 +166,7 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
     next_i = 0
     while True:
         elapsed = time.perf_counter() - origin
-        if elapsed >= args.duration:
+        if STOP or elapsed >= args.duration:
             break
         target_ops = min(args.rate * elapsed + BULK_OPS, args.rate * args.duration)
         if sent >= target_ops:
@@ -189,6 +199,7 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
 
 
 def main() -> int:
+    signal.signal(signal.SIGTERM, _handle_term)
     args = parse_args()
     docs = corpus_sample(args.corpus, args.sample_docs)
     engine = build_churn(args)
