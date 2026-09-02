@@ -39,6 +39,12 @@ $PYTHON -m ftsbench.plot_readcube --mode heatmap --rows class --cols limit \
   --title "Read path summary: p99 heatmap" --output "$OUT/s26-heatmap-matrix.png"
 
 if [[ -n "$CHURN" ]]; then
-  echo "churn renderer: TODO once churn data exists (S28)" >&2
+  $PYTHON -m ftsbench.plot_readcube --mode heatmap --rows churn \
+    --query-class rare_term --limit 10 \
+    --config "opensearch:$CHURN/cell-opensearch-refresh3-*.jsonl" \
+    --config "scylla-cdc:$CHURN/cell-scylla-cdc-*.jsonl" \
+    --no-preliminary-stamp --footer-extra "$FOOTER" \
+    --title "p99 across churn and query load" \
+    --output "$OUT/s28-heatmap-churn.png"
 fi
 echo "rendered into $OUT" >&2
