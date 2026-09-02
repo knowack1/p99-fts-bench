@@ -106,7 +106,7 @@ run_cell() {
   local rate="$1" qconc="$2" rep="$3"
   local out="$OUT_DIR/cell-$CONFIG-churn$rate-c$qconc-r$rep.jsonl"
   local status=0
-  $PYTHON -m ftsbench.cell_bench "${CELL_CONN[@]}" \
+  $PYTHON -m ftsbench.cell_bench_mp --processes "${CELL_PROCESSES:-6}" "${CELL_CONN[@]}" \
     --queries "$QUERIES" --query-class rare_term --limit 10 \
     --concurrency "$qconc" --warmup "$WARMUP" --duration "$DURATION" \
     --rep "$rep" --cache-state warm --extra "churn_ops_per_s=$rate" \
