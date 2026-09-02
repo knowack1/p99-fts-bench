@@ -85,6 +85,28 @@ def corpus_sample(path: str, count: int) -> list[dict]:
     return docs
 
 
+RETRY_ATTEMPTS = 4
+RETRY_BACKOFF_S = 0.05
+
+
+def with_retries(attempt) -> int:
+    """Run `attempt` up to RETRY_ATTEMPTS times; returns how many retries it
+    took. Same policy as ftsbench.load_retry on the write path: a transient
+    client-side ConnectionBusy must not fail a row (it cost the first laptop
+    campaign two repetitions), and a retry that exhausts its budget still
+    raises — silently absorbing every error would turn a failing engine into
+    a healthy churn stream."""
+    for retry in range(RETRY_ATTEMPTS):
+        try:
+            attempt()
+            return retry
+        except Exception:  # noqa: BLE001 — re-raised on exhaustion
+            if retry == RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(RETRY_BACKOFF_S * (2 ** retry))
+    return RETRY_ATTEMPTS
+
+
 class OpenSearchChurn:
     def __init__(self, args: argparse.Namespace):
         self.url = args.url.rstrip("/")
@@ -161,7 +183,7 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
     ring: collections.deque[str] = collections.deque()
     doc_cycle = itertools.cycle(docs)
     origin = time.perf_counter()
-    sent = errors = 0
+    sent = errors = retries = 0
     first_error = None
     next_i = 0
     while True:
@@ -182,7 +204,7 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
             adds.append((doc_id, next(doc_cycle)))
             ring.append(doc_id)
         try:
-            engine.apply(adds, deletes)
+            retries += with_retries(lambda: engine.apply(adds, deletes))
             sent += len(adds) + len(deletes)
         except Exception as err:  # noqa: BLE001 — counted, reported, gated
             errors += len(adds) + len(deletes)
@@ -193,7 +215,8 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
         "record": "churn_summary",
         "offered_ops_per_s": args.rate,
         "achieved_ops_per_s": round(sent / wall, 2) if wall else 0.0,
-        "ops_sent": sent, "errors": errors, "first_error": first_error,
+        "ops_sent": sent, "errors": errors, "retries": retries,
+        "first_error": first_error,
         "ring_outstanding": len(ring), "wall_s": round(wall, 3),
     }
 
