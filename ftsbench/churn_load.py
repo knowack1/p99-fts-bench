@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import concurrent.futures
 import itertools
 import json
 import signal
@@ -108,22 +109,25 @@ def with_retries(attempt) -> int:
 
 
 class OpenSearchChurn:
+    """Bulks are PIPELINED: a serial post-and-wait client caps the stream at
+    bulk_ops/RTT — measured 3,200 ops/s at a 62 ms loaded RTT, which failed
+    the 4,000 row with zero errors. Up to IN_FLIGHT bulks ride concurrently;
+    apply() blocks only when the window is full, and each completed future is
+    harvested (raising its error) before a new one is admitted."""
+
+    IN_FLIGHT = 4
+
     def __init__(self, args: argparse.Namespace):
         self.url = args.url.rstrip("/")
         self.index = args.index
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=self.IN_FLIGHT, pool_maxsize=self.IN_FLIGHT)
         self.session = requests.Session()
+        self.session.mount("http://", adapter)
+        self.pool = concurrent.futures.ThreadPoolExecutor(self.IN_FLIGHT)
+        self.pending: collections.deque = collections.deque()
 
-    def apply(self, adds: list[tuple[str, dict]], deletes: list[str]) -> None:
-        lines = []
-        for doc_id, doc in adds:
-            lines.append(json.dumps({"index": {"_index": self.index,
-                                               "_id": doc_id}}))
-            lines.append(json.dumps({"page_id": 0, "title": doc["title"],
-                                     "body": doc["body"]}))
-        for doc_id in deletes:
-            lines.append(json.dumps({"delete": {"_index": self.index,
-                                                "_id": doc_id}}))
-        payload = ("\n".join(lines) + "\n").encode()
+    def _post(self, payload: bytes) -> None:
         response = self.session.post(
             f"{self.url}/_bulk", data=payload,
             headers={"Content-Type": "application/x-ndjson"}, timeout=30)
@@ -136,6 +140,25 @@ class OpenSearchChurn:
                       and op.get("status") != 404]
             if failed:
                 raise RuntimeError(f"bulk failures: {failed[0]}")
+
+    def apply(self, adds: list[tuple[str, dict]], deletes: list[str]) -> None:
+        lines = []
+        for doc_id, doc in adds:
+            lines.append(json.dumps({"index": {"_index": self.index,
+                                               "_id": doc_id}}))
+            lines.append(json.dumps({"page_id": 0, "title": doc["title"],
+                                     "body": doc["body"]}))
+        for doc_id in deletes:
+            lines.append(json.dumps({"delete": {"_index": self.index,
+                                                "_id": doc_id}}))
+        payload = ("\n".join(lines) + "\n").encode()
+        while len(self.pending) >= self.IN_FLIGHT:
+            self.pending.popleft().result()
+        self.pending.append(self.pool.submit(self._post, payload))
+
+    def drain(self) -> None:
+        while self.pending:
+            self.pending.popleft().result()
 
 
 class ScyllaChurn:
@@ -164,6 +187,9 @@ class ScyllaChurn:
                 self.session, statement, rows,
                 concurrency=self.concurrency, raise_on_first_error=True)
             collections.deque(results, maxlen=0)
+
+    def drain(self) -> None:
+        return None
 
 
 def build_churn(args: argparse.Namespace):
@@ -210,6 +236,12 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
             errors += len(adds) + len(deletes)
             if first_error is None:
                 first_error = str(err)[:300]
+    try:
+        retries += with_retries(engine.drain)
+    except Exception as err:  # noqa: BLE001
+        errors += 1
+        if first_error is None:
+            first_error = str(err)[:300]
     wall = time.perf_counter() - origin
     return {
         "record": "churn_summary",
