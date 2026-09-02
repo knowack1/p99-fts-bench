@@ -26,7 +26,7 @@ services:
       --smp ${SCYLLA_SMP}
       --memory ${SCYLLA_MEMORY}
       --overprovisioned ${SCYLLA_OVERPROVISIONED:-1}
-      --vector-store-primary-uri http://vector-store:6080
+      --vector-store-primary-uri ${SCYLLA_VS_URI:-http://vector-store:6080}
       ${SCYLLA_BROADCAST_RPC:+--broadcast-rpc-address ${SCYLLA_BROADCAST_RPC}}
     ports:
       # Host side is overridable: a devcontainer port-forward may already
