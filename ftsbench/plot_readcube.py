@@ -120,12 +120,19 @@ def max_qps_under_sla(runs: Sequence[plotlib.Run], sla_ms: float) -> tuple[int, 
     return best, qps.get(best, math.nan)
 
 
+def traversals(runs: Sequence[plotlib.Run]) -> int:
+    return len({cell_key(run)[3] for run in runs})
+
+
 def plot_sweep(args: Any, configs: list[plotlib.ConfigSeries]
                ) -> tuple[Any, dict[str, Any]]:
     figure, (top, bottom) = plotlib.plt.subplots(
         2, 1, sharex=True, figsize=(args.width, args.height))
     notes = [f"closed-loop: N in flight, next query on return; SLA "
-             f"{args.sla_ms:g} ms; achieved = completed / wall"]
+             f"{args.sla_ms:g} ms; achieved = completed / wall",
+             "  |  ".join(f"{c.name}: {traversals(c.runs)} traversals per cell"
+                          for c in configs)
+             + " (the provenance line's N counts cell artifacts, not runs)"]
     per_config: dict[str, dict[str, Any]] = {}
     for index, config in enumerate(configs):
         runs = select(config, query_class=args.query_class, limit=args.limit)
@@ -196,6 +203,8 @@ def plot_heatmap(args: Any, configs: list[plotlib.ConfigSeries]
         1, len(configs), figsize=(args.width, args.height), squeeze=False)
     vmax = max(args.sla_ms * 4, 1.0)
     mesh = None
+    traversal_note = "  |  ".join(
+        f"{c.name}: {traversals(c.runs)} traversals per cell" for c in configs)
     for index, config in enumerate(configs):
         axes = panels[0][index]
         grid = []
@@ -233,7 +242,8 @@ def plot_heatmap(args: Any, configs: list[plotlib.ConfigSeries]
     plotlib.figure_title(figure, args)
     return figure, {"metric_name": "cell p99_ms",
                     "notes": [f"cell = median p99 across repetitions; SLA "
-                              f"{args.sla_ms:g} ms; — = no surviving cells"],
+                              f"{args.sla_ms:g} ms; — = no surviving cells",
+                              traversal_note],
                     "layout_top": 0.88}
 
 
