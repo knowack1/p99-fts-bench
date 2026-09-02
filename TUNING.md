@@ -186,3 +186,17 @@ Two consequences, both of which must be stated wherever C5 or C7 appears:
 The fix is hardware, not code: a generator on its own box, which is why
 `HARDWARE.md` provisions a third machine and `AWS-RUN-PLAN.md` gates the query
 phase on re-calibrating there.
+
+## 7. Read-cube generator ceilings (AWS fleet, measured 2026-09-02)
+
+Closed-loop calibration per concurrency, unmatchable query, single python
+process on the harness box (`make calibrate-os` / `calibrate-scylla`):
+
+| Client path | Single-process ceiling | Dispatch-only ceiling | Sharded runner |
+|---|---|---|---|
+| HTTP → OpenSearch | ~2,300 qps (plateau from c=4) | ~90k qps | 6 processes ≈ 13.8k qps |
+| CQL → ScyllaDB | ~6,300 qps (plateau from c=8) | ~92k qps | 6 processes ≈ 38k qps |
+
+The GIL-bound request path is why every cube cell runs through
+`ftsbench.cell_bench_mp` (K spawned processes, raw-sample merge); each cell
+carries `shard_qps` so the client-bound gate can be re-checked per artifact.
