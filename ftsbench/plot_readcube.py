@@ -211,9 +211,13 @@ def plot_heatmap(args: Any, configs: list[plotlib.ConfigSeries]
     row_label, rows, col_label, cols = heatmap_axes_values(args, configs)
     if not cols:
         cols = concurrency_values(configs)
+    from matplotlib.colors import LogNorm
     figure, panels = plotlib.plt.subplots(
         1, len(configs), figsize=(args.width, args.height), squeeze=False)
-    vmax = max(args.sla_ms * 4, 1.0)
+    # Log scale anchored at the SLA: linear saturated every heavy cell into one
+    # indistinguishable red (40 ms and 10 s looked identical on the first
+    # render). The colorbar line marks the SLA.
+    norm = LogNorm(vmin=1.0, vmax=10_000.0)
     mesh = None
     traversal_note = "  |  ".join(
         f"{c.name}: {traversals(c.runs)} traversals per cell" for c in configs)
@@ -231,7 +235,7 @@ def plot_heatmap(args: Any, configs: list[plotlib.ConfigSeries]
             grid.append(line)
         mesh = axes.pcolormesh(
             range(len(cols) + 1), range(len(rows) + 1), grid,
-            cmap="RdYlGn_r", vmin=0, vmax=vmax, edgecolors="white",
+            cmap="RdYlGn_r", norm=norm, edgecolors="white",
             linewidth=0.5)
         axes.set_xticks([i + 0.5 for i in range(len(cols))], cols, fontsize=8)
         axes.set_yticks([i + 0.5 for i in range(len(rows))], rows, fontsize=8)
@@ -248,8 +252,9 @@ def plot_heatmap(args: Any, configs: list[plotlib.ConfigSeries]
                               va="center", fontsize=8)
     if mesh is not None:
         bar = figure.colorbar(mesh, ax=[p for row in panels for p in row],
-                              fraction=0.03)
-        bar.set_label(f"median p99, ms (SLA {args.sla_ms:g})", fontsize=8)
+                              fraction=0.025, pad=0.04)
+        bar.set_label(f"median p99, ms (SLA {args.sla_ms:g}, log scale)",
+                      fontsize=8)
         bar.ax.axhline(args.sla_ms, color="black", linewidth=1.2)
     plotlib.figure_title(figure, args)
     return figure, {"metric_name": "cell p99_ms",
