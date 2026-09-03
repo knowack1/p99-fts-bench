@@ -131,7 +131,9 @@ class OpenSearchChurn:
         response = self.session.post(
             f"{self.url}/_bulk", data=payload,
             headers={"Content-Type": "application/x-ndjson"}, timeout=30)
-        response.raise_for_status()
+        if response.status_code >= 300:
+            raise RuntimeError(
+                f"bulk HTTP {response.status_code}: {response.text[:300]}")
         body = response.json()
         if body.get("errors"):
             failed = [item for item in body["items"]
