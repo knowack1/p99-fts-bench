@@ -47,6 +47,9 @@ case "$ENGINE" in
     CONN=(--engine scylladb --hosts "$SCYLLA_HOSTS" --port "$SCYLLA_PORT") ;;
   *) echo "unknown engine: $ENGINE" >&2; exit 2 ;;
 esac
+# Sensitivity variants (e.g. the OS_RAM_INDEX=1 pass) relabel their artifacts
+# so they can never mix with the primary configuration's cells.
+CONFIG="${READ_CONFIG:-$CONFIG}"
 
 mkdir -p "$OUT_DIR"
 FAILURES="$OUT_DIR/failed-cells.log"
