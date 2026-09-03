@@ -92,11 +92,11 @@ RETRY_BACKOFF_S = 0.05
 
 def with_retries(attempt) -> int:
     """Run `attempt` up to RETRY_ATTEMPTS times; returns how many retries it
-    took. Same policy as ftsbench.load_retry on the write path: a transient
-    client-side ConnectionBusy must not fail a row (it cost the first laptop
-    campaign two repetitions), and a retry that exhausts its budget still
-    raises — silently absorbing every error would turn a failing engine into
-    a healthy churn stream."""
+    took. Same policy as ftsbench.load_retry on the write path. Retries live
+    INSIDE each engine's send path, never around apply(): retrying apply() on
+    a pipelined engine resubmits the current batch while its first submission
+    is still in flight, and those duplicates silently raised the real churn
+    above the row's label (found 2026-09-03 — see READ-PATH-TEST-PLAN.md)."""
     for retry in range(RETRY_ATTEMPTS):
         try:
             attempt()
@@ -126,6 +126,10 @@ class OpenSearchChurn:
         self.session.mount("http://", adapter)
         self.pool = concurrent.futures.ThreadPoolExecutor(self.IN_FLIGHT)
         self.pending: collections.deque = collections.deque()
+        self.retries = 0
+
+    def _post_with_retries(self, payload: bytes) -> int:
+        return with_retries(lambda: self._post(payload))
 
     def _post(self, payload: bytes) -> None:
         response = self.session.post(
@@ -153,14 +157,16 @@ class OpenSearchChurn:
         for doc_id in deletes:
             lines.append(json.dumps({"delete": {"_index": self.index,
                                                 "_id": doc_id}}))
+        if not lines:
+            return
         payload = ("\n".join(lines) + "\n").encode()
         while len(self.pending) >= self.IN_FLIGHT:
-            self.pending.popleft().result()
-        self.pending.append(self.pool.submit(self._post, payload))
+            self.retries += self.pending.popleft().result()
+        self.pending.append(self.pool.submit(self._post_with_retries, payload))
 
     def drain(self) -> None:
         while self.pending:
-            self.pending.popleft().result()
+            self.retries += self.pending.popleft().result()
 
 
 class ScyllaChurn:
@@ -176,6 +182,7 @@ class ScyllaChurn:
         self.delete = self.session.prepare(
             "DELETE FROM articles WHERE article_id = ?")
         self.concurrency = args.concurrency
+        self.retries = 0
 
     def apply(self, adds: list[tuple[str, dict]], deletes: list[str]) -> None:
         insert_rows = [(uuid.UUID(doc_id), 0, doc["title"], doc["body"])
@@ -185,10 +192,12 @@ class ScyllaChurn:
                                 (self.delete, delete_rows)):
             if not rows:
                 continue
-            results = self._execute_concurrent(
-                self.session, statement, rows,
-                concurrency=self.concurrency, raise_on_first_error=True)
-            collections.deque(results, maxlen=0)
+            def send() -> None:
+                results = self._execute_concurrent(
+                    self.session, statement, rows,
+                    concurrency=self.concurrency, raise_on_first_error=True)
+                collections.deque(results, maxlen=0)
+            self.retries += with_retries(send)
 
     def drain(self) -> None:
         return None
@@ -211,7 +220,7 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
     ring: collections.deque[str] = collections.deque()
     doc_cycle = itertools.cycle(docs)
     origin = time.perf_counter()
-    sent = errors = retries = 0
+    sent = errors = 0
     first_error = None
     next_i = 0
     while True:
@@ -223,6 +232,9 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
             time.sleep(min(BULK_OPS / max(args.rate, 1), 0.25))
             continue
         batch = min(BULK_OPS, int(target_ops) - sent)
+        if batch <= 0:
+            time.sleep(0.02)
+            continue
         adds, deletes = [], []
         while len(adds) + len(deletes) < batch:
             if len(ring) >= args.ring:
@@ -232,14 +244,14 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
             adds.append((doc_id, next(doc_cycle)))
             ring.append(doc_id)
         try:
-            retries += with_retries(lambda: engine.apply(adds, deletes))
+            engine.apply(adds, deletes)
             sent += len(adds) + len(deletes)
         except Exception as err:  # noqa: BLE001 — counted, reported, gated
             errors += len(adds) + len(deletes)
             if first_error is None:
                 first_error = str(err)[:300]
     try:
-        retries += with_retries(engine.drain)
+        engine.drain()
     except Exception as err:  # noqa: BLE001
         errors += 1
         if first_error is None:
@@ -249,7 +261,8 @@ def run_churn(args: argparse.Namespace, engine, docs: list[dict]) -> dict:
         "record": "churn_summary",
         "offered_ops_per_s": args.rate,
         "achieved_ops_per_s": round(sent / wall, 2) if wall else 0.0,
-        "ops_sent": sent, "errors": errors, "retries": retries,
+        "ops_sent": sent, "errors": errors,
+        "retries": getattr(engine, "retries", 0),
         "first_error": first_error,
         "ring_outstanding": len(ring), "wall_s": round(wall, 3),
     }
