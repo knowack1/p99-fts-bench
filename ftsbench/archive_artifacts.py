@@ -41,6 +41,7 @@ LOG_DIR = "campaign-logs"
 # about `opensearch` would otherwise claim it. Kept in step with
 # run_manifest.CONFIGS by test_archive_artifacts.
 KNOWN_CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30",
+                 "opensearch-ramindex",
                  "scylla-bootstrap", "scylla-cdc")
 
 

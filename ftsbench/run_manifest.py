@@ -35,8 +35,9 @@ PROBE_TIMEOUT_S = 5
 # the sweep runs OpenSearch at the same refresh_interval rather than at the 1s
 # and 30s the C1-C8 campaign uses.
 CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30",
-           "scylla-bootstrap", "scylla-cdc")
-OPENSEARCH_CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30")
+           "opensearch-ramindex", "scylla-bootstrap", "scylla-cdc")
+OPENSEARCH_CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30",
+                      "opensearch-ramindex")
 UNKNOWN = "unknown"
 DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / "docker" / ".env"
 PINNED_IMAGE_KEYS = ("SCYLLA_IMAGE", "VECTOR_STORE_IMAGE", "OPENSEARCH_IMAGE")
