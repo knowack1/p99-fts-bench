@@ -46,6 +46,7 @@ case "$ENGINE" in
     CHURN_CONN=(--engine scylladb --hosts "$SCYLLA_HOSTS" --port "$SCYLLA_PORT") ;;
   *) echo "unknown engine: $ENGINE" >&2; exit 2 ;;
 esac
+CONFIG="${CHURN_CONFIG:-$CONFIG}"
 
 mkdir -p "$OUT_DIR"
 FAILURES="$OUT_DIR/failed-cells.log"

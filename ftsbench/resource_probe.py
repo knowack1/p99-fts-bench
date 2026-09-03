@@ -97,6 +97,7 @@ class Counters:
     source: str
     rss_bytes: int | None = None
     cache_bytes: int | None = None
+    shmem_bytes: int | None = None
     mem_limit_bytes: int | None = None
     cpu_seconds_total: float | None = None
     disk_read_bytes: int | None = None
@@ -183,7 +184,11 @@ def read_cgroup_counters(cgroup_dir: Path) -> Counters:
     disk_read, disk_write = io_totals(read_cgroup_file(cgroup_dir, "io.stat") or "")
     return Counters(
         running=True, source="cgroup-anon",
+        # shmem carried separately: tmpfs pages (the OS_RAM_INDEX variant's
+        # segment files) are neither anon nor reclaimable file cache, and a
+        # probe that ignored them would show a RAM-resident index as free.
         rss_bytes=memory.get("anon"), cache_bytes=memory.get("file"),
+        shmem_bytes=memory.get("shmem"),
         mem_limit_bytes=memory_limit_bytes(cgroup_dir),
         cpu_seconds_total=cpu_seconds_total(cgroup_dir),
         disk_read_bytes=disk_read, disk_write_bytes=disk_write,
@@ -378,6 +383,7 @@ def build_record(tick: Tick, spec: ContainerSpec, reading: Reading) -> dict[str,
         "source": counters.source,
         "rss_bytes": counters.rss_bytes,
         "cache_bytes": counters.cache_bytes,
+        "shmem_bytes": counters.shmem_bytes,
         "mem_limit_bytes": counters.mem_limit_bytes,
         "cpu_seconds_total": counters.cpu_seconds_total,
         "cpu_cores_used": reading.cpu_cores_used,

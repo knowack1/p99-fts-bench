@@ -139,6 +139,17 @@ def rate_line(timeline: Sequence[tuple[float, float]],
     return xs, ys
 
 
+def record_value(record: dict[str, Any], field: str) -> float | None:
+    """RSS counts anon PLUS shmem: the OS_RAM_INDEX variant's tmpfs segments
+    are shmem pages — RAM the container cannot give back — and an anon-only
+    read would show a RAM-resident index as free. Standard configs carry ~0
+    shmem, so their lines are unchanged."""
+    value = record.get(field)
+    if field == "rss_bytes" and value is not None:
+        return float(value) + float(record.get("shmem_bytes") or 0)
+    return None if value is None else float(value)
+
+
 def side_totals(probe: plotlib.Run, field: str) -> list[tuple[float, float]]:
     """Per-tick (absolute time, sum of `field` across the side's containers)."""
     base = started_at(probe)
@@ -146,9 +157,9 @@ def side_totals(probe: plotlib.Run, field: str) -> list[tuple[float, float]]:
     for record in probe.records:
         tick = by_tick.setdefault(int(record["i"]), {"t": record["t_elapsed_s"],
                                                      "values": []})
-        value = record.get(field)
+        value = record_value(record, field)
         if value is not None:
-            tick["values"].append(float(value))
+            tick["values"].append(value)
     return [(base + tick["t"], sum(tick["values"]))
             for _, tick in sorted(by_tick.items()) if tick["values"]]
 

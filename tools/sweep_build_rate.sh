@@ -65,6 +65,8 @@ case "$ENGINE" in
   scylla-cdc)  CONFIG="scylla-cdc" ;;
   *) echo "unknown engine: $ENGINE" >&2; exit 2 ;;
 esac
+# Sensitivity variants relabel their artifacts (e.g. SWEEP_CONFIG=opensearch-ramindex).
+CONFIG="${SWEEP_CONFIG:-$CONFIG}"
 
 start_stack() {
   case "$ENGINE" in

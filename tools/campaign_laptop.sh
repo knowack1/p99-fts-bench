@@ -536,6 +536,10 @@ run_config() {
     # vector-store's 3 s commit interval with the 10k threshold disabled
     # (docker/.env.sut) — the write-path campaign's OpenSearch config.
     opensearch-refresh3)  run_opensearch opensearch-refresh3 3s ;;
+    # The OS_RAM_INDEX=1 sensitivity variant: tmpfs segments + _source off.
+    # The ram-index env knobs come from the caller's environment; this case
+    # only names the artifacts so they can never mix with the primary config.
+    opensearch-ramindex)  run_opensearch opensearch-ramindex 3s ;;
     opensearch-refresh30) run_opensearch opensearch-refresh30 30s ;;
     scylla-bootstrap)     run_scylla scylla-bootstrap bootstrap ;;
     scylla-cdc)           run_scylla scylla-cdc cdc ;;
