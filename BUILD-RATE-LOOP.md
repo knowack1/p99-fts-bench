@@ -309,6 +309,39 @@ generator is delivering more than twice what the engine takes.
 campaign has measured, since every prior ScyllaDB build-rate figure was taken
 through a single GIL-bound loader.
 
+### Iteration 6 — H1 re-tested at the corrected operating point
+
+Iteration 1 rejected H1 at 9,650 docs/s — a **client-bound** point, where saving
+CPU inside the vector-store could not possibly show up. That is the same flaw
+that produced the retracted "1.6%" claim, so the null had to be re-earned rather
+than trusted.
+
+| dispatch | docs/s (N=3) | VS CPU |
+|---|---|---|
+| worker-pool | 12,228 | 3.89 / 4 |
+| inline (`VS_FTS_INLINE_INGEST=1`) | 12,229 | 3.86 / 4 |
+
+**Still null: +0.008%**, now measured where the vector-store *is* the
+constraint. H1 is properly rejected. Inline dispatch does free a sliver of CPU
+(3.86 vs 3.89) — the per-document channel hop and atomics are real — but too
+little to convert into throughput.
+
+**Why no dispatch-level change will help from here.** Both engines are now
+CPU-saturated inside their cgroup allocations:
+
+| | docs/s | CPU | of allocation |
+|---|---|---|---|
+| ScyllaDB (scylla 3.90 + VS 3.86) | 12,229 | ~7.76 cores | **97% of 8** |
+| OpenSearch | 10,656 | ~4.01 cores | **100% of 4** |
+
+The vector-store's remaining cycles go to tokenization and tantivy indexing —
+inherent work, not coordination overhead. H2 (batch drain) and H5 (wider
+channels) attack coordination, which H1 just measured at under 0.03 cores of
+headroom. H3 (more tantivy threads) cannot help a process already at 97% of a
+4-core cpuset. **The configuration- and dispatch-level hypotheses are
+exhausted**; further gains need either more cores or a change inside tantivy's
+indexing itself, neither of which is a benchmark-harness question.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
