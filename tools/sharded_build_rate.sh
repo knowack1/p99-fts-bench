@@ -95,6 +95,19 @@ loader_for() {
 
 run_rep() {
   local rep="$1" tag="$ENGINE-$rep"
+  # Cold repetitions when COLD_REPS=1 (required for full-corpus runs, per
+  # WRITE-PATH-TEST-PLAN.md Step 3). Resetting only the index is not enough:
+  # the vector-store does NOT release its in-RAM index on DROP, leaving ~12.4
+  # GiB resident after an 8.97M-doc build, so successive warm reps start higher
+  # and higher until they breach VECTOR_STORE_MEMORY_LIMIT and silently drop
+  # documents. Measured 2026-09-07: rep RSS started 0.25 / 12.36 / 12.38 GiB
+  # and rep 3 lost 14,917 documents. Warm reps stay the default for capped
+  # ladder points, where the index is small and a cold engine would cost a
+  # startup artifact on every point.
+  if [ "${COLD_REPS:-0}" = "1" ]; then
+    stop_stack
+    start_stack
+  fi
   reset_index
 
   tools/sut_probe.sh start "$OUT_DIR/cpu-$tag.jsonl" \

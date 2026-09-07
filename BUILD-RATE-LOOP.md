@@ -382,6 +382,66 @@ vector-store was already at 3.86/4.
 baseline. H1 was rejected twice, but both tests were at 1.2M where the
 vector-store was near-pinned; the drain phase is a different regime.
 
+### Iteration 8 — B4 finds a vector-store memory leak, and a bug in my own driver
+
+ScyllaDB B4, full frozen corpus, N=3: **8,408 / 8,430 / 6,562 docs/s** — and
+rep 3 **failed its document-count gate at 8,952,708 of 8,967,625: 14,917
+documents missing.** The vector-store log says exactly what happened:
+
+```
+15:38:05 INFO  Memory usage above limit (27935911936), cannot allocate more memory
+15:38:05 ERROR Unable to add document for index wiki.articles_body_fts: not enough memory
+15:38:06 INFO  Memory usage below limit (27592896512), can allocate more memory
+```
+
+A ~1 second budget breach, documents dropped, then recovery — and the index
+still reported `SERVING`. This is the **silent document skipping** failure mode
+the harness gates for, observed for real. In
+`fts_index/tantivy.rs` the `AddDocument` arm does
+`if !can_allocate_memory(..) { continue; }` — the message is discarded, with no
+retry and nothing propagated to the writer.
+
+**Root cause: dropping an FTS index does not release its in-RAM memory.**
+Per-rep vector-store RSS, same container throughout:
+
+| rep | start | peak | end |
+|---|---|---|---|
+| 1 | **0.25 GiB** (fresh container) | 19.00 | 12.82 |
+| 2 | **12.36 GiB** | 24.17 | 13.14 |
+| 3 | **12.38 GiB** | **27.68 → breach** | 24.78 |
+
+`DROP INDEX` + `DROP TABLE` + `DROP KEYSPACE` between reps leaves **~12.4 GiB**
+resident. The baseline never returns to 0.25 GiB, so each rep starts higher
+than the last until the budget is breached. **This is a genuine product finding,
+independent of the benchmark**: for an index that is in-RAM by design, memory
+not being reclaimed on drop is an operational problem, and its failure mode is
+silent data loss rather than an error.
+
+**And a defect in `tools/sharded_build_rate.sh`:** it calls `start_stack` once
+and only resets the *index* per rep, inheriting the warm-container approach from
+`sweep_build_rate.sh`. That is correct for capped ladder points — deliberately
+so, to avoid paying a cold-JVM artifact per point — but wrong for full-corpus
+reps, where `WRITE-PATH-TEST-PLAN.md` Step 3 specifies **cold repetitions with
+the container recreated**. Combined with the leak it compounds per rep.
+
+**Consequences:**
+
+- **Only rep 1 (8,408 docs/s, 19.0 GiB peak, zero drops) is a clean full-corpus
+  measurement.** Reps 2 and 3 are void — 3 for the gate failure, 2 because it
+  built on 12.4 GiB of retained heap.
+- The 1.2M-corpus results **stand**: they ran warm too, but at that scale the
+  index is small, and the three reps agreed to 2.5% (12,229 / 12,228 / 11,917),
+  so the retained memory did not measurably affect throughput there.
+- **`VS_FTS_WRITER_MEMORY_MB=376` is not safe at full corpus scale on this box.**
+  It lifts vector-store RSS from the ~14.8 GiB the campaign measured at the
+  15 MB floor to ~19 GiB on a *clean* rep — leaving only ~7 GiB of headroom
+  under the 26 GiB budget, and none at all once anything is retained. The
+  1.2M runs that blessed 376 MB could not have detected this.
+
+**Next:** fix the driver to recreate the stack per rep at full corpus, then
+re-run. Also worth testing 128 MB at full scale — at 1.2M it was
+indistinguishable from 376 MB, and it would buy back several GiB of headroom.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
