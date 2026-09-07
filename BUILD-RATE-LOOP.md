@@ -478,6 +478,46 @@ comparison taken at 13% of the corpus flatters the in-RAM engine.
 ScyllaDB needs cold reps. Direction is clear but the magnitude is not yet
 settled.
 
+### Iteration 10 — B4 final, and what the premise actually was
+
+| engine | docs/s per rep | median | CPU | RSS |
+|---|---|---|---|---|
+| `opensearch` | 9,265 / 9,525 / 9,787 | **9,525** | 4.00 / 4 | 14.9 GiB (flat) |
+| `scylla-cdc` | 8,408 / 8,430 / ~~6,562~~ | **8,408** | 3.95 + 3.96 / 4 each | 23.8 + 24.2 GiB |
+
+ScyllaDB rep 3 is void (gate failure, 14,917 docs lost) and rep 2 is
+methodologically compromised (built on 12.4 GiB of retained heap), so
+**ScyllaDB is N=1-clean** pending the cold-rep re-run. OpenSearch is a clean
+N=3 — its RSS is flat, so warm reps are valid for it.
+
+**Full-corpus result: OpenSearch 9,525 vs ScyllaDB 8,408 = 1.13x OpenSearch.**
+
+**The original premise conflated two different measurements.** "Scylla ~9k vs
+OpenSearch 11.7k" put ScyllaDB's full-corpus-scale number against OpenSearch's
+**1M-document capped ceiling**. There was never a single operating point at
+which that pair was measured. Put on equal footing, the two engines *cross over*:
+
+| operating point | ScyllaDB | OpenSearch | winner |
+|---|---|---|---|
+| 1.2M docs (capped) | 12,228 | 10,656 | ScyllaDB 1.15x |
+| 8.97M docs (full corpus) | 8,408 | 9,525 | **OpenSearch 1.13x** |
+
+That crossover is the real finding, and it is a better talk point than either
+number alone: the in-RAM index is faster while it is small and loses as it
+grows, which is exactly what an in-RAM design predicts and what S13 is for.
+
+**Net movement against the published campaign** (S11: OS 9,687 vs CDC 7,567 =
+1.28x OpenSearch): the gap closes to **1.13x**. ScyllaDB gained ~+11%
+(7,567 → 8,408) from the writer buffer plus the generator fix; OpenSearch is
+unchanged within noise (9,687 → 9,525), which independently confirms it was
+never generator-bound at full corpus.
+
+**CPU asymmetry, restated at the scale that matters:** ScyllaDB spends ~7.91
+cores to OpenSearch's 4.00 — **1,063 vs 2,381 docs/s per core, OpenSearch 2.2x
+more efficient.** At full corpus it wins on both axes, so the "per box vs per
+core" tension from iteration 3 disappears: that tension only existed at the
+small-corpus operating point.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
