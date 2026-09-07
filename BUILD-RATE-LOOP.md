@@ -159,4 +159,95 @@ cost a 1.7 h growth-run redo on 2026-09-03.
 instrument, not a variable under test, and setting it on one arm only would make
 its cost look like an effect.
 
-**Next:** A/B corpus ready → B1 smoke → B2 A/B → verdict.
+### Iteration 1 — H1 (remove `spawn_blocking`): **NULL RESULT, +0.1%**
+
+1M docs, c=64, N=3, arms interleaved rep-major, 1.2M-doc iteration corpus.
+
+| arm | docs/s per rep | median | VS peak CPU | VS peak RSS |
+|---|---|---|---|---|
+| off (worker-pool) | 9,663 / 9,604 / 9,650 | **9,650** | 3.61 / 4 | 3.2 GiB |
+| on (inline) | 9,606 / 9,689 / 9,661 | **9,661** | 3.55 / 4 | 2.4 GiB |
+
+`on/off = 1.001x`. Rep-to-rep spread 0.6–0.9%, far tighter than the ±3% budgeted
+— so this is a clean null, not an inconclusive run. **H1 is rejected as a
+throughput change.** (Keep the flag: it is harmless, default-off, and removes a
+genuine per-document cost that will matter once the real constraint is lifted.)
+
+The vector-store's own counters said so before the medians did:
+
+```
+received=10281/s  added=10281/s  lock_wait=0.4ms/s
+```
+
+`received == added` means the FTS actor absorbs everything handed to it in real
+time. Removing `spawn_blocking` had nothing to remove. This also **reinterprets
+the evidence that started the investigation**: the vector-store sitting at ~3.5
+of 4 cores was read as "saturated at a parallelism ceiling", but the honest
+reading is "not being fed any faster".
+
+### Iteration 2 — where the ceiling actually is
+
+Two decisive measurements, both on the 1.2M iteration corpus:
+
+**a) The FTS index path is nearly free.**
+
+| configuration | docs/s |
+|---|---|
+| base table only, **no FTS index** | 9,806 |
+| base table + CDC + FTS index | 9,650 |
+
+The whole index path — CDC hop, tantivy indexing, commits — costs **1.6%**.
+Every hypothesis in the queue aimed at the FTS actor (H2, H3, H5) is aimed at
+1.6% of the problem.
+
+**b) The ~9.7k ceiling is the load generator, not either engine.**
+
+| loaders | per-process docs/s | aggregate |
+|---|---|---|
+| 1 | 9,806 | 9,806 |
+| 2 (disjoint halves) | 9,574 + 9,542 | **~19,100** |
+
+Throughput nearly doubles with a second process, and each loader process sits at
+~80% of one core — `scylla_load` is **GIL-bound at ~9.5–9.8k docs/s per
+process**. ScyllaDB's base-table write path absorbs at least 19k docs/s.
+
+**This means the published `scylla-cdc` ceiling of 8,992 docs/s is a
+client-side artifact, not an engine ceiling.** `TUNING.md` §6–7 documents
+exactly this failure on the read side — where it was fixed with a sharded
+multi-process runner (`cell_bench_mp`) — and the write path never got the same
+treatment. `verify_cpu_usage` did not catch it because it checks *engine* CPU
+saturation, and by that test the ScyllaDB side correctly looked unsaturated;
+nothing was watching the generator.
+
+Note the asymmetry this creates with OpenSearch, which is the crux for the deck:
+OpenSearch's 11,063 was measured **CPU-pinned at 3.97/4.00**, so that one *is* a
+genuine engine ceiling. Comparing a client-bound ScyllaDB number against an
+engine-bound OpenSearch number is not a comparison of engines.
+
+**Two false alarms recorded, because both were nearly published:**
+
+- A 2-loader run reported the index reaching exactly 1,000,000 of 1.2M docs and
+  `build_progress: 100.0` — which looked like the silent-document-skipping
+  failure mode. It was not: re-querying minutes later returned 1,200,000. The
+  monitor's idle timeout had fired while the index was still draining its CDC
+  backlog. **The build-rate figure read off that series (13,282 docs/s) was
+  premature and is void.** Re-running with `--idle-timeout 240`.
+- The first 2-loader test pointed both loaders at the same corpus prefix, so
+  they wrote identical primary keys. Base-table throughput was still valid
+  (same write-op count) but the index count was meaningless. Fixed by splitting
+  the corpus into disjoint halves and verifying the first ids differ.
+
+### Queue, re-ordered by the evidence
+
+| # | hypothesis | status |
+|---|---|---|
+| H1 | remove `spawn_blocking` | **rejected** — null, +0.1% |
+| **H7** | **shard the write loader across processes** (mirror `cell_bench_mp`) | **new head** — the measured constraint |
+| **H8** | **re-measure both engines generator-free**, then re-derive the real ratio | **new** — decides whether any engine work is warranted at all |
+| H2/H3/H5 | batch actor drain / tantivy threads / channel widths | **demoted** — all target the 1.6% |
+| H4 | `VS_FTS_ADD_LOCK=shared` | moot under H1; untested, free |
+| H6 | fan out `monitor_items` | still open, but only reachable once the client stops binding |
+| H0 | profile | **not warranted yet** — profiling the vector-store would profile the wrong process |
+
+**Next:** clean 2-loader FTS build number → then the same treatment for
+OpenSearch, so both engines are measured off a generator that is not the limit.
