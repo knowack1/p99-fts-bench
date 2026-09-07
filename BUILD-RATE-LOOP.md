@@ -339,6 +339,22 @@ which point the **client** becomes the constraint. Only removing both gets
 12,228. This is why the investigation kept finding "the bottleneck moved": it
 did.
 
+**Where the plateau actually is.** A third point settles whether 376 MB is
+merely *enough* or merely *arbitrary*:
+
+| `VS_FTS_WRITER_MEMORY_MB` | docs/s | VS CPU | VS RSS |
+|---|---|---|---|
+| 15 (stock floor) | 8,608 | 3.98 / 4 | 3.3 GiB |
+| **376 (parity)** | **12,228** | 3.89 / 4 | 5.8 GiB |
+| 768 | 12,229 | 3.85 / 4 | 5.4 GiB |
+
+Doubling the buffer past parity buys **+0.01%** — nothing. So the plateau is
+real, it simply sits far above where the laptop placed it (that pass concluded
+"gains stop by 64 MB", measured with the client binding). **The parity value is
+also the optimal value**, which is the convenient case: there is no tension
+between configuring the two engines fairly and configuring the vector-store
+well, and the deck does not have to choose.
+
 **Correction to iteration 2's headline claim.** Measured generator-free, the
 FTS index path is *not* nearly free:
 
