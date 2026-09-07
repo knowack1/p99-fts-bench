@@ -27,11 +27,21 @@ CONC="${CONC:-64}"
 DOCS="${DOCS:-1000000}"
 MAX_SECONDS="${MAX_SECONDS:-2400}"
 IDLE_TIMEOUT="${IDLE_TIMEOUT:-90}"
-PYTHON="${PYTHON:-.venv/bin/python3}"
 CQLSH="${CQLSH:-docker exec -i fts-bench-scylla cqlsh}"
+
+# Iteration corpus, NOT the frozen FREEZE.md one. Both arms read the same file,
+# so the A/B ratio is sound; absolute docs/s from it is not comparable to the
+# published ceilings and must never reach a slide. See BUILD-RATE-LOOP.md.
+CORPUS="${CORPUS:-/mnt/nvme/data/corpus-ab.jsonl}"
 
 mkdir -p "$OUT_DIR"
 log() { printf '\n=== [%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+
+# An instrument, not a variable under test, so it is set identically for both
+# arms: the vector-store's own received/added/lock-wait counters are what
+# separate "delivery got faster" from "the actor stopped being the constraint".
+# Setting it on one arm only would make its small cost look like an effect.
+export VS_FTS_METRICS_INTERVAL="${VS_FTS_METRICS_INTERVAL:-1s}"
 
 stop_stack() { make scylla-down >/dev/null 2>&1 || true; }
 trap stop_stack EXIT
@@ -84,17 +94,21 @@ run_rep() {
   reset_index
   assert_arm_active "$arm" || return 1
 
-  $PYTHON -m ftsbench.resource_probe --engine scylladb \
+  # The probe reads /sys/fs/cgroup on whatever machine it runs on, so on the
+  # fleet it must execute on the SUT -- DOCKER_HOST=ssh:// cannot carry that.
+  # Running it here would silently record the harness's idle cgroups and the
+  # CPU/RSS half of this measurement would be quietly worthless.
+  tools/sut_probe.sh start "$OUT_DIR/cpu-$tag.jsonl" \
+    --engine scylladb \
     --containers fts-bench-scylla:scylladb \
     --containers fts-bench-vector-store:vector-store \
-    --vs-url "${VS_URL:-http://localhost:16080}" --keyspace wiki \
+    --vs-url http://localhost:16080 --keyspace wiki \
     --vs-index articles_body_fts \
-    --output "$OUT_DIR/cpu-$tag.jsonl" --interval 1 --duration 0 \
-    --label "$tag" >/dev/null 2>&1 &
-  local probe=$!
+    --interval 1 --duration 0 --label "$tag"
 
   local rc=0
   make c1-scylla-cdc \
+    "CORPUS=$CORPUS" \
     "C1_MAX_SECONDS=$MAX_SECONDS" "C1_IDLE_TIMEOUT=$IDLE_TIMEOUT" \
     "MAX_DOCS=$DOCS" "C1_UNTIL_DOCS=$DOCS" \
     "INGEST_CONCURRENCY=$CONC" "REP=$rep" \
@@ -104,7 +118,7 @@ run_rep() {
     "C1_SCYLLA_CDC_MANIFEST=$OUT_DIR/manifest-$tag.json" \
     >"$OUT_DIR/load-$tag.log" 2>&1 || rc=1
 
-  kill -TERM "$probe" 2>/dev/null || true; wait "$probe" 2>/dev/null || true
+  tools/sut_probe.sh stop "$OUT_DIR/cpu-$tag.jsonl" || true
   docker logs fts-bench-vector-store >"$OUT_DIR/vslog-$tag.log" 2>&1
   [ -s "$series" ] || rc=1
   [ $rc -eq 0 ] || log "arm=$arm rep=$rep FAILED (rc=$rc)"

@@ -106,4 +106,57 @@ N=3, arms interleaved rep-major, `resource_probe` on both containers,
 `VS_FTS_METRICS_INTERVAL=1s` for the vector-store's own received/added/lock-wait
 counters.
 
-**Next:** corpus completes → B1 smoke → B2 A/B → verdict.
+**Iteration corpus decision (2026-09-07).** The frozen enwiki corpus needs
+~2.5–3 h to re-download, and B2 only needs 1M documents. Shards download
+sequentially, so the first 9 (~138k docs each ≈ 1.24M) arrive in ~25 min.
+`make corpus` therefore builds a **separate** 1.2M-doc file at
+`/mnt/nvme/data/corpus-ab.jsonl`, leaving the frozen `corpus.jsonl` untouched.
+
+The trade this makes, stated so it is not forgotten: this is **not** the
+`FREEZE.md` corpus, so its absolute docs/s is **not comparable** to the 8,992 /
+11,063 ceilings, which were measured on the frozen corpus. What the A/B yields
+is a **ratio** between two arms over identical documents. The ratio decides
+whether a hypothesis is kept; the absolute number against OpenSearch is settled
+only by B4 on the frozen corpus. Any figure taken from `corpus-ab.jsonl` is
+iteration telemetry and must never reach a slide.
+
+Second disclosure: the A/B runs while the remaining shards are still
+downloading on the harness, which also hosts the load generator. Arms are
+interleaved rep-major precisely so shared drift lands on both arms instead of
+being attributed to one — but if the two arms' spread is wide, the download
+overlap is the first thing to suspect, and the A/B should be repeated on a
+quiet box before anything is concluded.
+
+**Image:** `scylladb/vector-store:1.10.0-44-g282d9efc-arm64`, built on the
+harness and loaded on the SUT. `.env.sut`'s pin moved to it from
+`1.10.0-43-ge242fa3-arm64`, which the instance-store wipe erased. The new image
+is a strict superset — with `VECTOR_STORE_FTS_INLINE_INGEST` unset the ingest
+path is the previous behaviour — so the flag-off arm still measures stock.
+
+**Plumbing validated end to end before spending a run** (no corpus needed —
+the actor logs its tuning when the index is created). Both arms read back off
+the engine's own startup line on the live SUT:
+
+```
+arm off: … commit_threshold=disabled add_lock=exclusive dispatch=worker-pool  metrics_interval=None
+arm on:  … commit_threshold=disabled add_lock=exclusive dispatch=inline       metrics_interval=Some(1s)
+```
+
+That exercises the whole chain: compose wiring → `.env.sut` → environment →
+image → config parsing → actor behaviour → log. It is the check that would have
+caught the missing compose entry, and it is now an assertion inside the A/B
+script rather than a thing to remember.
+
+**Second fleet trap fixed in the same pass:** the A/B script originally invoked
+`ftsbench.resource_probe` directly. The probe reads `/sys/fs/cgroup` on
+whichever machine runs it, and `DOCKER_HOST=ssh://` cannot carry that — on the
+harness it would have recorded the *generator* box's idle cgroups while
+reporting them as engine CPU and RSS. Routed through `tools/sut_probe.sh`, which
+runs it on the SUT and copies the series back. This is the same failure that
+cost a 1.7 h growth-run redo on 2026-09-03.
+
+`VS_FTS_METRICS_INTERVAL=1s` is set identically for both arms — it is an
+instrument, not a variable under test, and setting it on one arm only would make
+its cost look like an effect.
+
+**Next:** A/B corpus ready → B1 smoke → B2 A/B → verdict.
