@@ -342,6 +342,46 @@ headroom. H3 (more tantivy threads) cannot help a process already at 97% of a
 exhausted**; further gains need either more cores or a change inside tantivy's
 indexing itself, neither of which is a benchmark-harness question.
 
+### Iteration 7 — full scale behaves differently from 1.2M (B4, in flight)
+
+The frozen corpus is verified byte-identical to `FREEZE.md`
+(8,967,625 docs, sha256 `1700bb6c…c50c432`). B4 rep 1, sharded generator,
+376 MB buffer: **8,408 docs/s** — against **12,229 on the 1.2M corpus**.
+
+**So the 12,229 headline is corpus-size-dependent and must not be quoted as
+"the" build rate.** The right published comparison for a full-corpus number is
+S11's **7,567 docs/s**, not S12's 1M-capped 8,992; against that the honest gain
+is **≈+11%**, not the +36% the small-corpus runs implied. This is the third
+instance of the same error class in this loop — comparing measurements taken at
+different operating points — and it is exactly what S13 ("build rate as the
+index grows") exists to show.
+
+**The constraint moves during a full-scale build.** Per-quartile mean CPU,
+rep 1:
+
+| phase | scylladb | vector-store |
+|---|---|---|
+| first 25% | **3.34** | 2.37 |
+| mid | 2.99 | 2.23 |
+| last 25% | 2.24 | **3.16** |
+
+Two distinct regimes. The loaders deliver all 8.97M rows in ~8 minutes at
+~19k docs/s, but the index needs ~18 — so the back half is a **drain phase**
+with no client pressure, where the vector-store works alone on the CDC backlog.
+Early on the database side dominates; late, the index does.
+
+Neither side is CPU-saturated on average (~5.5 of 8 cores total), unlike the
+1.2M runs where both sat at ~3.9/4. **This reopens the demoted hypotheses at
+full scale**: during the drain the vector-store is the constraint at only
+~3.16/4 cores, so something inside it serialises with ~0.8 cores of headroom —
+the conditions under which H2 (batch drain) or H3 (tantivy threads) could
+matter, and which the 1.2M tests could not have detected because there the
+vector-store was already at 3.86/4.
+
+**Next after B4:** re-run H1 inline at *full* scale against B4's worker-pool
+baseline. H1 was rejected twice, but both tests were at 1.2M where the
+vector-store was near-pinned; the drain phase is a different regime.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
