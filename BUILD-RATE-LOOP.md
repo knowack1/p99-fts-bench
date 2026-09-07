@@ -442,6 +442,42 @@ the container recreated**. Combined with the leak it compounds per rep.
 re-run. Also worth testing 128 MB at full scale — at 1.2M it was
 indistinguishable from 376 MB, and it would buy back several GiB of headroom.
 
+### Iteration 9 — the ranking INVERTS at full scale
+
+OpenSearch's B4 reps are **not** affected by the leak: its RSS is flat at
+14.75 → 14.85 → 14.85 GiB, bounded by the fixed 14 GiB JVM heap with the index
+on disk. So its warm reps are valid, and only the ScyllaDB side needs a
+cold-rep re-run.
+
+Clean full-corpus reps, sharded generator, both engines:
+
+| | 1.2M iteration corpus | **8.97M frozen corpus** |
+|---|---|---|
+| `scylla-cdc` | 12,228 | **8,408** |
+| `opensearch` | 10,656 | **9,265** |
+| ratio | **ScyllaDB 1.15x** | **OpenSearch 1.10x** |
+
+**The ranking reverses.** ScyllaDB wins on a small index and loses on the real
+corpus. Everything this loop concluded from the 1.2M corpus — including the
+"ScyllaDB is 1.148x faster" headline — describes an operating point the talk
+does not care about.
+
+Against the published pair (S11: OS 9,687 vs CDC 7,567, **1.28x OpenSearch**),
+the corrected full-corpus pair is **1.10x OpenSearch**. So the writer-buffer and
+generator fixes are real and worth ~+11% on the ScyllaDB side, but they
+**narrow** the gap rather than reverse it. That is the honest headline, and it
+is not the one the small-corpus runs suggested.
+
+Why the inversion is plausible rather than an artifact: the vector-store's index
+is in-RAM and its cost grows with index size — the same growth that drives the
+drain phase in iteration 7 and the memory pressure in iteration 8 — while
+Lucene's tiered merge policy over on-disk segments scales more gently. A
+comparison taken at 13% of the corpus flatters the in-RAM engine.
+
+**Status: preliminary at N=1 per engine.** OpenSearch reps 2–3 are running;
+ScyllaDB needs cold reps. Direction is clear but the magnitude is not yet
+settled.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
