@@ -288,6 +288,27 @@ than a footnote, because it is the difference between "ScyllaDB is faster" and
 "OpenSearch does more with less". Reporting only the first would be exactly the
 re-framing `../CLAUDE.md` forbids.
 
+### Iteration 5 — is two loaders actually enough?
+
+The 2-loader number is only an engine ceiling if the generator is no longer the
+constraint. Both ScyllaDB services sat at ~3.9/4 cores, which *suggests* engine-
+bound — but that is the same inference that produced the wrong answer in
+iteration 2, so it is tested rather than assumed.
+
+| loader processes | index docs/s (N=3) | client capacity offered |
+|---|---|---|
+| 2 | 12,228 | ~19,100 |
+| 3 | 11,918 | **~28,000** (9,424 + 9,455 + 9,134) |
+
+A third process adds 47% more client capacity and the index rate does not move
+(−2.5%, inside noise). With ~28k docs/s on offer and 11.9k absorbed, the
+generator is delivering more than twice what the engine takes.
+
+**12,228 docs/s is therefore a genuine ScyllaDB engine ceiling**, at
+`VS_FTS_WRITER_MEMORY_MB=376` on the 50/50 8-vCPU split — the first one this
+campaign has measured, since every prior ScyllaDB build-rate figure was taken
+through a single GIL-bound loader.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
