@@ -249,5 +249,57 @@ engine-bound OpenSearch number is not a comparison of engines.
 | H6 | fan out `monitor_items` | still open, but only reachable once the client stops binding |
 | H0 | profile | **not warranted yet** — profiling the vector-store would profile the wrong process |
 
-**Next:** clean 2-loader FTS build number → then the same treatment for
-OpenSearch, so both engines are measured off a generator that is not the limit.
+### Iteration 3 — both engines, generator-free, N=3
+
+`tools/sharded_build_rate.sh`, 2 disjoint corpus shards → 2 loader processes,
+1.2M-doc iteration corpus, `c=64`, fresh index per rep, `build_monitor` on each
+engine's own searchable count.
+
+| engine | docs/s per rep | median | engine CPU | RSS |
+|---|---|---|---|---|
+| `scylla-cdc` | 12,229 / 12,228 / 11,917 | **12,228** | scylla 3.91/4 + VS 3.89/4 | 14.9 + 5.8 GiB |
+| `opensearch` | 10,181 / 10,952 / 10,656 | **10,656** | 4.01/4 | 14.9 GiB |
+
+`scylla-cdc / opensearch = 1.148x`. All six reps indexed the full 1,200,000
+documents; no rep approached its memory limit.
+
+**Both engines are now CPU-saturated** — OpenSearch at 4.01/4, the ScyllaDB
+side at 3.91 and 3.89 of 4 each. That is what makes this the first genuine
+engine-versus-engine build-rate measurement in the campaign: previously only
+OpenSearch was at its ceiling.
+
+**The two honest readings, both of which belong on the slide:**
+
+- **Per box (the campaign's framing):** on one 8-vCPU host, the ScyllaDB stack
+  — database *and* index — builds at **12,228 docs/s** against OpenSearch's
+  **10,656**, a **1.15x ScyllaDB win**. This is the comparison `SUT-CONFIG.md`'s
+  50/50 split was designed for: OpenSearch gets 4 cores and the other 4 sit idle
+  as the "database slot", because an OpenSearch deployment still needs a
+  database holding the source documents.
+- **Per core:** ScyllaDB spends ~7.8 cores to OpenSearch's ~4.0 — **1,568 vs
+  2,664 docs/s per core, so OpenSearch is ~1.7x more CPU-efficient.**
+
+Both are true and they point opposite ways. `TUNING.md` §4.1 has flagged this
+CPU asymmetry as unresolved since the laptop pass; it is now load-bearing rather
+than a footnote, because it is the difference between "ScyllaDB is faster" and
+"OpenSearch does more with less". Reporting only the first would be exactly the
+re-framing `../CLAUDE.md` forbids.
+
+### Status against the loop's goal
+
+The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
+is **met and passed, at 12,228 docs/s**. But it was not met the way the task
+assumed. Nothing about the vector-store was optimised:
+
+| contribution | effect |
+|---|---|
+| removing `spawn_blocking` (H1) | **+0.1%** — null |
+| writer-buffer parity (376 MB/thread, set 2026-09-07, first SUT run) | folded into the flag-off baseline; not separable yet |
+| **removing the single-process generator ceiling** | **the rest** |
+
+The gap the task set out to close was substantially **an artifact of the
+measurement**, not a property of either engine. The vector-store's FTS ingest
+path costs 1.6% of the build and was never the constraint.
+
+**Remaining to make this quotable:** B4 on the frozen `FREEZE.md` corpus. Every
+number above is from the 1.2M iteration corpus and is a ratio only.

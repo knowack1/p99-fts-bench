@@ -104,7 +104,8 @@ def format_arm(arm: str, reps: list[dict], expected_docs: int) -> list[str]:
         f"  {arm:3s}  N={len(reps)}  docs/s per rep: {rates}",
         f"       median: {median_of(reps, 'rate'):,.0f} docs/s",
     ]
-    for role in ("vector-store", "scylladb"):
+    roles = sorted({role for r in reps for role in r["peaks"]})
+    for role in roles:
         cpu = median_peak(reps, role, "cpu")
         rss = median_peak(reps, role, "rss")
         limit = median_peak(reps, role, "limit")
