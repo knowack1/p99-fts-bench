@@ -189,16 +189,19 @@ reading is "not being fed any faster".
 
 Two decisive measurements, both on the 1.2M iteration corpus:
 
-**a) The FTS index path is nearly free.**
+**a) The FTS index path looked nearly free — RETRACTED, see iteration 4.**
 
 | configuration | docs/s |
 |---|---|
 | base table only, **no FTS index** | 9,806 |
 | base table + CDC + FTS index | 9,650 |
 
-The whole index path — CDC hop, tantivy indexing, commits — costs **1.6%**.
-Every hypothesis in the queue aimed at the FTS actor (H2, H3, H5) is aimed at
-1.6% of the problem.
+Read at the time as "the whole index path costs **1.6%**". **That conclusion was
+wrong**, and the error is instructive: both figures were taken at a
+*client-bound* operating point, where the generator was the constraint in both
+configurations. Comparing two measurements of the same client tells you nothing
+about what sits behind it. Corrected in iteration 4 — measured generator-free,
+the FTS path costs ~36%, not 1.6%.
 
 **b) The ~9.7k ceiling is the load generator, not either engine.**
 
@@ -303,3 +306,52 @@ path costs 1.6% of the build and was never the constraint.
 
 **Remaining to make this quotable:** B4 on the frozen `FREEZE.md` corpus. Every
 number above is from the 1.2M iteration corpus and is a ratio only.
+
+### Iteration 4 — decomposing the win, and correcting iteration 2
+
+Same sharded generator, N=3, only the tantivy writer buffer changed:
+
+| `VS_FTS_WRITER_MEMORY_MB` | docs/s | VS CPU | VS RSS |
+|---|---|---|---|
+| 15 (tantivy's floor = stock) | **8,608** | **3.98 / 4** | 3.3 GiB |
+| 376 (parity with OpenSearch) | **12,228** | 3.89 / 4 | 5.8 GiB |
+
+**The writer buffer is worth 1.42x** — not the +24% the laptop measured, because
+on the laptop the client was *also* binding and masked most of it. The mechanism
+is visible in the CPU column: at 15 MB the vector-store burns **more** CPU
+(3.98 vs 3.89 of 4) while delivering 30% **fewer** documents. That is the merge
+storm `results/fts-bottleneck-2026-08-27` measured at ~9x segment merges —
+cycles spent merging undersized segments instead of indexing.
+
+**Both fixes were necessary; neither alone was sufficient.**
+
+| configuration | docs/s |
+|---|---|
+| 15 MB buffer, 1 loader (≈ the published 8,992) | ~8.6–9.0k |
+| 15 MB buffer, 2 loaders | 8,608 — **generator fix alone buys nothing** |
+| 376 MB buffer, 1 loader | 9,650 — **buffer fix alone buys little** |
+| 376 MB buffer, 2 loaders | **12,228** |
+
+At the stock 15 MB buffer the *vector-store* is genuinely the bottleneck
+(CPU-pinned at 3.98/4), so adding client capacity does nothing. Fixing the
+buffer lifts the engine ceiling above the single-process client ceiling, at
+which point the **client** becomes the constraint. Only removing both gets
+12,228. This is why the investigation kept finding "the bottleneck moved": it
+did.
+
+**Correction to iteration 2's headline claim.** Measured generator-free, the
+FTS index path is *not* nearly free:
+
+| configuration (2 loaders) | docs/s | FTS cost |
+|---|---|---|
+| base table only, no index | ~19,100 | — |
+| base + CDC + FTS @ 376 MB | 12,228 | **−36%** |
+| base + CDC + FTS @ 15 MB | 8,608 | **−55%** |
+
+The earlier "1.6%" compared two runs that were *both* pinned at the client
+ceiling — it measured the generator twice. Building the index costs roughly a
+third of ScyllaDB's write throughput, which is a real and quotable number, and
+the opposite of what iteration 2 concluded. **H2/H3/H5 are therefore not
+"aimed at 1.6% of the problem" and should not have been demoted on that
+reasoning** — though they remain unattractive while the vector-store is only at
+3.89/4 cores and the remaining headroom is unclear.
