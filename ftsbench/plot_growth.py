@@ -61,6 +61,10 @@ METRICS = {
     "rss": {"chart": "GROWTH-RSS", "ylabel": "RSS, GiB (side total)",
             "title": "RAM (RSS) as the index grows"},
 }
+SPLIT_YLABEL = {"cpu": "CPU cores busy (per service)",
+                "rss": "RSS, GiB (per service)"}
+TOTAL_ROLE = "total"
+SPLIT_LINESTYLES = ["-", "--", ":", "-."]
 
 REP_RE = re.compile(r"-(\d+)\.jsonl$")
 GRID_QUANTUM = 10_000
@@ -150,11 +154,15 @@ def record_value(record: dict[str, Any], field: str) -> float | None:
     return None if value is None else float(value)
 
 
-def side_totals(probe: plotlib.Run, field: str) -> list[tuple[float, float]]:
-    """Per-tick (absolute time, sum of `field` across the side's containers)."""
+def side_totals(probe: plotlib.Run, field: str,
+                role: str | None = None) -> list[tuple[float, float]]:
+    """Per-tick (absolute time, sum of `field` across the side's containers),
+    or across one `role`'s containers when a role is named."""
     base = started_at(probe)
     by_tick: dict[int, dict[str, Any]] = {}
     for record in probe.records:
+        if role is not None and record.get("role") != role:
+            continue
         tick = by_tick.setdefault(int(record["i"]), {"t": record["t_elapsed_s"],
                                                      "values": []})
         value = record_value(record, field)
@@ -221,7 +229,7 @@ def usable(run: plotlib.Run) -> str:
 
 def config_lines(args: Any, config: plotlib.ConfigSeries,
                  probes: dict[tuple[str, str], plotlib.Run],
-                 grid: Sequence[float]
+                 grid: Sequence[float], role: str | None = None
                  ) -> tuple[list[tuple[list[float], list[float]]], list[str]]:
     lines, missing = [], []
     scale = 1.0 / 2**30 if args.metric == "rss" else 1.0
@@ -235,20 +243,67 @@ def config_lines(args: Any, config: plotlib.ConfigSeries,
         if probe is None:
             missing.append(f"{config.name} rep {rep_of(run.path)}: no probe file")
             continue
-        lines.append(probe_line(timeline, side_totals(probe, field), grid, scale))
+        totals = side_totals(probe, field, role)
+        if not totals:
+            missing.append(f"{config.name} rep {rep_of(run.path)}: "
+                           f"no {role} samples in the probe")
+            continue
+        lines.append(probe_line(timeline, totals, grid, scale))
     return lines, missing
 
 
-def draw(axes: Any, config: plotlib.ConfigSeries, index: int,
+def roles_of(config: plotlib.ConfigSeries,
+             probes: dict[tuple[str, str], plotlib.Run]) -> list[str]:
+    seen: list[str] = []
+    for (name, _), probe in probes.items():
+        if name != config.name:
+            continue
+        for record in probe.records:
+            role = record.get("role")
+            if role and role not in seen:
+                seen.append(role)
+    return sorted(seen)
+
+
+def series_of(args: Any, config: plotlib.ConfigSeries,
+              probes: dict[tuple[str, str], plotlib.Run]) -> list[str | None]:
+    """The role lines to draw for one config. `None` is the summed side, which
+    is all a single-service side has and all an unsplit chart wants; a
+    two-service side splits into its roles plus that sum."""
+    if args.metric == "rate" or not args.by_role:
+        return [None]
+    roles = roles_of(config, probes)
+    return [*roles, None] if len(roles) > 1 else [None]
+
+
+def series_style(config: plotlib.ConfigSeries, index: int, role: str | None,
+                 split: bool) -> dict[str, str]:
+    if not split:
+        return plotlib.style_for(config.name, index)
+    color = plotlib.ROLE_COLORS.get(role or TOTAL_ROLE,
+                                    plotlib.ROLE_COLORS[TOTAL_ROLE])
+    return {"color": color,
+            "linestyle": SPLIT_LINESTYLES[index % len(SPLIT_LINESTYLES)]}
+
+
+def series_label(config: plotlib.ConfigSeries, role: str | None, split: bool,
+                 count: int) -> str:
+    if role is None:
+        name = f"{config.name} · side total" if split else config.name
+    else:
+        name = f"{config.name} · {role}"
+    return f"{name} (median of {count})"
+
+
+def draw(axes: Any, style: dict[str, str], label: str,
          lines: Sequence[tuple[list[float], list[float]]]) -> None:
-    style = plotlib.style_for(config.name, index)
     for xs, ys in lines:
         if xs:
             axes.plot(xs, ys, color=style["color"], **THIN)
     xs, ys = pointwise_median(lines)
     if xs:
         axes.plot(xs, ys, color=style["color"], linestyle=style["linestyle"],
-                  label=f"{config.name} (median of {len(lines)})", **BOLD)
+                  label=label, **BOLD)
 
 
 def plot(args: Any, configs: list[plotlib.ConfigSeries]) -> tuple[Any, dict[str, Any]]:
@@ -263,15 +318,26 @@ def plot(args: Any, configs: list[plotlib.ConfigSeries]) -> tuple[Any, dict[str,
              "resampling one side only would smooth one engine and not the other)"]
     per_config: dict[str, dict[str, Any]] = {}
     for index, config in enumerate(configs):
-        lines, missing = config_lines(args, config, probes, grid)
-        notes.extend(missing)
-        draw(axes, config, index, lines)
+        series = series_of(args, config, probes)
+        split = len(series) > 1
+        drawn: dict[str, int] = {}
+        for role in series:
+            lines, missing = config_lines(args, config, probes, grid, role)
+            notes.extend(note for note in missing if note not in notes)
+            style = series_style(config, index, role, split)
+            draw(axes, style, series_label(config, role, split, len(lines)), lines)
+            drawn[role or "side total"] = sum(1 for xs, _ in lines if xs)
         per_config[config.name] = {
-            "lines_drawn": sum(1 for xs, _ in lines if xs),
+            "lines_drawn": max(drawn.values(), default=0),
             "docs_grid_step": step,
         }
+        if split:
+            per_config[config.name]["lines_drawn_by_role"] = drawn
 
-    plotlib.frame(axes, args, "documents indexed", METRICS[args.metric]["ylabel"])
+    ylabel = METRICS[args.metric]["ylabel"]
+    if args.by_role and args.metric in SPLIT_YLABEL:
+        ylabel = SPLIT_YLABEL[args.metric]
+    plotlib.frame(axes, args, "documents indexed", ylabel)
     axes.set_ylim(bottom=0)
     plotlib.title_and_subtitle(axes, args)
     axes.legend(loc="best", fontsize=9)
@@ -289,6 +355,10 @@ def main() -> int:
     parser.add_argument("--metric", choices=sorted(METRICS), required=True)
     parser.add_argument("--probe", action="append", metavar="NAME:GLOB",
                         help="probe series per config (required for cpu/rss)")
+    parser.add_argument("--by-role", action="store_true",
+                        help="split a multi-service side into one line per "
+                             "role (scylladb, vector-store) plus its sum, "
+                             "instead of only the summed side")
     parser.add_argument("--docs-step", type=int, default=0,
                         help="x-grid step in documents (0 = auto, "
                              f"multiples of {GRID_QUANTUM})")
