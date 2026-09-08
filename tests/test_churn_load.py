@@ -12,10 +12,10 @@ The in-flight test below fails against that implementation with `peak == 4` at
 `concurrency=16`.
 """
 import argparse
+import asyncio
 import dataclasses
 import json
 import re
-import threading
 from pathlib import Path
 
 import pytest
@@ -42,25 +42,30 @@ class CountingSends:
     def __init__(self, expect: int, fail_every: int = 0) -> None:
         self._expect = expect
         self._fail_every = fail_every
-        self._lock = threading.Lock()
-        self._gate = threading.Event()
+        # No lock: the driver dispatches on a single event loop, so the counters
+        # are only ever touched between awaits. A threading.Event here would be
+        # worse than redundant — waiting on one would block the loop, so the
+        # sends could never overlap and the test would time out on a client that
+        # is in fact correct.
+        self._gate = asyncio.Event()
         self._inflight = 0
         self._calls = 0
         self.peak = 0
         self.payloads: list = []
 
-    def send(self, payload, tally) -> None:
-        with self._lock:
-            self._calls += 1
-            call = self._calls
-            self._inflight += 1
-            self.peak = max(self.peak, self._inflight)
-            self.payloads.append(payload)
-            if self._inflight >= self._expect:
-                self._gate.set()
-        self._gate.wait(timeout=RELEASE_TIMEOUT_S)
-        with self._lock:
-            self._inflight -= 1
+    async def send(self, payload, tally) -> None:
+        self._calls += 1
+        call = self._calls
+        self._inflight += 1
+        self.peak = max(self.peak, self._inflight)
+        self.payloads.append(payload)
+        if self._inflight >= self._expect:
+            self._gate.set()
+        try:
+            await asyncio.wait_for(self._gate.wait(), RELEASE_TIMEOUT_S)
+        except TimeoutError:
+            pass
+        self._inflight -= 1
         if self._fail_every and call % self._fail_every == 0:
             raise RuntimeError(f"injected failure on call {call}")
 

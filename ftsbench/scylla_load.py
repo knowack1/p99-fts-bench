@@ -21,6 +21,7 @@ Usage: python3 -m ftsbench.scylla_load --corpus data/corpus.jsonl \
            --hosts 127.0.0.1 --batch-size 500 --concurrency 16
 """
 import argparse
+import asyncio
 import sys
 import uuid
 from functools import partial
@@ -84,19 +85,57 @@ def insert_parameters(batch: list[dict]) -> list[tuple]:
     ]
 
 
-def concurrent_results(session: Session, statement, parameters: list[tuple],
-                       rows_in_flight: int) -> list:
-    """`raise_on_first_error=False` so every row is attempted and the per-row
-    outcomes come back. Raising on the first one abandoned the rest of the batch
-    unsent, which is how a single ConnectionBusy cost one repetition 380
-    documents — see ftsbench.load_retry."""
-    from cassandra.concurrent import execute_concurrent_with_args
+def awaitable(response_future) -> "asyncio.Future":
+    """Bridge one driver `ResponseFuture` onto the dispatch loop.
 
-    return execute_concurrent_with_args(
-        session, statement, parameters,
-        concurrency=rows_in_flight or len(parameters),
-        raise_on_first_error=False,
+    The driver's callbacks fire on ITS reactor thread, not ours, so the result
+    has to cross with `call_soon_threadsafe`; setting it directly would mutate
+    an asyncio Future from the wrong thread and lose or corrupt completions
+    under load. This is the whole reason the CQL side can be async without a
+    thread per statement: the reactor is already doing the multiplexing, and
+    `execute_concurrent_with_args` was only ever a blocking wrapper around it.
+    """
+    loop = asyncio.get_running_loop()
+    waiter = loop.create_future()
+
+    def settle(setter, value):
+        if not waiter.done():
+            setter(value)
+
+    response_future.add_callbacks(
+        lambda result: loop.call_soon_threadsafe(
+            settle, waiter.set_result, result),
+        lambda exc: loop.call_soon_threadsafe(
+            settle, waiter.set_exception, exc),
     )
+    return waiter
+
+
+async def concurrent_results(session: Session, statement,
+                             parameters: list[tuple],
+                             rows_in_flight: int) -> list:
+    """Every row is attempted and the per-row outcomes come back, in the order
+    sent. Abandoning the rest of a batch on the first failure is how a single
+    ConnectionBusy cost one repetition 380 documents — see ftsbench.load_retry.
+
+    `rows_in_flight` bounds the statements this operation has outstanding, so
+    the run's total is `--concurrency x rows_in_flight`. It used to default to
+    the whole batch, which made one operation 500 concurrent CQL requests
+    against one `_bulk` on the OpenSearch side — 32,000 outstanding at the
+    ladder's c=64. The Makefile now sets 1, so `--concurrency` is outstanding
+    requests on both engines.
+    """
+    bound = asyncio.Semaphore(rows_in_flight or len(parameters))
+
+    async def one(params):
+        async with bound:
+            try:
+                return (True, await awaitable(
+                    session.execute_async(statement, params)))
+            except Exception as exc:
+                return (False, exc)
+
+    return await asyncio.gather(*(one(params) for params in parameters))
 
 
 def outcome_of(sent: list, results: list) -> load_retry.Attempt:
@@ -111,29 +150,35 @@ def outcome_of(sent: list, results: list) -> load_retry.Attempt:
     return load_retry.Attempt(failed, error)
 
 
-def attempt_rows(session: Session, statement, rows_in_flight: int,
-                 parameters: list[tuple]) -> load_retry.Attempt:
-    results = concurrent_results(session, statement, parameters, rows_in_flight)
+async def attempt_rows(session: Session, statement, rows_in_flight: int,
+                       parameters: list[tuple]) -> load_retry.Attempt:
+    results = await concurrent_results(session, statement, parameters,
+                                       rows_in_flight)
     return outcome_of(parameters, results)
 
 
-def concurrent_statement_results(session: Session, statements: list[tuple],
-                                 rows_in_flight: int) -> list:
-    """`execute_concurrent`, not `execute_concurrent_with_args`: churn mixes
-    INSERT and DELETE in one operation, so each entry carries its own
-    statement. The wrapper only cycles one statement over many parameter
-    sets."""
-    from cassandra.concurrent import execute_concurrent
+async def concurrent_statement_results(session: Session,
+                                       statements: list[tuple],
+                                       rows_in_flight: int) -> list:
+    """Churn mixes INSERT and DELETE in one operation, so each entry carries
+    its own statement rather than cycling one statement over many parameter
+    sets. Same bound and same outcome shape as `concurrent_results`."""
+    bound = asyncio.Semaphore(rows_in_flight or len(statements))
 
-    return execute_concurrent(
-        session, statements,
-        concurrency=rows_in_flight or len(statements),
-        raise_on_first_error=False,
-    )
+    async def one(statement, params):
+        async with bound:
+            try:
+                return (True, await awaitable(
+                    session.execute_async(statement, params)))
+            except Exception as exc:
+                return (False, exc)
+
+    return await asyncio.gather(
+        *(one(statement, params) for statement, params in statements))
 
 
-def attempt_statements(session: Session, rows_in_flight: int,
-                       statements: list[tuple]) -> load_retry.Attempt:
+async def attempt_statements(session: Session, rows_in_flight: int,
+                             statements: list[tuple]) -> load_retry.Attempt:
     """One operation carrying a mix of statements.
 
     Issued together rather than statement-kind by statement-kind, because the
@@ -196,10 +241,12 @@ def batch_attempt(args: argparse.Namespace, session: Session, statement):
     return partial(attempt_rows, session, statement, args.rows_in_flight)
 
 
-def send(attempt, parameters: list[tuple], tally: load_retry.RetryTally) -> None:
-    """The engine-specific half. Runs on a worker thread; the driver's Session
-    is thread-safe, unlike `requests.Session` on the OpenSearch side."""
-    load_retry.send_with_retries(parameters, attempt, tally)
+async def send(attempt, parameters: list[tuple],
+               tally: load_retry.RetryTally) -> None:
+    """The engine-specific half. Runs on the dispatch loop: the driver's own
+    reactor thread does the I/O, so an outstanding statement costs a callback
+    rather than an OS thread."""
+    await load_retry.send_with_retries_async(parameters, attempt, tally)
 
 
 def build_loader(args: argparse.Namespace, session: Session,

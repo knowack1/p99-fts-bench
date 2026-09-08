@@ -17,6 +17,7 @@ A retry is a disclosed condition of the run, not a repair: `RetryTally` is what
 the loader's closing line reports, so a client that was overloaded says so
 instead of quietly producing a slightly slower number.
 """
+import asyncio
 import threading
 import time
 from dataclasses import dataclass
@@ -68,6 +69,13 @@ class RetriesExhausted(RuntimeError):
     fail the load, not shorten it."""
 
 
+def _exhausted(items: Sequence[Any], outcome: Attempt,
+               policy: RetryPolicy) -> RetriesExhausted:
+    return RetriesExhausted(
+        f"{len(outcome.failed)} of {len(items)} item(s) still failing "
+        f"after {policy.attempts} attempts: {outcome.error}")
+
+
 def send_with_retries(items: Sequence[Any], send: Callable[[list[Any]], Attempt],
                       tally: RetryTally, policy: RetryPolicy = DEFAULT_POLICY,
                       sleep: Callable[[float], None] = time.sleep) -> None:
@@ -77,9 +85,30 @@ def send_with_retries(items: Sequence[Any], send: Callable[[list[Any]], Attempt]
         if not outcome.failed:
             return
         if attempt + 1 == policy.attempts:
-            raise RetriesExhausted(
-                f"{len(outcome.failed)} of {len(items)} item(s) still failing "
-                f"after {policy.attempts} attempts: {outcome.error}")
+            raise _exhausted(items, outcome, policy)
         tally.note(len(outcome.failed))
         sleep(policy.backoff_s * (2 ** attempt))
+        remaining = outcome.failed
+
+
+async def send_with_retries_async(items: Sequence[Any],
+                                  send: Callable[[list[Any]], Any],
+                                  tally: RetryTally,
+                                  policy: RetryPolicy = DEFAULT_POLICY) -> None:
+    """`send_with_retries` for a coroutine send.
+
+    Backs off with `asyncio.sleep`, never `time.sleep`: a blocking sleep here
+    would stall the dispatch loop and every other operation in flight, so one
+    retrying batch would look like an engine-wide stall in every concurrent
+    operation's `service_ms`.
+    """
+    remaining = list(items)
+    for attempt in range(policy.attempts):
+        outcome = await send(remaining)
+        if not outcome.failed:
+            return
+        if attempt + 1 == policy.attempts:
+            raise _exhausted(items, outcome, policy)
+        tally.note(len(outcome.failed))
+        await asyncio.sleep(policy.backoff_s * (2 ** attempt))
         remaining = outcome.failed

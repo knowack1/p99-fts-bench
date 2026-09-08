@@ -50,6 +50,32 @@ def unpaced(count: int) -> Iterator[Op]:
         yield Op(i=i, t_intended_s=time.perf_counter())
 
 
+def planned(rate_per_s: float, count: int,
+            origin_s: float | None = None) -> Iterator[Op]:
+    """The same schedule as `paced`, without the waiting.
+
+    Split out because an async dispatch loop must not block the event loop to
+    pace itself: a `time.sleep` there would stall every in-flight request for
+    exactly as long as the pacing gap, turning the pacer into the thing it
+    exists to measure around. The async driver takes these intended times and
+    awaits them; `paced` keeps the blocking behaviour for the query path.
+    """
+    origin = time.perf_counter() if origin_s is None else origin_s
+    for i, offset in enumerate(schedule(rate_per_s, count)):
+        yield Op(i=i, t_intended_s=origin + offset)
+
+
+def sleep_until(intended_s: float) -> None:
+    """Wait for an intended dispatch time, or return at once if already past it.
+
+    Never sleeping when behind schedule is the point: the backlog is the
+    finding, and skipping or compressing work would hide it.
+    """
+    sleep_for = intended_s - time.perf_counter()
+    if sleep_for > MIN_SLEEP_S:
+        time.sleep(sleep_for)
+
+
 def paced(rate_per_s: float, count: int, origin_s: float | None = None) -> Iterator[Op]:
     """Dispatch on the fixed schedule, sleeping only when ahead of it.
 
@@ -57,13 +83,9 @@ def paced(rate_per_s: float, count: int, origin_s: float | None = None) -> Itera
     backlog is the finding. Callers must record `latency_ms` against
     `t_intended_s` and not against the moment the send actually began.
     """
-    origin = time.perf_counter() if origin_s is None else origin_s
-    for i, offset in enumerate(schedule(rate_per_s, count)):
-        intended = origin + offset
-        sleep_for = intended - time.perf_counter()
-        if sleep_for > MIN_SLEEP_S:
-            time.sleep(sleep_for)
-        yield Op(i=i, t_intended_s=intended)
+    for op in planned(rate_per_s, count, origin_s):
+        sleep_until(op.t_intended_s)
+        yield op
 
 
 def paced_for_duration(rate_per_s: float, duration_s: float,

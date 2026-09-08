@@ -130,11 +130,14 @@ def statement_parameters(items: list[churn_stream.ChurnItem], insert,
             for item in items]
 
 
-def send_statements(attempt, statements: list[tuple],
-                    tally: load_retry.RetryTally) -> None:
-    """The engine-specific half, on a worker thread. The driver's Session is
-    thread-safe, unlike `requests.Session` on the OpenSearch side."""
-    load_retry.send_with_retries(statements, attempt, tally)
+async def send_statements(attempt, statements: list[tuple],
+                          tally: load_retry.RetryTally) -> None:
+    """The engine-specific half, on the dispatch loop. The driver's own reactor
+    thread does the I/O, so an outstanding statement costs a callback rather
+    than an OS thread — the same change the build path got, because churn
+    dispatches through the same driver and would otherwise keep the thread cost
+    the build path just shed."""
+    await load_retry.send_with_retries_async(statements, attempt, tally)
 
 
 def churn_header_fields(args: argparse.Namespace) -> dict:
@@ -158,7 +161,8 @@ def opensearch_loader(args: argparse.Namespace) -> Iterator[load_driver.EngineLo
         name="churn", engine="opensearch", op_kind=churn_stream.OP_STEADY,
         engine_version="unknown",
         encode=partial(bulk_payload, index=args.index),
-        send=partial(opensearch_load.send, url),
+        send=partial(opensearch_load.send,
+                     opensearch_load.bulk_pool(url, args.concurrency)),
         header_fields={"index": args.index, **churn_header_fields(args)},
     )
 

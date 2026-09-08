@@ -15,11 +15,11 @@ Usage: python3 -m ftsbench.opensearch_load --corpus data/corpus.jsonl \
 import argparse
 import json
 import sys
-import threading
 from functools import partial
+from urllib.parse import urlparse
 import requests
 
-from . import load_driver, load_retry, samplers
+from . import async_http, load_driver, load_retry, samplers
 
 DEFAULT_URL = "http://localhost:9200"
 DEFAULT_INDEX = "wiki-articles"
@@ -27,7 +27,6 @@ BULK_TIMEOUT_S = 120
 SETTINGS_TIMEOUT_S = 30
 RESTORED_REFRESH_INTERVAL = "1s"
 
-_thread_local = threading.local()
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,45 +80,37 @@ def first_bulk_error(body: dict) -> object:
     return failures[0].get("error", failures[0])
 
 
-def thread_session() -> requests.Session:
-    """One Session per worker thread. `requests.Session` is not documented
-    thread-safe, and a shared one caps out at its connection-pool size, which
-    would silently re-serialise the concurrency the driver exists to add."""
-    session = getattr(_thread_local, "session", None)
-    if session is None:
-        session = requests.Session()
-        _thread_local.session = session
-    return session
+async def send_bulk(pool: async_http.Pool, payload: bytes) -> None:
+    """One `_bulk`, over one connection, with nothing else on it.
 
-
-def send_bulk(session: requests.Session, url: str, payload: bytes) -> None:
-    response = session.post(
-        f"{url}/_bulk",
-        data=payload,
-        headers={"Content-Type": "application/x-ndjson"},
-        timeout=BULK_TIMEOUT_S,
-    )
-    response.raise_for_status()
-    body = response.json()
+    A 2xx is not success: OpenSearch reports per-item failures inside a 200
+    response, so a bulk whose items were rejected has to raise here or a failing
+    engine would read as a fast one.
+    """
+    async with pool.acquire() as connection:
+        raw = await connection.post("/_bulk", payload, "application/x-ndjson")
+    body = json.loads(raw)
     if body.get("errors") and failed_items(body):
         raise RuntimeError(f"bulk request had item failures, first: {first_bulk_error(body)}")
 
 
-def attempt_bulk(session: requests.Session, url: str,
-                 payloads: list[bytes]) -> load_retry.Attempt:
+async def attempt_bulk(pool: async_http.Pool,
+                       payloads: list[bytes]) -> load_retry.Attempt:
     """One _bulk request is one retryable item. Resending it cannot duplicate
     anything: bulk_payload names every document's _id, so a repeat overwrites."""
     try:
-        send_bulk(session, url, payloads[0])
+        await send_bulk(pool, payloads[0])
     except Exception as error:
         return load_retry.Attempt(list(payloads), f"{type(error).__name__}: {error}")
     return load_retry.Attempt([])
 
 
-def send(url: str, payload: bytes, tally: load_retry.RetryTally) -> None:
-    """The engine-specific half. Runs on a worker thread."""
-    load_retry.send_with_retries([payload], partial(attempt_bulk, thread_session(), url),
-                                 tally)
+async def send(pool: async_http.Pool, payload: bytes,
+               tally: load_retry.RetryTally) -> None:
+    """The engine-specific half. Runs on the dispatch loop; an outstanding bulk
+    costs a connection, not a thread."""
+    await load_retry.send_with_retries_async([payload],
+                                             partial(attempt_bulk, pool), tally)
 
 
 def set_refresh_interval(session: requests.Session, url: str, index: str, interval: str) -> None:
@@ -138,12 +129,22 @@ def refresh_and_count(session: requests.Session, url: str, index: str) -> int:
     return response.json()["count"]
 
 
+def bulk_pool(url: str, concurrency: int) -> async_http.Pool:
+    """One connection per operation the driver will hold in flight, so an
+    in-flight bulk always has a socket of its own and `--concurrency` is what
+    the engine is actually being asked at once."""
+    parsed = urlparse(url)
+    return async_http.Pool(parsed.hostname or "localhost",
+                           parsed.port or (443 if parsed.scheme == "https" else 80),
+                           concurrency)
+
+
 def build_loader(args: argparse.Namespace, url: str) -> load_driver.EngineLoader:
     return load_driver.EngineLoader(
         name="opensearch", engine="opensearch", op_kind="bulk",
         engine_version=samplers.OpenSearchSampler(url, args.index).version(),
         encode=partial(bulk_payload, index=args.index),
-        send=partial(send, url),
+        send=partial(send, bulk_pool(url, args.concurrency)),
         header_fields={
             "index": args.index,
             "refresh_during_load": not args.no_refresh_during_load,

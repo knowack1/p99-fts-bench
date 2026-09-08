@@ -11,6 +11,7 @@ that made that loss possible: that the rest of a batch is still sent after one
 row fails, and that rows which never land fail the load instead of shortening
 it.
 """
+import asyncio
 import sys
 from pathlib import Path
 
@@ -54,7 +55,8 @@ class FlakyDriver:
             self.failing = self.failing - {row}
         return (False, ConnectionBusy("too many requests already in flight"))
 
-    def __call__(self, session, statement, parameters, concurrency) -> list:
+    async def __call__(self, session, statement, parameters,
+                       rows_in_flight) -> list:
         self.attempts.append(list(parameters))
         return [self.outcome_for(row) for row in parameters]
 
@@ -64,7 +66,7 @@ def scylla_batch(monkeypatch, driver: FlakyDriver,
     monkeypatch.setattr(scylla_load, "concurrent_results", driver)
     tally = load_retry.RetryTally()
     attempt = partial(scylla_load.attempt_rows, None, None, 128)
-    scylla_load.send(attempt, rows, tally)
+    asyncio.run(scylla_load.send(attempt, rows, tally))
     return tally
 
 
@@ -113,7 +115,7 @@ class FlakyBulk:
         self.remaining = failures
         self.calls = 0
 
-    def __call__(self, session, url, payload) -> None:
+    async def __call__(self, pool, payload) -> None:
         self.calls += 1
         if self.remaining:
             self.remaining -= 1
@@ -122,9 +124,8 @@ class FlakyBulk:
 
 def opensearch_bulk(monkeypatch, bulk: FlakyBulk) -> load_retry.RetryTally:
     monkeypatch.setattr(opensearch_load, "send_bulk", bulk)
-    monkeypatch.setattr(opensearch_load, "thread_session", lambda: None)
     tally = load_retry.RetryTally()
-    opensearch_load.send("http://localhost:9200", b"{}\n", tally)
+    asyncio.run(opensearch_load.send(None, b"{}\n", tally))
     return tally
 
 
@@ -147,13 +148,14 @@ def test_both_loaders_retry_under_the_same_policy(monkeypatch):
     do, not in how hard the client tries. Two policies that happen to agree
     today are not that commitment."""
     policies = []
-    real = load_retry.send_with_retries
+    real = load_retry.send_with_retries_async
 
-    def recorder(items, send, tally, policy=load_retry.DEFAULT_POLICY, **kwargs):
+    async def recorder(items, send, tally, policy=load_retry.DEFAULT_POLICY,
+                       **kwargs):
         policies.append(policy)
-        return real(items, send, tally, policy, **kwargs)
+        return await real(items, send, tally, policy, **kwargs)
 
-    monkeypatch.setattr(load_retry, "send_with_retries", recorder)
+    monkeypatch.setattr(load_retry, "send_with_retries_async", recorder)
     scylla_batch(monkeypatch, FlakyDriver(set()))
     opensearch_bulk(monkeypatch, FlakyBulk(failures=0))
     assert policies == [load_retry.DEFAULT_POLICY, load_retry.DEFAULT_POLICY]

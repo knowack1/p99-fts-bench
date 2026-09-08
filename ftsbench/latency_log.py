@@ -238,6 +238,30 @@ def timed_op(log: LatencyLog, op_i: int, t_intended_s: float, op: str,
         action()
     except Exception as err:
         ok, error = False, f"{type(err).__name__}: {err}"
+    _record_outcome(log, op_i, t_intended_s, op, n_docs, t_start_s, ok, error)
+
+
+async def timed_op_async(log: LatencyLog, op_i: int, t_intended_s: float,
+                         op: str, n_docs: int,
+                         action: Callable[[], Any]) -> None:
+    """`timed_op` for a coroutine send. Same contract, same broad except, and
+    the same recording — an engine that rejects a write must show up as a
+    failed operation on both paths, never as an operation that did not happen.
+    """
+    t_start_s = time.perf_counter()
+    ok, error = True, None
+    try:
+        await action()
+    except Exception as err:
+        ok, error = False, f"{type(err).__name__}: {err}"
+    _record_outcome(log, op_i, t_intended_s, op, n_docs, t_start_s, ok, error)
+
+
+def _record_outcome(log: LatencyLog, op_i: int, t_intended_s: float, op: str,
+                    n_docs: int, t_start_s: float, ok: bool,
+                    error: str | None) -> None:
+    """Shared so the sync and async timers cannot disagree about what an
+    operation's record looks like."""
     t_end_s = time.perf_counter()
     log.record(OpTiming(op_i, t_intended_s, t_start_s, t_end_s), op=op,
                n_docs=n_docs, ok=ok, error=error)
@@ -249,17 +273,23 @@ def _renumbered(ops: Iterator[pacer.Op], first_i: int) -> Iterator[pacer.Op]:
 
 
 def _chunk_ops(target_docs_per_s: float, batch_size: int, origin_s: float,
-               first_i: int) -> Iterator[pacer.Op]:
+               first_i: int, blocking_sleep: bool = True) -> Iterator[pacer.Op]:
     if target_docs_per_s <= 0:
         return pacer.unpaced(SCHEDULE_CHUNK_OPS)
     op_rate = target_docs_per_s / batch_size
-    return pacer.paced(op_rate, SCHEDULE_CHUNK_OPS,
-                       origin_s + first_i / op_rate)
+    paced = pacer.paced if blocking_sleep else pacer.planned
+    return paced(op_rate, SCHEDULE_CHUNK_OPS, origin_s + first_i / op_rate)
 
 
 def op_schedule(target_docs_per_s: float, batch_size: int,
-                origin_s: float) -> Iterator[pacer.Op]:
+                origin_s: float,
+                blocking_sleep: bool = True) -> Iterator[pacer.Op]:
     """Unbounded dispatch schedule for ingest operations, in batches.
+
+    `blocking_sleep=False` yields the intended times without waiting for them,
+    for the async driver, which awaits them itself. A `time.sleep` inside an
+    event loop would stall every in-flight request for the length of the pacing
+    gap.
 
     Paced when a target rate is set, because C3 needs a *controlled* offered
     rate: at saturation the recorded latencies are queueing delay and the chart
@@ -273,6 +303,7 @@ def op_schedule(target_docs_per_s: float, batch_size: int,
     first_i = 0
     while True:
         yield from _renumbered(
-            _chunk_ops(target_docs_per_s, batch_size, origin_s, first_i),
+            _chunk_ops(target_docs_per_s, batch_size, origin_s, first_i,
+                       blocking_sleep),
             first_i)
         first_i += SCHEDULE_CHUNK_OPS

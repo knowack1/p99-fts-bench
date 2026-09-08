@@ -1,10 +1,10 @@
 import argparse
+import asyncio
 import json
 import threading
 import time
 import uuid
 from pathlib import Path
-from concurrent import futures
 
 import pytest
 
@@ -52,14 +52,12 @@ def action_ids(payload: bytes) -> list[str]:
 def dispatch_with_fake_transport(monkeypatch, corpus: str, batch_size: int,
                                  concurrency: int) -> list[bytes]:
     sent: list[bytes] = []
-    lock = threading.Lock()
-
-    def fake_send(session, url, payload):
-        with lock:
-            sent.append(payload)
+    async def fake_send(pool, payload):
+        # No lock: the driver dispatches on one event loop now, so there is no
+        # concurrent mutation to guard against.
+        sent.append(payload)
 
     monkeypatch.setattr(opensearch_load, "send_bulk", fake_send)
-    monkeypatch.setattr(opensearch_load, "thread_session", lambda: None)
     monkeypatch.setattr(opensearch_load.samplers, "OpenSearchSampler",
                         lambda *a, **k: argparse.Namespace(version=lambda: "test"))
     args = loader_args(corpus, batch_size)
@@ -287,35 +285,45 @@ def test_the_registry_covers_every_write_path_module():
     assert not missing, f"write-path modules not covered: {sorted(missing)}"
 
 
-def test_bulk_pool_surfaces_a_worker_exception_rather_than_dropping_it():
-    with futures.ThreadPoolExecutor(max_workers=2) as executor:
-        pool = load_driver.InFlightPool(executor, 2)
-        pool.submit(lambda: 1 / 0)
+def test_bulk_pool_surfaces_a_task_exception_rather_than_dropping_it():
+    async def scenario():
+        pool = load_driver.InFlightPool(2)
+
+        async def boom():
+            1 / 0
+
+        await pool.submit(boom())
         with pytest.raises(ZeroDivisionError):
-            pool.drain()
+            await pool.drain()
+
+    asyncio.run(scenario())
 
 
-def test_bulk_pool_blocks_the_dispatcher_once_max_inflight_is_reached():
+def test_bulk_pool_makes_the_dispatcher_wait_once_max_inflight_is_reached():
     """Unbounded submission would absorb a paced run's backlog into client
-    memory and hide it from queue_ms."""
-    release = threading.Event()
-    third_submitted = threading.Event()
+    memory and hide it from queue_ms.
 
-    def blocking_work() -> None:
-        release.wait(timeout=5)
+    The bound is now tasks rather than threads, so "blocks the dispatcher"
+    means `submit` does not return until an operation completes — which is what
+    keeps the backlog visible instead of buffered.
+    """
+    async def scenario():
+        release = asyncio.Event()
 
-    with futures.ThreadPoolExecutor(max_workers=4) as executor:
-        pool = load_driver.InFlightPool(executor, 2)
-        pool.submit(blocking_work)
-        pool.submit(blocking_work)
-        dispatcher = threading.Thread(
-            target=lambda: (pool.submit(blocking_work), third_submitted.set()))
-        dispatcher.start()
-        assert not third_submitted.wait(timeout=0.2)
+        async def held():
+            await release.wait()
+
+        pool = load_driver.InFlightPool(2)
+        await pool.submit(held())
+        await pool.submit(held())
+        third = asyncio.create_task(pool.submit(held()))
+        await asyncio.sleep(0.05)
+        assert not third.done(), "submitted past the in-flight bound"
         release.set()
-        dispatcher.join(timeout=5)
-        assert third_submitted.is_set()
-        pool.drain()
+        await asyncio.wait_for(third, timeout=5)
+        await pool.drain()
+
+    asyncio.run(scenario())
 
 
 def test_client_bound_warning_fires_only_at_concurrency_one(capsys):
