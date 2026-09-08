@@ -37,7 +37,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent import futures
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,6 +45,29 @@ from typing import Any
 from . import latency_log, load_retry, pacer, runmeta
 from .corpus import batched, read_corpus
 from .progress import ThroughputReporter
+
+
+@dataclass(frozen=True)
+class Batch:
+    """One operation's worth of work, as the SOURCE built it.
+
+    `op_kind` rides with the batch rather than with the loader because a churn
+    stream changes kind as its ring fills — add-only during warm-in, add and
+    delete after — and a per-loader `op_kind` cannot say so. `None` means "use
+    the loader's", which is what keeps every existing C1/C3 artifact's `op`
+    field byte-identical.
+    """
+
+    items: list
+    op_kind: str | None = None
+
+
+# The work source is a property of the RUN, not of the engine, which is why it
+# is a parameter of `run` and not a field of `EngineLoader`. `EngineLoader` is
+# built per engine; a source living there would let the two engines feed
+# themselves different work, and "the engines were offered the same work in the
+# same order" is the one property this module exists to guarantee.
+Source = Callable[[argparse.Namespace, float], Iterable[Batch]]
 
 
 @dataclass(frozen=True)
@@ -132,13 +155,41 @@ class InFlightPool:
 
 
 def _operation(log: latency_log.LatencyLog, op: pacer.Op,
-               loader: EngineLoader, payload: Any, n_docs: int,
+               loader: EngineLoader, payload: Any, batch: Batch,
                tally: load_retry.RetryTally) -> Callable[[], None]:
     """Each worker times its own operation against the run's shared origin."""
+    op_kind = batch.op_kind or loader.op_kind
+    n_docs = len(batch.items)
+
     def work() -> None:
-        latency_log.timed_op(log, op.i, op.t_intended_s, loader.op_kind, n_docs,
+        latency_log.timed_op(log, op.i, op.t_intended_s, op_kind, n_docs,
                              lambda: loader.send(payload, tally))
     return work
+
+
+def corpus_batches(args: argparse.Namespace,
+                   origin_s: float) -> Iterator[Batch]:
+    """The default source: replay the corpus once, in order.
+
+    `origin_s` is unused here because a corpus replay ends when the corpus
+    does. It stays in the signature so the driver remains the single owner of
+    the run origin — a source that needs a deadline must be handed the same
+    clock zero every `t_*_s` is relative to, never stamp its own.
+    """
+    for items in batched(read_corpus(args.corpus, args.max_docs),
+                         args.batch_size):
+        yield Batch(items)
+
+
+@dataclass(frozen=True)
+class Dispatch:
+    """Everything one dispatch loop needs, so `_dispatch` stays readable."""
+
+    pool: InFlightPool
+    log: latency_log.LatencyLog
+    args: argparse.Namespace
+    origin_s: float
+    tally: load_retry.RetryTally
 
 
 def _header(args: argparse.Namespace, loader: EngineLoader) -> dict[str, Any]:
@@ -155,27 +206,52 @@ def _header(args: argparse.Namespace, loader: EngineLoader) -> dict[str, Any]:
     )
 
 
-def _dispatch(pool: InFlightPool, log: latency_log.LatencyLog,
-              args: argparse.Namespace, loader: EngineLoader, origin_s: float,
-              tally: load_retry.RetryTally) -> None:
-    schedule = latency_log.op_schedule(args.target_rate, args.batch_size, origin_s)
+def _dispatch(context: Dispatch, loader: EngineLoader,
+              source: Source) -> None:
+    schedule = latency_log.op_schedule(context.args.target_rate,
+                                       context.args.batch_size,
+                                       context.origin_s)
     reporter = ThroughputReporter(f"{loader.engine} load")
-    for batch in batched(read_corpus(args.corpus, args.max_docs), args.batch_size):
-        payload = loader.encode(batch)
+    for batch in source(context.args, context.origin_s):
+        payload = loader.encode(batch.items)
         op = next(schedule)
-        pool.submit(_operation(log, op, loader, payload, len(batch), tally))
-        reporter.add(len(batch))
-    pool.drain()
+        context.pool.submit(_operation(context.log, op, loader, payload, batch,
+                                       context.tally))
+        reporter.add(len(batch.items))
+    context.pool.drain()
     reporter.finish()
 
 
-def run(args: argparse.Namespace,
-        loader: EngineLoader) -> tuple[latency_log.LatencyLog,
-                                       load_retry.RetryTally]:
+def run_timed(args: argparse.Namespace, loader: EngineLoader,
+              source: Source = corpus_batches
+              ) -> tuple[latency_log.LatencyLog, load_retry.RetryTally, float]:
+    """`run`, plus the wall an achieved rate must be divided by.
+
+    The wall is stamped here, by the code that owns `origin_s`, and only after
+    the pool has drained and every worker has been joined. A producer that
+    measured its own wall could divide completions by a window the driver never
+    ran, which is how a rate becomes a submission rate without anyone deciding
+    that it should.
+    """
     origin_s = time.perf_counter()
     tally = load_retry.RetryTally()
     with latency_log.open_log(args.latency_log, _header(args, loader), origin_s) as log, \
             futures.ThreadPoolExecutor(max_workers=args.concurrency) as executor:
-        _dispatch(InFlightPool(executor, args.concurrency), log, args, loader,
-                  origin_s, tally)
+        _dispatch(Dispatch(InFlightPool(executor, args.concurrency), log, args,
+                           origin_s, tally), loader, source)
+    return log, tally, time.perf_counter() - origin_s
+
+
+def run(args: argparse.Namespace, loader: EngineLoader,
+        source: Source = corpus_batches) -> tuple[latency_log.LatencyLog,
+                                                  load_retry.RetryTally]:
+    log, tally, _ = run_timed(args, loader, source)
     return log, tally
+
+
+def append_record(path: str, record: dict[str, Any]) -> None:
+    """Add a producer's closing record to the artifact the driver has already
+    written the header of, so a producer that needs a summary appends to one
+    file rather than opening a second."""
+    with open(path, "a", encoding="utf-8") as stream:
+        runmeta.write_record(stream, record)

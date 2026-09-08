@@ -99,14 +99,50 @@ def concurrent_results(session: Session, statement, parameters: list[tuple],
     )
 
 
-def attempt_rows(session: Session, statement, rows_in_flight: int,
-                 parameters: list[tuple]) -> load_retry.Attempt:
-    """Driver results are (success, result-or-exception) in the order sent."""
-    results = concurrent_results(session, statement, parameters, rows_in_flight)
-    failed = [row for row, outcome in zip(parameters, results) if not outcome[0]]
+def outcome_of(sent: list, results: list) -> load_retry.Attempt:
+    """Driver results are (success, result-or-exception) in the order sent.
+
+    Shared by the single-statement and mixed-statement paths so the two cannot
+    disagree about what counts as a failed item.
+    """
+    failed = [item for item, outcome in zip(sent, results) if not outcome[0]]
     error = next((f"{type(outcome[1]).__name__}: {outcome[1]}"
                   for outcome in results if not outcome[0]), "")
     return load_retry.Attempt(failed, error)
+
+
+def attempt_rows(session: Session, statement, rows_in_flight: int,
+                 parameters: list[tuple]) -> load_retry.Attempt:
+    results = concurrent_results(session, statement, parameters, rows_in_flight)
+    return outcome_of(parameters, results)
+
+
+def concurrent_statement_results(session: Session, statements: list[tuple],
+                                 rows_in_flight: int) -> list:
+    """`execute_concurrent`, not `execute_concurrent_with_args`: churn mixes
+    INSERT and DELETE in one operation, so each entry carries its own
+    statement. The wrapper only cycles one statement over many parameter
+    sets."""
+    from cassandra.concurrent import execute_concurrent
+
+    return execute_concurrent(
+        session, statements,
+        concurrency=rows_in_flight or len(statements),
+        raise_on_first_error=False,
+    )
+
+
+def attempt_statements(session: Session, rows_in_flight: int,
+                       statements: list[tuple]) -> load_retry.Attempt:
+    """One operation carrying a mix of statements.
+
+    Issued together rather than statement-kind by statement-kind, because the
+    OpenSearch side puts adds and deletes in a single `_bulk`: doing it in two
+    passes here would make one engine pay two round trips for the operation the
+    other completes in one, and that gap would read as an engine difference.
+    """
+    results = concurrent_statement_results(session, statements, rows_in_flight)
+    return outcome_of(statements, results)
 
 
 def attempt_unlogged_batches(session: Session, statement, batch_rows: int,

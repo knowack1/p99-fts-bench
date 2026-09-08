@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from . import write_path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from functools import partial
@@ -169,12 +171,12 @@ def test_the_retry_budget_is_recorded_in_the_run_header():
     assert "retry_attempts=load_retry.DEFAULT_POLICY.attempts" in source
 
 
-@pytest.mark.parametrize("loader", [scylla_load, opensearch_load])
-def test_neither_loader_builds_its_own_header(loader):
-    """The header is the artifact's provenance. Two hand-built headers is how
+@pytest.mark.parametrize("producer", write_path.WRITE_PATH_PRODUCERS)
+def test_no_write_path_producer_builds_its_own_header(producer):
+    """The header is the artifact's provenance. A hand-built header is how
     `concurrency` came to mean different things per engine without either side
-    saying so."""
-    source = (Path(__file__).resolve().parent.parent / "ftsbench" /
-              f"{loader.__name__.rsplit('.', 1)[-1]}.py").read_text()
+    saying so — and how the churn artifacts on disk came to record no
+    concurrency at all, leaving that defect unauditable from the files."""
+    source = write_path.producer_source(producer)
     assert "runmeta.header(" not in source, \
-        f"{loader.__name__} builds its own header instead of using load_driver"
+        f"{producer} builds its own header instead of using load_driver"

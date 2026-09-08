@@ -28,6 +28,10 @@ WARMIN="${WARMIN:-10}"
 DURATION="${DURATION:-30}"
 WARMUP="${WARMUP:-5}"
 QUERIES="${QUERIES:-data/queries.json}"
+# One operation is CHURN_BATCH items; CHURN_CONCURRENCY of them ride in
+# flight. Both engines get the same two numbers — that is the point.
+CHURN_BATCH="${CHURN_BATCH:-200}"
+CHURN_CONCURRENCY="${CHURN_CONCURRENCY:-16}"
 CORPUS="${CORPUS:-data/corpus.jsonl}"
 PYTHON="${PYTHON:-.venv/bin/python3}"
 
@@ -47,6 +51,12 @@ case "$ENGINE" in
   *) echo "unknown engine: $ENGINE" >&2; exit 2 ;;
 esac
 CONFIG="${CHURN_CONFIG:-$CONFIG}"
+# The producers are told the label too, not just the engine. `--engine
+# opensearch` cannot say which of four OpenSearch deployments this is, so
+# without this the artifact FILENAME says opensearch-refresh3 while the header
+# inside it says opensearch — and the header is what survives a copy.
+CELL_CONN+=(--config "$CONFIG")
+CHURN_CONN+=(--config "$CONFIG")
 
 mkdir -p "$OUT_DIR"
 FAILURES="$OUT_DIR/failed-cells.log"
@@ -67,8 +77,14 @@ CHURN_OUT=""
 churn_start() {
   local rate="$1" rep="$2"
   CHURN_OUT="$OUT_DIR/churn-$CONFIG-$rate-r$rep.jsonl"
+  # --batch-size and --concurrency are stated here rather than defaulted,
+  # because they ARE the in-flight bound: the row's label is only honest if the
+  # artifact records the depth at which the rate was offered. The churn client
+  # used to hold a hardcoded four bulks in flight and record nothing.
   $PYTHON -m ftsbench.churn_load "${CHURN_CONN[@]}" \
     --corpus "$CORPUS" --rate "$rate" --duration "$(row_duration)" \
+    --batch-size "$CHURN_BATCH" --concurrency "$CHURN_CONCURRENCY" \
+    --cache-state warm \
     --output "$CHURN_OUT" --label "S28 churn, $CONFIG, rate=$rate" \
     >/dev/null 2>&1 &
   CHURN_PID=$!
@@ -85,7 +101,13 @@ import json, sys
 summary = {}
 with open(sys.argv[1], encoding="utf-8") as fh:
     for line in fh:
-        r = json.loads(line)
+        # Guarded like runmeta.read_jsonl: the artifact now carries a latency_op
+        # per operation, so a run killed mid-flush can leave a truncated final
+        # line — and an unguarded loads() would fail an otherwise healthy row.
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         if r.get("record") == "churn_summary":
             summary = r
 offered = summary.get("offered_ops_per_s", 0)

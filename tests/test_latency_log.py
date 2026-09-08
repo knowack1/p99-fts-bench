@@ -8,6 +8,8 @@ from concurrent import futures
 
 import pytest
 
+from . import write_path
+
 from ftsbench import (latency_log, load_driver, load_retry, opensearch_load,
                       runmeta, scylla_load)
 
@@ -265,15 +267,24 @@ def test_scylla_also_sends_every_document_exactly_once_under_concurrency(
     assert sorted(page_ids) == list(range(250))
 
 
-@pytest.mark.parametrize("loader", [scylla_load, opensearch_load])
-def test_both_loaders_dispatch_through_the_shared_driver(loader):
-    """The property the unification exists to guarantee: neither side may own
+@pytest.mark.parametrize("producer", write_path.WRITE_PATH_PRODUCERS)
+def test_no_write_path_producer_owns_its_own_dispatch(producer):
+    """The property the unification exists to guarantee: no producer may own
     its own dispatch loop, because that is how the two --concurrency flags came
-    to mean different quantities."""
-    source = (Path(__file__).resolve().parent.parent / "ftsbench" /
-              f"{loader.__name__.rsplit('.', 1)[-1]}.py").read_text()
-    assert "ThreadPoolExecutor" not in source
-    assert "load_driver.run(" in source
+    to mean different quantities — twice. churn_load was outside this list
+    while holding a ThreadPoolExecutor with a hardcoded four bulks in flight,
+    which is what put two client constants on the S28 chart."""
+    assert "ThreadPoolExecutor" not in write_path.referenced_names(producer)
+    assert (write_path.calls_qualified(producer, "load_driver.run")
+            or write_path.calls_qualified(producer, "load_driver.run_timed"))
+
+
+def test_the_registry_covers_every_write_path_module():
+    """A producer that sends write traffic and is absent from the registry is
+    exempt from every comparability test here, which is exactly how churn_load
+    kept its own executor."""
+    missing = write_path.modules_on_disk() - set(write_path.WRITE_PATH_PRODUCERS)
+    assert not missing, f"write-path modules not covered: {sorted(missing)}"
 
 
 def test_bulk_pool_surfaces_a_worker_exception_rather_than_dropping_it():

@@ -52,12 +52,33 @@ def bulk_payload(batch: list[dict], index: str) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+# 404 is not a failure: churn deletes ids the engine may already have dropped.
+# This cannot loosen the build loader — OpenSearch sets `errors` only when some
+# item failed, and the build loader sends no deletes, so a build bulk can never
+# arrive here with every failure being a 404.
+IGNORED_ITEM_STATUSES = (404,)
+
+
+def failed_items(body: dict) -> list[dict]:
+    """Item outcomes that are real failures, for BOTH bulk paths.
+
+    One implementation because there were two: this one, and a near-copy in
+    churn_load with a different 404 rule. Which statuses count as a failure
+    decides whether a churn row passes its gate, and it must not depend on
+    which module happened to send the bulk.
+    """
+    return [outcome
+            for item in body.get("items", [])
+            for outcome in item.values()
+            if outcome.get("status", 200) >= 300
+            and outcome.get("status") not in IGNORED_ITEM_STATUSES]
+
+
 def first_bulk_error(body: dict) -> object:
-    for item in body.get("items", []):
-        error = item.get("index", {}).get("error")
-        if error:
-            return error
-    return "unknown"
+    failures = failed_items(body)
+    if not failures:
+        return "unknown"
+    return failures[0].get("error", failures[0])
 
 
 def thread_session() -> requests.Session:
@@ -80,7 +101,7 @@ def send_bulk(session: requests.Session, url: str, payload: bytes) -> None:
     )
     response.raise_for_status()
     body = response.json()
-    if body.get("errors"):
+    if body.get("errors") and failed_items(body):
         raise RuntimeError(f"bulk request had item failures, first: {first_bulk_error(body)}")
 
 

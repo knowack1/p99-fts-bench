@@ -130,7 +130,9 @@ class LatencyLog:
         self._lock = threading.Lock()
         self._ops = 0
         self._docs = 0
+        self._ok_docs = 0
         self._errors = 0
+        self._first_error: str | None = None
         self._latencies_ms: list[float] = []
         self._queue_ms: list[float] = []
 
@@ -145,19 +147,27 @@ class LatencyLog:
                                   query_class=query_class, query_i=query_i,
                                   hits=hits, ok=ok, error=error)
         with self._lock:
-            self._accumulate(latencies, n_docs or 0, ok)
+            self._accumulate(latencies, n_docs or 0, ok, error)
             self._emit(fields)
         if not ok:
             _report_failure(fields)
 
     def summary(self) -> dict[str, Any]:
         """`ops` counts every operation; the percentiles cover only the ones
-        that succeeded, per SCHEMAS.md."""
+        that succeeded, per SCHEMAS.md.
+
+        `ok_docs` is the count that landed, and it is what an achieved rate
+        must be derived from. `docs` includes the documents of operations the
+        engine rejected — dividing that by the wall reports work the engine
+        refused as throughput it delivered.
+        """
         with self._lock:
             return {
                 "ops": self._ops,
                 "docs": self._docs,
+                "ok_docs": self._ok_docs,
                 "errors": self._errors,
+                "first_error": self._first_error,
                 **self._latency_summary(),
             }
 
@@ -173,13 +183,16 @@ class LatencyLog:
                 f"{_undefined_p99_note(summary)}")
 
     def _accumulate(self, latencies: tuple[float, float, float], n_docs: int,
-                    ok: bool) -> None:
+                    ok: bool, error: str | None = None) -> None:
         latency_ms, _, queue_ms = latencies
         self._ops += 1
         self._docs += n_docs
         if not ok:
             self._errors += 1
+            if self._first_error is None:
+                self._first_error = error
             return
+        self._ok_docs += n_docs
         self._latencies_ms.append(latency_ms)
         self._queue_ms.append(queue_ms)
 
