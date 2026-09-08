@@ -76,6 +76,18 @@ VECTOR_STORE_FTS_COMMIT_THRESHOLD=0
 #   below ~3.3k docs/s. DEVIATION FROM RELEASE BEHAVIOUR: disclosed on every
 #   chart footer. Requires the tunables build below; the public 1.10.0
 #   silently ignores this variable.
+VECTOR_STORE_FTS_WRITER_MEMORY_MB=376
+# ^ tantivy IndexWriter memory_budget PER THREAD, in decimal MB (the knob does
+#   megabytes * 1_000_000; floor 15, process refuses to start below it).
+#   Unset, tantivy uses its 15 MB floor; OpenSearch's Lucene equivalent
+#   (indices.memory.index_buffer_size) defaults to 10% of the 14 GiB heap =
+#   1.4 GiB node-total. 1.4 GiB / 4 worker threads = 376 MB; 376 x 4 = 1,504 MB
+#   ≈ the OpenSearch node total — equal TOTAL writer budget (per-thread vs
+#   node-sum). The 15 MB floor cost ~9x more segment merges and ~24% build
+#   throughput on the laptop (results/fts-bottleneck-2026-08-27); the gain
+#   plateaus by 64 MB/thread, so this is the parity choice, not a tuning
+#   maximum. Needs the tunables build. num_worker_threads = perf::num_workers()
+#   = tokio workers = 4 here; the startup log line states it — verify there.
 # All other VS_FTS_* / VS_CDC_* tunables: UNSET — release defaults.
 ```
 
@@ -98,6 +110,11 @@ Index settings (`opensearch/index-config.json`):
 
 ```
 number_of_shards: 1, number_of_replicas: 0
+indices.memory.index_buffer_size: default   # 10% of the 14 GiB heap ≈ 1.43 GiB
+                            # node-total for the single shard. LEFT AT DEFAULT;
+                            # the vector-store side is raised to match this
+                            # total (VECTOR_STORE_FTS_WRITER_MEMORY_MB=376 × 4
+                            # threads) — see the vector-store block above.
 refresh_interval: 3s        # parity with vector-store's commit interval (3 s);
                             # clean at every load level because the 10k commit
                             # threshold is disabled on the vector-store side —
