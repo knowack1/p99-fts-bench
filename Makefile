@@ -115,10 +115,35 @@ OS_LOAD = $(TASKSET) $(PYTHON) -m ftsbench.opensearch_load --corpus $(CORPUS) \
 	--label "$(LABEL)" --cache-state $(CACHE_STATE)
 # Diagnostic only; 0 keeps the per-row prepared-statement path.
 SCYLLA_UNLOGGED_BATCH_ROWS ?= 0
+
+# How many of a batch's rows are outstanding at once. This is what makes
+# --concurrency mean the same thing on both engines.
+#
+# --batch-size is NOT symmetric. On OpenSearch it is a wire batch: 500 documents
+# in one _bulk, one request. On ScyllaDB there is no wire batch — the rows go as
+# individual prepared statements — so --batch-size is only a dispatch window,
+# and scylla_load's default of 0 ("the whole batch") makes ONE operation into
+# 500 concurrent CQL requests. At the ladder's c=64 that is 32,000 outstanding
+# requests from one Python process against 64 on the OpenSearch side.
+#
+# Measured on the SUT, 200k-doc points, buf376: 8,682 docs/s at c=1, 9,024 at
+# c=2, 3,386 at c=4, 488 at c=8 — the driver's queue collapses, and every rung
+# of the planned ladder sits past the cliff.
+#
+# 1 makes an operation dispatch its rows one at a time, so in-flight REQUESTS
+# are --concurrency on both engines. What a request carries still differs — 500
+# documents versus one row — and that is the real difference between a bulk API
+# and per-row CQL, so it belongs in the chart footer rather than in a knob.
+# Setting --batch-size 1 everywhere would equalise it instead by taking _bulk
+# away from OpenSearch, which costs 5.0x (9,035 -> 1,814 docs/s, measured) and
+# would compare against a deployment nobody runs.
+SCYLLA_ROWS_IN_FLIGHT ?= 1
+
 SCYLLA_LOAD = $(TASKSET) $(PYTHON) -m ftsbench.scylla_load --corpus $(CORPUS) \
 	--hosts $(SCYLLA_HOSTS) --port $(SCYLLA_PORT) --max-docs $(MAX_DOCS) \
 	--batch-size $(BATCH_SIZE) --concurrency $(SCYLLA_CONCURRENCY) \
 	--unlogged-batch-rows $(SCYLLA_UNLOGGED_BATCH_ROWS) \
+	--rows-in-flight $(SCYLLA_ROWS_IN_FLIGHT) \
 	--label "$(LABEL)" --cache-state $(CACHE_STATE)
 
 .PHONY: download corpus queries os-up os-wait os-down os-reset os-index os-reindex os-load \
