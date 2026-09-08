@@ -154,7 +154,14 @@ The alternative — making a ScyllaDB operation one row — would leave
 operation is on each engine.
 
 **G3 — the rungs are re-derived** against that client, with the generator probe
-in place to prove the top rung is engine-bound.
+in place to prove the top rung is engine-bound. Each rung is `N x M`:
+`N = min(c, N_max)` processes, `M = c / N` operations in flight each. N is
+pinned at its ceiling rather than varied with `c`, because a knee in a curve
+where BOTH moved could be a change in client architecture rather than an engine
+effect. The rungs below `N_max` necessarily run fewer processes — `c < N` cannot
+be expressed otherwise — and sit well below the knee; that belongs in the
+footer. `N_max` and the CPU threshold come from Phase 0, not from this
+document.
 
 **G4 — the fleet is restored.** Public IPs change on stop; `/mnt/nvme` is wiped
 on both boxes; the corpus needs ~3 h to re-stage (no S3 role yet); and
@@ -163,8 +170,67 @@ on both boxes; the corpus needs ~3 h to re-stage (no S3 role yet); and
 lost with the instance store twice. Push it to ECR or bake an AMI on the way
 back up.
 
+## Phase 0 — client calibration (short fleet session, no engines)
+
+**Why it exists.** Two constants the campaign depends on are currently
+estimates, and both are derived from evidence that predates the client rewrite:
+
+- **`N_max = 4`** (worker processes) — extrapolated from a per-process ceiling
+  of ~9.8k docs/s (ScyllaDB) / ~11.4k (OpenSearch) measured with the OLD
+  thread-per-operation client, against engine ceilings of ~11.7–12.2k docs/s.
+- **`LOADER_CORE_BOUND_AT = 0.70`** — anchored to `BUILD-RATE-LOOP.md`'s record
+  of a loader proven GIL-bound by A/B sitting at ~0.80 of one core. That
+  measurement is also pre-rewrite.
+
+Running the campaign on those two numbers would put a guess inside the gate
+that exists to stop guesses reaching the deck.
+
+**What it measures.** The client's own ceiling, which cannot be measured against
+a real engine: at ~11.7k docs/s the engine saturates first, so the number that
+comes back is the engine's. It needs a sink that never becomes the bottleneck.
+
+| Output | Sets |
+|---|---|
+| per-process docs/s ceiling, per engine client | `N_max` — enough processes for ~3x headroom over the engine ceiling |
+| loader `cpu_cores_used` at that ceiling | `LOADER_CORE_BOUND_AT`, from measurement rather than from a pre-rewrite anecdote |
+| does raising M raise per-process throughput? | whether the async layer earns its complexity, or `M=1` (VectorDBBench's own shape) would do |
+| does N scale linearly? | whether the box or the processes bind first |
+
+**What it needs — and does NOT need.** This is why it is a separate, cheap
+session rather than the first hour of the campaign:
+
+| Campaign | Calibration |
+|---|---|
+| enwiki corpus re-staged, ~3 h | synthetic documents at enwiki's ~3.95 KB average, generated on the box |
+| `vector-store:1.10.0-44-g282d9efc-arm64` rebuilt from the fork | no images at all |
+| Scylla + vector-store + OpenSearch stacks | a null sink — accept and discard |
+| ~5 h of ladder | minutes |
+
+Setup is: start both boxes, update the two `HostName` entries, `mkfs.xfs` and
+mount `/mnt/nvme` on each. Nothing else.
+
+**Where each half runs.** The sink runs on **`fts-sut`**, not on localhost: both
+boxes come up as a pair anyway, and a localhost sink has far lower RTT than the
+private network, which would understate how much in-flight M is needed to cover
+latency. The loaders run on **`fts-harness`**, which is the box whose ceiling the
+campaign actually depends on — Graviton4, 8 vCPU, arm64. A laptop figure gives
+the *shape* of the N/M scaling but not the value, because per-process throughput
+is a function of that box's per-core speed.
+
+**Built and validated locally first**, without the fleet: the sink, the
+calibration runner, and a deliberately client-bound case used to prove the
+generator probe and gate actually fire. The gate has never seen a positive
+example, and a constructed one has a known right answer — which is the only way
+to test a gate whose job is to catch a condition we hope not to encounter.
+
+**Exit condition.** `N_max` and `LOADER_CORE_BOUND_AT` are recorded here as
+measured values with the run that produced them, and G3 (rung derivation) uses
+them. Until then the campaign does not start.
+
 ## Execution order, once the gates clear
 
+0. **Phase 0 client calibration** (above) — a separate short session, no engines
+   and no corpus. Produces `N_max` and `LOADER_CORE_BOUND_AT` as measurements.
 1. Restore the fleet; verify the corpus against `FREEZE.md` (8,967,625 docs).
 2. Smoke: 2 rungs × all 5 arms at a 20k cap. Gates: 10/10 points complete,
    manifests carry the right `config` *and* tunables, the vector-store's
