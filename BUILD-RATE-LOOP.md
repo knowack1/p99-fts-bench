@@ -214,8 +214,15 @@ Throughput nearly doubles with a second process, and each loader process sits at
 ~80% of one core — `scylla_load` is **GIL-bound at ~9.5–9.8k docs/s per
 process**. ScyllaDB's base-table write path absorbs at least 19k docs/s.
 
-**This means the published `scylla-cdc` ceiling of 8,992 docs/s is a
-client-side artifact, not an engine ceiling.** `TUNING.md` §6–7 documents
+**[OVERSTATED — corrected in iteration 4.]** This was read at the time as
+"the published 8,992 is a client-side artifact, not an engine ceiling". That
+goes too far. At the **stock 15 MB writer buffer** the vector-store is
+CPU-pinned at 3.98/4 and a second loader process buys *nothing* (8,608 vs
+~8,992) — so at the configuration that produced 8,992 the **engine** was the
+binding constraint, not the client. The generator ceiling is real, but it only
+becomes the constraint *after* the buffer fix raises the engine above it. The
+correct statement is the one in iteration 4: two constraints, in series,
+neither sufficient alone. `TUNING.md` §6–7 documents
 exactly this failure on the read side — where it was fixed with a sharded
 multi-process runner (`cell_bench_mp`) — and the write path never got the same
 treatment. `verify_cpu_usage` did not catch it because it checks *engine* CPU
