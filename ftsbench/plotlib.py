@@ -414,6 +414,13 @@ def _add_disclosure_args(parser: argparse.ArgumentParser,
     parser.add_argument("--no-preliminary-stamp", dest="stamp", action="store_false",
                         help="drop the PRELIMINARY stamp; only legitimate for a run "
                              "on benchmark hardware with published tuning")
+    # A stamp that names the wrong host and corpus is worse than none: it is
+    # read as fact rather than as the guard it is. A run that is preliminary
+    # for some *other* reason needs to say which.
+    parser.add_argument("--stamp-text", default=PRELIMINARY_STAMP,
+                        help="override the PRELIMINARY stamp wording for a run "
+                             "that is preliminary for a different reason than "
+                             "the default laptop/simplewiki one")
     parser.add_argument("--write-path-disclosure", action=argparse.BooleanOptionalAction,
                         default=disclose_write_path,
                         help="state the ScyllaDB base-table + CDC write asymmetry in "
@@ -465,8 +472,8 @@ def footer_text(configs: Sequence[ConfigSeries], args: argparse.Namespace,
     return "\n".join(line for line in lines if line)
 
 
-def stamp(figure: Figure) -> None:
-    figure.text(0.99, 0.985, PRELIMINARY_STAMP, fontsize=9.5, weight="bold",
+def stamp(figure: Figure, text: str = PRELIMINARY_STAMP) -> None:
+    figure.text(0.99, 0.985, text, fontsize=9.5, weight="bold",
                 color="#8c1d13", ha="right", va="top",
                 bbox={"boxstyle": "round,pad=0.35", "facecolor": "#fdecea",
                       "edgecolor": "#8c1d13", "linewidth": 0.8})
@@ -535,7 +542,8 @@ def _document_head(args: argparse.Namespace) -> dict[str, Any]:
         "confidence_tier": CONFIDENCE_TIERS[args.chart],
         "aws_delta": AWS_DELTAS[args.chart],
         "preliminary": bool(args.stamp),
-        "preliminary_stamp": PRELIMINARY_STAMP if args.stamp else "",
+        "preliminary_stamp": (getattr(args, "stamp_text", PRELIMINARY_STAMP)
+                              if args.stamp else ""),
         "write_path_disclosure": (WRITE_PATH_DISCLOSURE
                                   if args.write_path_disclosure else ""),
     }
@@ -617,7 +625,7 @@ def finish_figure(figure: Figure, args: argparse.Namespace,
     figure.text(0.01, 0.008, footer, fontsize=FOOTER_FONT_SIZE, color="#555555",
                 va="bottom", ha="left")
     if args.stamp:
-        stamp(figure)
+        stamp(figure, getattr(args, "stamp_text", PRELIMINARY_STAMP))
     assert_something_was_drawn(figure, args.output)
     figure.savefig(args.output, dpi=args.dpi)
     plt.close(figure)
