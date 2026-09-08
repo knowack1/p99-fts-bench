@@ -572,6 +572,42 @@ buffer fix" **cannot be supported** — that comparison changed the buffer *and*
 the generator, and the generator alone reshapes the curve. Settling it needs a
 15 MB full-corpus run through the same sharded generator, which was never taken.
 
+### Iteration 12 — why the vector-store never pins, and OpenSearch does
+
+The 376 MB full-corpus chart shows OpenSearch flat at 3.97/4 while the
+vector-store oscillates and never saturates. Split b4 rep 1 by phase:
+
+| phase | scylladb | vector-store |
+|---|---|---|
+| writes (t < 474 s) | median **3.56** / 4 | median **1.91** / 4 |
+| drain (t > 474 s) | median 2.51 / 4 | median **3.11** / 4 (p95 3.70) |
+
+**The vector-store is not CPU-bound — it is CDC-starved.** During the write
+phase Scylla is nearly pinned at 3.56/4 serving base-table writes *and* the CDC
+stream from the same 4-core cpuset, and the index gets fed at less than half its
+capacity (1.91/4). Only once the writes stop does it climb to 3.11 — and even
+then Scylla still burns **2.51 cores with nothing to write**, which is the
+standing cost of serving CDC plus compaction.
+
+**That is the structural reason OpenSearch's line is flat and ScyllaDB's is
+not.** OpenSearch is one process in one cgroup doing everything — bulk intake,
+segment build, merges — so it saturates its 4 cores and holds 3.97. The
+ScyllaDB side has a hand-off between two services that share the box, and the
+*feeding* side saturates first. The index can never be flat-out while its
+supply line is contending with the writes.
+
+**Consequence — the 50/50 cpuset split is wrong for the CDC path.** Scylla sits
+at 3.56/4 while the vector-store leaves ~2 cores unused. At the same 8-core
+total, **5/3 or 6/2 in Scylla's favour should raise throughput**, and it costs
+nothing in fairness because the side total is unchanged. Untested; this is the
+next experiment, and it is a configuration change, not a code change.
+
+**This also closes H2/H3/H5 for good.** Batching the actor drain, adding tantivy
+threads or widening channels all make the *consumer* faster. The consumer is
+idle half the time waiting for its supply. Iteration 7 reopened them on the
+grounds that the vector-store had ~0.8 cores of headroom at full scale — that
+headroom is real but it is starvation, not a parallelism ceiling.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
