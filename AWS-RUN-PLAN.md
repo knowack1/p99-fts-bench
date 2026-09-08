@@ -115,7 +115,7 @@ latency log (C3) and `resource_probe` (C4) all capture the same run.
 
 ```
 tools/campaign_laptop.sh --configs opensearch opensearch-refresh30 \
-                                   scylla-bootstrap scylla-cdc --reps 5
+                                   scylla-cdc --reps 5
 ```
 
 Repetition-major ordering, one engine stack at a time. Every repetition is

@@ -26,14 +26,13 @@ from dataclasses import dataclass, field
 
 OPENSEARCH = "opensearch"
 OPENSEARCH_REFRESH30 = "opensearch-refresh30"
-SCYLLA_BOOTSTRAP = "scylla-bootstrap"
 SCYLLA_CDC = "scylla-cdc"
 
-EVERY_CONFIG = (OPENSEARCH, OPENSEARCH_REFRESH30, SCYLLA_BOOTSTRAP, SCYLLA_CDC)
-# C3 measures the write tail during ingest, which on the ScyllaDB side is the
-# base-table write plus the CDC hop. The bootstrap path indexes an already-loaded
-# table, so it has no ingest window to measure and no c3 artifact.
-INGEST_CONFIGS = (OPENSEARCH, OPENSEARCH_REFRESH30, SCYLLA_CDC)
+# The C1-C8 laptop set. Not `target.CAMPAIGN_CONFIGS`, which names the arms the
+# NEXT campaign sweeps: these globs have to keep matching the artifacts already
+# on disk, and re-rendering a finished campaign against a different arm list
+# would draw absences as findings.
+EVERY_CONFIG = (OPENSEARCH, OPENSEARCH_REFRESH30, SCYLLA_CDC)
 
 HEADLINE_CLASS = "rare_term"
 DEFAULT_RESULTS_ROOT = "results"
@@ -59,7 +58,7 @@ CHARTS = (
     Chart("C1", "ftsbench.plot_c1", EVERY_CONFIG, "c1"),
     # C2 is the C1 series read for time-to-searchable, not a measurement of its own.
     Chart("C2", "ftsbench.plot_c2", EVERY_CONFIG, "c1"),
-    Chart("C3", "ftsbench.plot_c3", INGEST_CONFIGS, "c3",
+    Chart("C3", "ftsbench.plot_c3", EVERY_CONFIG, "c3",
           manifest_prefix="manifest-c3", extra=("--bucket-s", "5")),
     Chart("C4", "ftsbench.plot_c4", EVERY_CONFIG, "c4"),
     Chart("C5", "ftsbench.plot_c5", EVERY_CONFIG, "c5",
@@ -74,9 +73,16 @@ CHARTS = (
 
 
 def rep_glob(config: str) -> str:
-    """`opensearch-*` also matches `opensearch-refresh30-*`; the repetition
-    number does not, so the plain configuration globs on digits."""
-    return "[0-9]*" if config == OPENSEARCH else "*"
+    """A repetition is always a number, so every configuration globs on digits.
+
+    This used to be `[0-9]*` for the plain `opensearch` alone and `*` for the
+    rest, which held only while no other config name was a prefix of another.
+    `opensearch-refresh3` is a prefix of `opensearch-refresh30`, so the special
+    case had to become the rule — the alternative is the collision that once
+    folded the refresh=30s repetitions into plain OpenSearch and compared a
+    mixture against itself.
+    """
+    return "[0-9]*"
 
 
 def artifact_glob(chart: Chart, config: str, data_dir: str) -> str:

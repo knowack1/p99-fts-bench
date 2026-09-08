@@ -91,7 +91,7 @@ def test_a_clean_campaign_reports_complete_and_exits_zero():
 
 
 @pytest.mark.parametrize("config", ["opensearch", "opensearch-refresh30",
-                                    "scylla-bootstrap", "scylla-cdc"])
+                                    "scylla-cdc"])
 def test_every_repetition_leaves_no_engine_running(config):
     """A gate aborts by exiting, which skips the config's closing down target.
     Without the teardown two engines are up at once, and one engine at a time is
@@ -125,21 +125,23 @@ def test_preflight_archives_a_previous_campaigns_artifacts(tmp_path):
     assert archived == ["c1-opensearch-1.jsonl", "manifest-opensearch-1.json"]
 
 
-@pytest.mark.parametrize("config", ["scylla-bootstrap", "scylla-cdc"])
-def test_each_scylla_path_names_its_own_artifacts(config):
-    """C4, C5 and C7 are the same targets on both paths, so the CDC repetitions
-    ran after the bootstrap ones and overwrote them silently."""
-    assert f"SCYLLA_CONFIG={config}" in dry_run("--configs", config, "--reps", "1")
+def test_the_scylla_configuration_names_its_own_artifacts():
+    """C4, C5 and C7 do not name the configuration in the target, so a second
+    ScyllaDB configuration would overwrite the first's data silently. Only one
+    is in the campaign now, but the variable must still reach the filename or
+    adding a second would break exactly the way the bootstrap path once did."""
+    assert "SCYLLA_CONFIG=scylla-cdc" in dry_run("--configs", "scylla-cdc",
+                                                 "--reps", "1")
 
 
 def test_dry_run_can_be_asked_for_through_the_environment():
     """DRY_RUN=1 in front of the command reads as a dry run to anyone. Ignoring
     it started a real full-corpus campaign that had to be killed by hand."""
-    result = subprocess.run([str(SCRIPT), "--configs", "scylla-bootstrap",
+    result = subprocess.run([str(SCRIPT), "--configs", "scylla-cdc",
                              "--reps", "1"],
                             cwd=BENCH_DIR, capture_output=True, text=True,
                             env={**os.environ, "DRY_RUN": "1"}, timeout=60)
-    assert "SCYLLA_CONFIG=scylla-bootstrap" in result.stdout + result.stderr
+    assert "SCYLLA_CONFIG=scylla-cdc" in result.stdout + result.stderr
     assert "docker" not in result.stdout.lower(), "a dry run must not touch docker"
 
 
@@ -150,8 +152,8 @@ def test_every_configuration_is_measured_once_before_any_is_measured_twice():
     output = dry_run("--reps", "2")
     order = [line for line in output.splitlines() if ", repetition " in line]
     first_pass = [line for line in order if "repetition 1 —" in line]
-    assert len(first_pass) == 4, "the first pass must cover all four configs"
-    assert order[:4] == first_pass, "a config repeats before another has run once"
+    assert len(first_pass) == 3, "the first pass must cover every config"
+    assert order[:3] == first_pass, "a config repeats before another has run once"
 
 
 def series_file(path: Path, samples: int, final_docs: int) -> Path:

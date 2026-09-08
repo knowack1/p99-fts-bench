@@ -91,20 +91,16 @@ run_variant() {
     export VS_CDC_SAFETY=""
   fi
 
-  if [ "$path" = "bootstrap" ]; then
-    step "$name" "schema" make scylla-schema || status=1
-    [ $status -eq 0 ] && { make scylla-load "${common[@]}" >"$loadlog" 2>&1 || status=1; }
-    [ $status -eq 0 ] && { make c1-scylla-bootstrap "${common[@]}" \
-      "C1_SCYLLA_BOOTSTRAP_SERIES=$series" \
-      "C1_SCYLLA_BOOTSTRAP_MANIFEST=$OUT_DIR/manifest-$name-$rep.json" >>"$loadlog" 2>&1 || status=1; }
-  else
-    step "$name" "schema" make scylla-schema || status=1
-    [ $status -eq 0 ] && { step "$name" "index" make scylla-index || status=1; }
-    [ $status -eq 0 ] && { step "$name" "serving" make scylla-serving || status=1; }
-    [ $status -eq 0 ] && { make c1-scylla-cdc "${common[@]}" \
-      "C1_SCYLLA_CDC_SERIES=$series" \
-      "C1_SCYLLA_CDC_MANIFEST=$OUT_DIR/manifest-$name-$rep.json" >"$loadlog" 2>&1 || status=1; }
-  fi
+  # Every variant is the CDC path now. The load-then-index (bootstrap) branch
+  # went with its Makefile target: that path is out of the campaign, and a
+  # variant shelling to a target that no longer exists would fail the whole
+  # matrix row rather than skip itself.
+  step "$name" "schema" make scylla-schema || status=1
+  [ $status -eq 0 ] && { step "$name" "index" make scylla-index || status=1; }
+  [ $status -eq 0 ] && { step "$name" "serving" make scylla-serving || status=1; }
+  [ $status -eq 0 ] && { make c1-scylla-cdc "${common[@]}" \
+    "C1_SCYLLA_CDC_SERIES=$series" \
+    "C1_SCYLLA_CDC_MANIFEST=$OUT_DIR/manifest-$name-$rep.json" >"$loadlog" 2>&1 || status=1; }
 
   kill -TERM "$probe_pid" 2>/dev/null || true
   wait "$probe_pid" 2>/dev/null || true

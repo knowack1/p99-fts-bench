@@ -171,7 +171,7 @@ configurations:
 | Config | What it is |
 |---|---|
 | A | OpenSearch, `refresh_interval=1s` (primary) |
-| B | ScyllaDB, bootstrap scan |
+| B | ScyllaDB, bootstrap scan (measured in the laptop pass; since retired from the campaign) |
 | C | ScyllaDB, CDC tail |
 | D | OpenSearch, `refresh_interval=30s` (ingest-tuned variant) |
 

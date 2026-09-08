@@ -34,7 +34,7 @@ MAX_DOCS=0
 # one-second samples, and failing that is failing an engine for being fast. See
 # assert_series_complete.
 MIN_BUILD_SAMPLES=20
-CONFIGS="opensearch opensearch-refresh30 scylla-bootstrap scylla-cdc"
+CONFIGS="opensearch opensearch-refresh30 scylla-cdc"
 REP_LIST=""
 # Honours the environment as well as --dry-run: DRY_RUN=1 in front of the
 # command reads as a dry run to anyone, and swallowing it once started a real
@@ -482,25 +482,20 @@ run_opensearch() {
 
 run_scylla() {
   trap leave_no_engine_running EXIT
-  local config="$1" path="$2"
+  local config="$1"
   CONFIG="$config"
   set_make_args "${CAMPAIGN_LABEL:-C1-C8 laptop simplewiki}, $config"
-  # C1, C3 and C8 name the path in the target; C4, C5 and C7 are shared by both
-  # paths, so without this the CDC repetitions overwrite the bootstrap ones and
-  # the bootstrap path's resource and query data is gone with no error.
+  # C4, C5 and C7 do not name the configuration in the target, so without this
+  # a second ScyllaDB configuration would overwrite the first's resource and
+  # query data with no error.
   MAKE_ARGS+=("SCYLLA_CONFIG=$config")
 
   say "$config rep $REP: ingest ceiling (C1, C2, C4)"
   scylla_cold_stack
   start_resource_probe c4-scylla
-  if [[ "$path" == bootstrap ]]; then
-    mk scylla-load
-    mk c1-scylla-bootstrap C1_UNTIL_DOCS="$(expected_docs)"
-  else
-    mk scylla-index
-    mk scylla-serving
-    mk c1-scylla-cdc C1_UNTIL_DOCS="$(expected_docs)"
-  fi
+  mk scylla-index
+  mk scylla-serving
+  mk c1-scylla-cdc C1_UNTIL_DOCS="$(expected_docs)"
   stop_resource_probe
   gate scylla_index_complete assert_scylla_index_complete
   gate scylla_not_oom_killed assert_not_oom_killed fts-bench-scylla
@@ -509,19 +504,15 @@ run_scylla() {
 
   if [[ "$INGEST_ONLY" == 0 ]]; then
     say "$config rep $REP: freshness (C8) and queries (C5, C6, C7)"
-    mk_warm "c8-scylla-$path"
+    mk_warm c8-scylla-cdc
     query_phase scylla
 
-    # C3 is the CDC path only: on the bootstrap path the write being timed is a
-    # plain base-table insert with no index attached, which is not what C3 claims.
-    if [[ "$path" == cdc ]]; then
-      say "$config rep $REP: paced ingest (C3)"
-      scylla_cold_stack
-      mk scylla-index
-      mk scylla-serving
-      mk c3-scylla-cdc
-      gate c3_vector_store_not_oom_killed assert_not_oom_killed fts-bench-vector-store
-    fi
+    say "$config rep $REP: paced ingest (C3)"
+    scylla_cold_stack
+    mk scylla-index
+    mk scylla-serving
+    mk c3-scylla-cdc
+    gate c3_vector_store_not_oom_killed assert_not_oom_killed fts-bench-vector-store
   fi
 
   mk scylla-down
@@ -541,8 +532,10 @@ run_config() {
     # only names the artifacts so they can never mix with the primary config.
     opensearch-ramindex)  run_opensearch opensearch-ramindex 3s ;;
     opensearch-refresh30) run_opensearch opensearch-refresh30 30s ;;
-    scylla-bootstrap)     run_scylla scylla-bootstrap bootstrap ;;
-    scylla-cdc)           run_scylla scylla-cdc cdc ;;
+    # The load-then-index (bootstrap) path is out of the campaign. It stays
+    # reachable through the producers' --scylladb-bootstrap knob, which is what
+    # keeps its existing artifacts reproducible.
+    scylla-cdc)           run_scylla scylla-cdc ;;
     *) echo "unknown config: $1" >&2; return 2 ;;
   esac
 }

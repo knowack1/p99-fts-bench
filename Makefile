@@ -49,18 +49,17 @@ C1_UNTIL_DOCS ?= 270269
 # shared name the second configuration silently overwrites the first, and the
 # chart then draws one configuration twice under two different labels.
 OS_CONFIG ?= opensearch
-# The ScyllaDB counterpart. The two paths — bootstrap and CDC — are separate
-# configurations measured back to back, so anything not named after the path is
-# written twice and only the second survives.
+# The ScyllaDB counterpart. The load-then-index (bootstrap) path is out of the
+# campaign and has no target here any more; it stays reachable as
+# `--scylladb-bootstrap` on the producers, which is what keeps its existing
+# artifacts reproducible.
 SCYLLA_CONFIG ?= scylla-cdc
 
 # One series and one manifest per (config, repetition): repetitions must not
 # clobber each other, and ftsbench.plot_c1 globs c1-<config>-*.jsonl.
 C1_OS_SERIES ?= $(DATA_DIR)/c1-$(OS_CONFIG)-$(REP).jsonl
-C1_SCYLLA_BOOTSTRAP_SERIES ?= $(DATA_DIR)/c1-scylla-bootstrap-$(REP).jsonl
 C1_SCYLLA_CDC_SERIES ?= $(DATA_DIR)/c1-scylla-cdc-$(REP).jsonl
 C1_OS_MANIFEST ?= $(DATA_DIR)/manifest-$(OS_CONFIG)-$(REP).json
-C1_SCYLLA_BOOTSTRAP_MANIFEST ?= $(DATA_DIR)/manifest-scylla-bootstrap-$(REP).json
 C1_SCYLLA_CDC_MANIFEST ?= $(DATA_DIR)/manifest-scylla-cdc-$(REP).json
 
 # --- Ingest knobs: equal on both sides by default --------------------------
@@ -125,10 +124,10 @@ SCYLLA_LOAD = $(TASKSET) $(PYTHON) -m ftsbench.scylla_load --corpus $(CORPUS) \
 .PHONY: download corpus queries os-up os-wait os-down os-reset os-index os-reindex os-load \
         os-verify-analyzer os-relax-watermarks scylla-up scylla-wait scylla-down scylla-reset \
         scylla-schema scylla-index scylla-serving scylla-load \
-        bench-os bench-scylla c1-os c1-scylla-bootstrap c1-scylla-cdc \
+        bench-os bench-scylla c1-os c1-scylla-cdc \
         c1-report c1-plot \
         c3-os c3-scylla-cdc c4-os c4-scylla c5-os c5-scylla c6-os c6-scylla \
-        c7-os c7-scylla c8-os c8-scylla-bootstrap c8-scylla-cdc \
+        c7-os c7-scylla c8-os c8-scylla-cdc \
         calibrate-os calibrate-scylla campaign-laptop campaign-smoke \
         co-check-os co-check-scylla results
 
@@ -296,13 +295,6 @@ c1-os:
 	$(call manifest,$(C1_OS_MANIFEST),$(OS_CONFIG),$(C1_OS_SERIES),--command "make os-index" --command "make c1-os")
 	$(call c1_run,$(C1_MONITOR_OS),$(C1_OS_SERIES),$(C1_LOAD_OS))
 
-# Bootstrap path: the base table is already loaded, so the measured work is the
-# base-table scan that CREATE CUSTOM INDEX kicks off. Run `make scylla-schema
-# scylla-load` first — that write is setup, not the measurement.
-c1-scylla-bootstrap:
-	$(call manifest,$(C1_SCYLLA_BOOTSTRAP_MANIFEST),scylla-bootstrap,$(C1_SCYLLA_BOOTSTRAP_SERIES),--command "make scylla-schema" --command "make scylla-load" --command "make c1-scylla-bootstrap")
-	$(call c1_run,$(C1_MONITOR_SCYLLA),$(C1_SCYLLA_BOOTSTRAP_SERIES),$(C1_CREATE_INDEX))
-
 # CDC path: the index already exists and is SERVING, so the measured work is the
 # base-table write plus the CDC hop. Run `make scylla-schema scylla-index
 # scylla-serving` first.
@@ -315,7 +307,6 @@ c1-scylla-cdc:
 # repetition twice.
 C1_SERIES_GLOB = $(DATA_DIR)/c1-opensearch-[0-9]*.jsonl \
 	$(DATA_DIR)/c1-opensearch-refresh30-*.jsonl \
-	$(DATA_DIR)/c1-scylla-bootstrap-*.jsonl \
 	$(DATA_DIR)/c1-scylla-cdc-*.jsonl
 
 c1-report:
@@ -333,7 +324,6 @@ c1-plot:
 	$(PYTHON) -m ftsbench.plot_c1 \
 		--config 'opensearch:$(DATA_DIR)/c1-opensearch-[0-9]*.jsonl' \
 		--config 'opensearch-refresh30:$(DATA_DIR)/c1-opensearch-refresh30-*.jsonl' \
-		--config 'scylla-bootstrap:$(DATA_DIR)/c1-scylla-bootstrap-*.jsonl' \
 		--config 'scylla-cdc:$(DATA_DIR)/c1-scylla-cdc-*.jsonl' \
 		--output $(C1_PLOT_OUTPUT) --title "$(C1_PLOT_TITLE)" \
 		--footer-extra "$(C1_PLOT_FOOTER)"
@@ -528,7 +518,6 @@ calibrate-scylla:
 # reads back from _settings and warns about on a mismatch.
 C8_REPS ?= $(FRESHNESS_REPS)
 C8_OS_OUT ?= $(DATA_DIR)/c8-$(OS_CONFIG)-$(REP).jsonl
-C8_SCYLLA_BOOTSTRAP_OUT ?= $(DATA_DIR)/c8-scylla-bootstrap-$(REP).jsonl
 C8_SCYLLA_CDC_OUT ?= $(DATA_DIR)/c8-scylla-cdc-$(REP).jsonl
 C8_COMMON = --reps $(C8_REPS) --seed $(QUERY_SEED) --limit $(QUERY_LIMIT) \
 	--label "$(LABEL)" --cache-state $(CACHE_STATE) --corpus $(CORPUS)
@@ -537,12 +526,6 @@ c8-os:
 	$(TASKSET) $(PYTHON) -m ftsbench.freshness_probe --engine opensearch \
 		$(C8_COMMON) $(QUERY_CONN_OS) --refresh-interval $(OS_REFRESH) \
 		--output $(C8_OS_OUT)
-
-c8-scylla-bootstrap:
-	$(TASKSET) $(PYTHON) -m ftsbench.freshness_probe --engine scylladb \
-		$(C8_COMMON) $(QUERY_CONN_SCYLLA) --vs-url $(VS_URL) \
-		--vs-index $(VS_INDEX) --path bootstrap \
-		--output $(C8_SCYLLA_BOOTSTRAP_OUT)
 
 c8-scylla-cdc:
 	$(TASKSET) $(PYTHON) -m ftsbench.freshness_probe --engine scylladb \

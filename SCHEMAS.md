@@ -196,6 +196,7 @@ for `index_status == "SERVING"`.
 ## Naming
 
 `data/<chart>-<config>-<rep>.jsonl`, e.g. `c3-opensearch-2.jsonl`,
-`c5-scylla-1.jsonl`. Configs: `opensearch`, `opensearch-refresh30`,
-`scylla-bootstrap`, `scylla-cdc`. Plot modules glob `<chart>-<config>-*.jsonl`,
+`c5-scylla-1.jsonl`. The config names live in `ftsbench/target.py`, which
+is the only place they are enumerated; `scylla-bootstrap` is among them but
+is out of the campaign. Plot modules glob `<chart>-<config>-*.jsonl`,
 matching the `plot_c1` convention already in use.

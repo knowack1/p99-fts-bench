@@ -29,15 +29,15 @@ from pathlib import Path
 
 import requests
 
+from . import target
+
 PROBE_TIMEOUT_S = 5
-# opensearch-refresh3 is the build-rate sweep's parity config: the vector-store
-# commits on a 3s interval (vector-store 1.10.0, tantivy.rs COMMIT_INTERVAL), so
-# the sweep runs OpenSearch at the same refresh_interval rather than at the 1s
-# and 30s the C1-C8 campaign uses.
-CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30",
-           "opensearch-ramindex", "scylla-bootstrap", "scylla-cdc")
-OPENSEARCH_CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30",
-                      "opensearch-ramindex")
+# Both lists come from ftsbench.target rather than being restated here. This
+# copy had drifted to five names while archive_artifacts held six and
+# render_results four, so which configurations existed depended on which module
+# you asked.
+CONFIGS = target.CONFIGS
+OPENSEARCH_CONFIGS = target.configs_for_engine(target.OPENSEARCH)
 UNKNOWN = "unknown"
 DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / "docker" / ".env"
 PINNED_IMAGE_KEYS = ("SCYLLA_IMAGE", "VECTOR_STORE_IMAGE", "OPENSEARCH_IMAGE")

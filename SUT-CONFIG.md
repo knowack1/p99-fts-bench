@@ -144,8 +144,8 @@ a run turns out to need gets recorded here first.)
 |---|---|
 | `opensearch` | refresh_interval 3s (vector-store parity), budgets above |
 | `opensearch-refresh30` | identical, refresh_interval 30s |
-| `scylla-bootstrap` | index created after the base table is loaded → bootstrap full scan |
 | `scylla-cdc` | index created first → CDC tail during load |
+| `scylla-bootstrap` | index after load → bootstrap full scan. **Out of the campaign**; still selectable as `--scylladb-bootstrap` so its existing artifacts stay reproducible |
 | `opensearch-uncapped` | sensitivity check: full box (cpuset 0-7, 56 GiB, heap 28 GiB), one rep — answers "what did the cap cost" |
 
 Switching between stacks: `tools/sut_engine.sh {opensearch|scylla|none|status}`

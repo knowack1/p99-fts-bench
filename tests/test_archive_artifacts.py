@@ -111,12 +111,22 @@ def test_the_longest_matching_configuration_wins(filename, expected):
     assert archive_artifacts.artifact_config(filename, CONFIGS) == expected
 
 
-def test_the_configuration_list_is_the_campaign_s():
-    """Parsing depends on knowing every configuration that exists, so a fifth one
-    added to the campaign and not here would be archived as one of the other
-    four."""
-    from ftsbench import run_manifest
-    assert set(archive_artifacts.KNOWN_CONFIGS) == set(run_manifest.CONFIGS)
+def test_the_configuration_list_is_the_registry_itself():
+    """Parsing depends on knowing every configuration that exists, so a new one
+    known only to the campaign would be archived as one of the others.
+
+    Asserting identity with the registry, not equality with another module's
+    copy: the old test compared two hand-maintained lists, which agreed on the
+    day it was written and drifted to five names against six afterwards.
+    """
+    from ftsbench import target
+    assert archive_artifacts.KNOWN_CONFIGS is target.CONFIGS
+
+
+def test_archiving_knows_the_arms_that_are_out_of_the_campaign():
+    """A retired path's artifacts still have to be archivable — otherwise the
+    only way to tidy a directory containing them is by hand."""
+    assert "scylla-bootstrap" in archive_artifacts.KNOWN_CONFIGS
 
 
 def test_a_misspelled_configuration_is_refused_not_ignored(tmp_path):

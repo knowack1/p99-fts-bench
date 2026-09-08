@@ -112,10 +112,14 @@ def test_c3_names_its_own_manifests():
     assert not matches(pattern, "manifest-scylla-cdc-1.json")
 
 
-def test_c3_skips_the_bootstrap_path():
-    """The bootstrap path indexes an already-loaded table, so it has no ingest
-    window to measure a write tail over, and writes no c3 artifact."""
-    assert render_results.SCYLLA_BOOTSTRAP not in chart_by_id("C3").configs
+@pytest.mark.parametrize("chart", render_results.CHARTS,
+                         ids=lambda chart: chart.chart_id)
+def test_no_chart_renders_the_retired_bootstrap_path(chart):
+    """The load-then-index path is out of the campaign. It stays selectable as
+    `--scylladb-bootstrap` so its existing artifacts remain reproducible, but
+    no chart draws it, and a chart that silently regained it would compare a
+    path the campaign no longer measures against ones it does."""
+    assert "scylla-bootstrap" not in chart.configs
 
 
 def test_all_eight_charts_are_rendered_once():

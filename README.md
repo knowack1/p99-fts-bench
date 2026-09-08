@@ -78,9 +78,9 @@ make bench-os                    # closed-loop latencies -> data/results-opensea
 
 # ScyllaDB side (against the FTS-enabled cluster):
 make scylla-schema
-make scylla-load MAX_DOCS=20000
-make scylla-index                # index AFTER load = bootstrap-scan path;
-                                 # swap the order to exercise the CDC tail path
+make scylla-index                # index BEFORE the load, so the vector-store
+make scylla-serving              # tails CDC as rows land — the path the
+make scylla-load MAX_DOCS=20000  # campaign measures
 make bench-scylla
 ```
 

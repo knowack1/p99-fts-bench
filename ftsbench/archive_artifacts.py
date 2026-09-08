@@ -27,6 +27,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from . import target
+
 # C3 writes a manifest of its own (Makefile C3_OS_MANIFEST), so `manifest` on
 # its own leaves `manifest-c3-<config>-<rep>.json` belonging to no
 # configuration: a re-run repetition left its C3 gate records behind, and
@@ -35,14 +37,15 @@ CHART_PREFIXES = (tuple(f"c{number}" for number in range(1, 9))
                   + ("manifest-c3", "manifest"))
 LOG_DIR = "campaign-logs"
 
-# Every configuration the campaign can produce, not just the ones being archived.
+# Every configuration the harness can produce, not just the ones being archived.
 # A filename is parsed against all of them and only then filtered, because
 # `c1-opensearch-refresh30-1.jsonl` begins with `c1-opensearch-` and asking only
-# about `opensearch` would otherwise claim it. Kept in step with
-# run_manifest.CONFIGS by test_archive_artifacts.
-KNOWN_CONFIGS = ("opensearch", "opensearch-refresh3", "opensearch-refresh30",
-                 "opensearch-ramindex",
-                 "scylla-bootstrap", "scylla-cdc")
+# about `opensearch` would otherwise claim it.
+#
+# Deliberately the full registry, including arms that are out of the campaign:
+# this module's job is to recognise files that already exist, and a retired
+# path's artifacts still have to be archivable.
+KNOWN_CONFIGS = target.CONFIGS
 
 
 def parse_args() -> argparse.Namespace:

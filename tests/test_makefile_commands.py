@@ -22,13 +22,13 @@ BENCH_DIR = Path(__file__).resolve().parent.parent
 
 TARGETS = (
     "os-load", "scylla-load",
-    "c1-os", "c1-scylla-bootstrap", "c1-scylla-cdc",
+    "c1-os", "c1-scylla-cdc",
     "c3-os", "c3-scylla-cdc",
     "c4-os", "c4-scylla",
     "c5-os", "c5-scylla", "c6-os", "c6-scylla",
     "c7-os", "c7-scylla",
     "calibrate-os", "calibrate-scylla",
-    "c8-os", "c8-scylla-bootstrap", "c8-scylla-cdc",
+    "c8-os", "c8-scylla-cdc",
 )
 
 
@@ -130,9 +130,9 @@ OPENSEARCH_ARTIFACT_TARGETS = (
     ("c5-os", "C5_OS_LOG"), ("c6-os", "C6_OS_LOG"), ("c7-os", "C7_OS_OUT"), ("c8-os", "C8_OS_OUT"),
 )
 
-# C1, C3 and C8 already name the path in the target itself
-# (c1-scylla-bootstrap / c1-scylla-cdc); these three targets are shared by both
-# paths and so must be told which one is running.
+# C1, C3 and C8 already name the configuration in the target itself
+# (c1-scylla-cdc); these targets do not, and so must be told which one is
+# running.
 SCYLLA_ARTIFACT_TARGETS = (
     ("c4-scylla", "C4_SCYLLA_OUT"), ("c5-scylla", "C5_SCYLLA_LOG"),
     ("c6-scylla", "C6_SCYLLA_LOG"),
