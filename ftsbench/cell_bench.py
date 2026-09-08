@@ -31,7 +31,7 @@ import json
 import sys
 import time
 
-from . import runmeta
+from . import runmeta, target
 from .engines import (add_connection_args, add_vector_store_args,
                       build_engine)
 from .load_gen import (GeneratorSettings, build_plan, drive_ops,
@@ -41,8 +41,7 @@ from .stats import summarize_or_empty
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", required=True,
-                        choices=["opensearch", "scylladb", "vector-store"])
+    target.add_target_args(parser)
     add_connection_args(parser)
     add_vector_store_args(parser)
     parser.add_argument("--queries", required=True)
@@ -82,7 +81,9 @@ def cell_header(args: argparse.Namespace, query_set: dict) -> dict:
         cache_state=args.cache_state, corpus=query_set.get("corpus", ""),
         queries=args.queries, query_class=args.query_class,
         duration_s=args.duration, warmup_s=args.warmup,
-        concurrency=args.concurrency, limit=args.limit, seed=args.seed)
+        concurrency=args.concurrency, limit=args.limit, seed=args.seed,
+        concurrency_unit="requests in flight",
+        **target.header_fields(target.resolve(args)))
 
 
 def run_cell(args: argparse.Namespace) -> dict:
@@ -121,6 +122,7 @@ def run_cell(args: argparse.Namespace) -> dict:
 
 def main() -> int:
     args = parse_args()
+    target.resolve_into(args)
     query_set = read_query_set(args.queries)
     summary = run_cell(args)
     with open(args.output, "w", encoding="utf-8") as out:

@@ -189,6 +189,18 @@ def resolve(args: argparse.Namespace) -> Target:
     raise SystemExit("no target selected; pass one of: " + ", ".join(FLAGS))
 
 
+def resolve_into(args: argparse.Namespace) -> Target:
+    """Resolve the arm and back-fill `args.engine`.
+
+    Back-filling rather than teaching `engines.build_engine` about targets: it
+    is the one place a client is chosen, and a second dispatch keyed on
+    something else is how the read path would drift apart again.
+    """
+    arm = resolve(args)
+    args.engine = arm.engine
+    return arm
+
+
 def header_fields(target: Target) -> dict[str, str]:
     """What the artifact must carry so the run is identifiable from the file.
 

@@ -22,7 +22,7 @@ import multiprocessing as mp
 import sys
 import time
 
-from . import runmeta
+from . import runmeta, target
 from .cell_bench import cell_header, extra_fields, parse_args as cell_parse_args
 from .engines import build_engine
 from .load_gen import (GeneratorSettings, build_plan, drive_ops,
@@ -91,6 +91,7 @@ def main() -> int:
     known, rest = parser_probe.parse_known_args()
     sys.argv = [sys.argv[0], *rest]
     args = cell_parse_args()
+    target.resolve_into(args)
     processes = known.processes or min(6, max(1, args.concurrency // 4))
     shares = shard_concurrency(args.concurrency, processes)
 

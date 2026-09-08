@@ -17,6 +17,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from . import target
 from .engines import DEFAULT_LIMIT, add_connection_args, build_engine
 from .stats import summarize_latencies
 
@@ -26,7 +27,7 @@ DEFAULT_ITERATIONS = 30
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", choices=("opensearch", "scylladb"), required=True)
+    target.add_target_args(parser)
     parser.add_argument("--queries", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
@@ -77,6 +78,7 @@ def print_class_line(name: str, summary: dict) -> None:
 
 def main() -> int:
     args = parse_args()
+    target.resolve_into(args)
     engine = build_engine(args)
     with open(args.queries, encoding="utf-8") as f:
         query_set = json.load(f)

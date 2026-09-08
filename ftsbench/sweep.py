@@ -30,7 +30,7 @@ import argparse
 import sys
 from typing import Any, TextIO
 
-from . import runmeta
+from . import runmeta, target
 from .engines import DEFAULT_LIMIT, add_connection_args, build_engine
 from .load_gen import (DEFAULT_CONCURRENCY, DEFAULT_SEED, QUERY_CLASSES,
                        Calibration, GeneratorSettings, Query, RunTally,
@@ -148,6 +148,8 @@ def sweep_header(args: argparse.Namespace, query_set: dict[str, Any],
                  calibration: Calibration, ladder: list[float]) -> dict[str, Any]:
     return runmeta.header(
         producer="sweep", engine=args.engine,
+        concurrency_unit="requests in flight",
+        **target.header_fields(target.resolve(args)),
         engine_version=args.engine_version, label=args.label,
         cache_state=args.cache_state, corpus=query_set.get("corpus", ""),
         queries=args.queries, query_class=args.query_class or "all",
@@ -172,7 +174,7 @@ def add_ladder_args(parser: argparse.ArgumentParser) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", choices=("opensearch", "scylladb"), required=True)
+    target.add_target_args(parser)
     parser.add_argument("--queries", required=True)
     parser.add_argument("--output", required=True, help="JSONL sweep_point path")
     parser.add_argument("--duration", type=float, default=DEFAULT_DURATION_S)
@@ -195,6 +197,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    target.resolve_into(args)
     settings = GeneratorSettings(args.concurrency, args.limit, args.seed)
     engine = build_engine(args, pool_maxsize=args.concurrency)
     query_set = read_query_set(args.queries)

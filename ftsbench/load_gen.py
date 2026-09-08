@@ -51,7 +51,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator, TextIO
 
-from . import latency_log, pacer, runmeta
+from . import latency_log, pacer, runmeta, target
 from .engines import DEFAULT_LIMIT, add_connection_args, build_engine
 from .stats import percentile, summarize_or_empty
 
@@ -410,7 +410,7 @@ def queue_p99_ms(tally: RunTally) -> float:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", choices=("opensearch", "scylladb"), required=True)
+    target.add_target_args(parser)
     parser.add_argument("--queries", required=True,
                         help="query set JSON from generate_queries")
     parser.add_argument("--rate", type=float,
@@ -451,7 +451,9 @@ def run_header(args: argparse.Namespace, query_set: dict[str, Any]) -> dict[str,
         cache_state=args.cache_state, corpus=query_set.get("corpus", ""),
         queries=args.queries, query_class=args.query_class or "all",
         offered_qps=args.rate, duration_s=args.duration, warmup_s=args.warmup,
-        concurrency=args.concurrency, limit=args.limit, seed=args.seed)
+        concurrency=args.concurrency, limit=args.limit, seed=args.seed,
+        concurrency_unit="requests in flight",
+        **target.header_fields(target.resolve(args)))
 
 
 @contextlib.contextmanager
@@ -539,6 +541,7 @@ def report_calibration(calibration: Calibration) -> int:
 
 def main() -> int:
     args = parse_args()
+    target.resolve_into(args)
     settings = GeneratorSettings(args.concurrency, args.limit, args.seed)
     engine = build_engine(args, pool_maxsize=args.concurrency)
     if args.calibrate:
