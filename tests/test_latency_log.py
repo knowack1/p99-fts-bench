@@ -271,7 +271,14 @@ def test_no_write_path_producer_owns_its_own_dispatch(producer):
     its own dispatch loop, because that is how the two --concurrency flags came
     to mean different quantities — twice. churn_load was outside this list
     while holding a ThreadPoolExecutor with a hardcoded four bulks in flight,
-    which is what put two client constants on the S28 chart."""
+    which is what put two client constants on the S28 chart.
+
+    What is banned is a producer holding its own dispatch, not concurrency as
+    such. `mp_load` owns a ProcessPoolExecutor deliberately and is in the
+    registry: it is engine-agnostic, wraps both loaders identically, and each of
+    its workers still dispatches through the shared driver — so the two engines
+    cannot come to differ in how work is offered, which is the property this
+    test defends."""
     assert "ThreadPoolExecutor" not in write_path.referenced_names(producer)
     assert (write_path.calls_qualified(producer, "load_driver.run")
             or write_path.calls_qualified(producer, "load_driver.run_timed"))

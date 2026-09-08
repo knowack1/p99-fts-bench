@@ -93,14 +93,16 @@ def read_shard(path: str, shard: int, shards: int,
                 return
 
 
-def docs_per_shard(max_docs: int, shards: int, shard: int) -> int:
-    """Split a run's document budget across workers without losing the remainder.
+def split_budget(total: int, parts: int, index: int) -> int:
+    """One part's share of an integer budget, remainder included.
 
-    A plain `max_docs // shards` leaves up to `shards - 1` documents unloaded,
-    and the sweep's completeness gate compares the indexed count against the cap
-    exactly — so a point would be set aside as truncated for an arithmetic
-    reason rather than an engine one.
+    Used for both the document cap and the concurrency budget, because both are
+    a whole-run number the workers divide between them and both are compared
+    against exactly afterwards. A plain `total // parts` leaves up to
+    `parts - 1` unallocated: for documents that means the sweep's completeness
+    gate sets a point aside as truncated for an arithmetic reason rather than an
+    engine one, and for concurrency it means the rung labelled c=64 offered 63.
     """
-    if not max_docs:
+    if not total:
         return 0
-    return max_docs // shards + (1 if shard < max_docs % shards else 0)
+    return total // parts + (1 if index < total % parts else 0)

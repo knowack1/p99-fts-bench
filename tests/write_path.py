@@ -19,7 +19,8 @@ from pathlib import Path
 BENCH_DIR = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = BENCH_DIR / "ftsbench"
 
-WRITE_PATH_PRODUCERS = ("opensearch_load", "scylla_load", "churn_load")
+WRITE_PATH_PRODUCERS = ("opensearch_load", "scylla_load", "churn_load",
+                        "mp_load")
 
 
 def producer_modules() -> list:

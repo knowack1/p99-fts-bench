@@ -83,15 +83,16 @@ def test_a_per_shard_cap_limits_that_shard_only(tmp_path):
     assert len(ids(path, 1, 4, max_docs=5)) == 5
 
 
-def test_the_document_budget_splits_without_losing_the_remainder(tmp_path):
-    """`max_docs // shards` would leave up to shards-1 documents unloaded, and
-    the sweep's gate compares the indexed count against the cap exactly."""
-    assert sum(corpus_shard.docs_per_shard(1_000_000, 3, s) for s in range(3)) == 1_000_000
-    assert sum(corpus_shard.docs_per_shard(101, 4, s) for s in range(4)) == 101
+def test_a_budget_splits_without_losing_the_remainder(tmp_path):
+    """`total // parts` would leave up to parts-1 unallocated: documents the
+    completeness gate then reads as a truncated point, or a rung labelled c=64
+    that offered 63."""
+    assert sum(corpus_shard.split_budget(1_000_000, 3, s) for s in range(3)) == 1_000_000
+    assert sum(corpus_shard.split_budget(101, 4, s) for s in range(4)) == 101
 
 
-def test_an_uncapped_budget_stays_uncapped_per_shard():
-    assert corpus_shard.docs_per_shard(0, 4, 0) == 0
+def test_an_uncapped_budget_stays_uncapped_per_part():
+    assert corpus_shard.split_budget(0, 4, 0) == 0
 
 
 def test_a_compressed_corpus_is_refused_rather_than_silently_resharded(tmp_path):
