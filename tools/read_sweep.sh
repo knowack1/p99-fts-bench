@@ -2,7 +2,13 @@
 # Read-path cube driver: every (query class x top-N x concurrency) cell,
 # closed-loop, N runs, one engine at a time (deck S18-S26; READ-PATH-TEST-PLAN.md).
 #
-#   tools/read_sweep.sh <opensearch|scylla-cdc> [runs]
+#   tools/read_sweep.sh <opensearch|scylla-cdc|vector-store> [runs]
+#
+# `vector-store` queries the BM25 endpoint directly, with ScyllaDB out of
+# the path. It is the index-only arm: scylla-cdc minus vector-store is
+# ScyllaDB's own read overhead. It is comparable with the other two arms
+# only because no arm passes --fetch-documents — every cell in this cube
+# returns identities, which is the one mode the BM25 endpoint can serve.
 #
 # Runs are traversal-major: run 1 visits all cells, then run 2 repeats — an
 # interrupted campaign leaves every cell at equal N, and host drift spreads
@@ -21,7 +27,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-ENGINE="${1:?usage: read_sweep.sh <opensearch|scylla-cdc> [runs]}"
+ENGINE="${1:?usage: read_sweep.sh <opensearch|scylla-cdc|vector-store> [runs]}"
 RUNS="${2:-9}"
 CLASSES="${CLASSES:-rare_term common_term phrase bool_and bool_not bool_mixed}"
 TOPNS="${TOPNS:-10 100 1000}"
@@ -45,6 +51,10 @@ case "$ENGINE" in
   scylla-cdc)
     CONFIG="scylla-cdc"
     CONN=(--engine scylladb --hosts "$SCYLLA_HOSTS" --port "$SCYLLA_PORT") ;;
+  vector-store)
+    CONFIG="vector-store-direct"
+    CONN=(--engine vector-store --vs-url "$VS_URL" --keyspace wiki \
+          --vs-index articles_body_fts) ;;
   *) echo "unknown engine: $ENGINE" >&2; exit 2 ;;
 esac
 # Sensitivity variants (e.g. the OS_RAM_INDEX=1 pass) relabel their artifacts
@@ -62,7 +72,7 @@ assert_index_resident() {
     opensearch)
       count="$(curl -fsS "$OS_URL/wiki-articles/_count" \
         | $PYTHON -c 'import json,sys; print(json.load(sys.stdin)["count"])')" ;;
-    scylla-cdc)
+    scylla-cdc|vector-store)
       count="$(curl -fsS "$VS_URL/api/v1/indexes/wiki/articles_body_fts/status" \
         | $PYTHON -c 'import json,sys; print(json.load(sys.stdin).get("count",-1))')" ;;
   esac

@@ -1,4 +1,4 @@
-"""Query clients for the two engines.
+"""Query clients for the engines under test.
 
 Both accept the same query text: ScyllaDB passes it to BM25() (Tantivy query
 parser), OpenSearch to a `query_string` query (Lucene syntax). Single terms,
@@ -32,6 +32,8 @@ SEARCH_TIMEOUT_S = 30
 DEFAULT_OS_URL = "http://localhost:9200"
 DEFAULT_OS_INDEX = "wiki-articles"
 DEFAULT_SCYLLA_HOSTS = "127.0.0.1"
+DEFAULT_VS_URL = "http://localhost:16080"
+DEFAULT_VS_INDEX = "articles_body_fts"
 # The bench stack publishes ScyllaDB on 19042; 9042 stays the default so this
 # matches scylla_load.py, and every caller passes --port explicitly.
 DEFAULT_SCYLLA_PORT = 9042
@@ -108,6 +110,64 @@ class ScyllaEngine:
         )
 
 
+class VectorStoreEngine:
+    """BM25 straight against the vector-store's Tantivy index, ScyllaDB out of
+    the path entirely.
+
+    Its purpose is subtraction. The `scylladb` series times the whole CQL round
+    trip — coordinator hop, BM25 dispatch into this same index, then the read
+    that satisfies the projection — so on its own it cannot say whether a gap
+    against OpenSearch lives in the index or in the path around it. This client
+    times the index alone, and the difference is ScyllaDB's overhead.
+
+    The endpoint returns primary keys and scores and has no way to return
+    document text, so fetch_documents is refused rather than ignored: a cube
+    where the other engines projected title and body while this one returned
+    identities would put the cost of that fetch on the chart as an engine
+    property.
+    """
+
+    def __init__(self, url: str, keyspace: str = "wiki",
+                 index: str = DEFAULT_VS_INDEX, pool_maxsize: int = 1,
+                 fetch_documents: bool = False):
+        if fetch_documents:
+            raise ValueError(
+                "vector-store BM25 returns primary keys only, so "
+                "--fetch-documents cannot be honoured; a cell measured this "
+                "way is not comparable with the other engines")
+        self._endpoint = (f"{url.rstrip('/')}/api/v1/indexes/"
+                          f"{keyspace}/{index}/bm25")
+        self._session = pooled_session(pool_maxsize)
+        self.bytes_fetched = 0
+
+    def search(self, query_text: str, limit: int = DEFAULT_LIMIT) -> list:
+        response = self._session.post(
+            self._endpoint,
+            json={"query": query_text, "limit": limit},
+            timeout=SEARCH_TIMEOUT_S,
+        )
+        response.raise_for_status()
+        return primary_key_rows(response.json()["primary_keys"])
+
+
+def primary_key_rows(primary_keys: dict) -> list:
+    """The endpoint returns one array per key column rather than one object per
+    row; zipping them back is what makes the returned length a hit count."""
+    columns = list(primary_keys.values())
+    if not columns:
+        return []
+    return [tuple(column[row] for column in columns)
+            for row in range(len(columns[0]))]
+
+
+def add_vector_store_args(parser: argparse.ArgumentParser) -> None:
+    """Kept out of add_connection_args deliberately: freshness_probe defines
+    --vs-url itself and also calls that function, so adding these there is an
+    argparse conflict at import time."""
+    parser.add_argument("--vs-url", default=DEFAULT_VS_URL)
+    parser.add_argument("--vs-index", default=DEFAULT_VS_INDEX)
+
+
 def add_connection_args(parser: argparse.ArgumentParser) -> None:
     """Connection flags shared by every read-path tool. Centralised because the
     per-tool copies drifted: the Makefile passed --port to query_bench, whose
@@ -160,6 +220,13 @@ def build_engine(args: argparse.Namespace, pool_maxsize: int = 1):
                                 default_operator=args.default_operator,
                                 pool_maxsize=pool_maxsize,
                                 fetch_documents=fetch_documents(args))
+    if args.engine == "vector-store":
+        return VectorStoreEngine(getattr(args, "vs_url", DEFAULT_VS_URL),
+                                 keyspace=args.keyspace,
+                                 index=getattr(args, "vs_index",
+                                               DEFAULT_VS_INDEX),
+                                 pool_maxsize=pool_maxsize,
+                                 fetch_documents=fetch_documents(args))
     return ScyllaEngine(args.hosts.split(","), port=args.port,
                         keyspace=args.keyspace,
                         table=args.table, column=args.column,

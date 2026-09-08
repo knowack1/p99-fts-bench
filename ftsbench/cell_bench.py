@@ -32,7 +32,8 @@ import sys
 import time
 
 from . import runmeta
-from .engines import add_connection_args, build_engine
+from .engines import (add_connection_args, add_vector_store_args,
+                      build_engine)
 from .load_gen import (GeneratorSettings, build_plan, drive_ops,
                        queue_p99_ms, read_query_set, saturating_ops)
 from .stats import summarize_or_empty
@@ -41,8 +42,9 @@ from .stats import summarize_or_empty
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", required=True,
-                        choices=["opensearch", "scylladb"])
+                        choices=["opensearch", "scylladb", "vector-store"])
     add_connection_args(parser)
+    add_vector_store_args(parser)
     parser.add_argument("--queries", required=True)
     parser.add_argument("--query-class", required=True)
     parser.add_argument("--limit", type=int, required=True)
