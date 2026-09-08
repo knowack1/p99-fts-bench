@@ -56,34 +56,88 @@ class Target:
     variant: str
     endpoint: str
     in_campaign: bool = True
+    env: tuple[tuple[str, str], ...] = ()
 
+
+# An empty value in `env` means "explicitly unset". The compose files spell
+# every optional knob `VECTOR_STORE_X${VS_X:+=${VS_X}}`, so an empty string
+# drops the variable rather than passing it empty, and the service falls back to
+# its compiled-in default. That distinction has to be expressible: the whole
+# point of the `buf15` arm is that the writer buffer is *absent*, and inheriting
+# `.env.sut`'s 376 would silently measure the wrong thing under its label.
+UNSET = ""
+
+
+OS_DISK = (("OS_RAM_INDEX", UNSET), ("OS_INDEX_CONFIG", "index-config.json"))
+OS_RAM_NOSTORE = (("OS_RAM_INDEX", "1"),
+                  ("OS_INDEX_CONFIG", "index-config-ramindex.json"))
+# Held equal across all three ScyllaDB knob arms. The threshold is disabled so
+# commits are purely interval-driven; the metrics interval is on so `added/s` —
+# documents entering the writer, ungated by commit — is recorded, which is the
+# only throughput signal that survives raising the commit interval. It is a
+# deviation, so it is constant across the arms rather than set where convenient:
+# the 2026-09-07 inline A/B left it on for one arm and off for the other.
+VS_COMMON = (("VS_FTS_COMMIT_THRESHOLD", "0"), ("VS_FTS_METRICS_INTERVAL", "1s"))
 
 # `in_campaign` is not a capability gate. Every target here is fully runnable;
 # the flag only says whether the default campaign set sweeps it. The
-# load-then-index ScyllaDB path and the disk+stored OpenSearch arms are kept
-# selectable and out of the campaign, because a path the harness can no longer
-# run is a path whose old artifacts nobody can ever reproduce.
+# load-then-index ScyllaDB path, the disk+stored OpenSearch arms and the
+# knob-matrix arms below are kept selectable and out of the campaign, because a
+# path the harness can no longer run is a path whose old artifacts nobody can
+# ever reproduce.
 TARGETS: tuple[Target, ...] = (
     Target(flag="--opensearch-disk-store-refresh3",
            config="opensearch-refresh3",
            engine=OPENSEARCH, variant="disk-store-refresh3",
-           endpoint=ENDPOINT_OPENSEARCH),
+           endpoint=ENDPOINT_OPENSEARCH,
+           env=OS_DISK + (("OS_REFRESH", "3s"),)),
     Target(flag="--opensearch-ram-nostore-refresh3",
            config="opensearch-ramindex",
            engine=OPENSEARCH, variant="ram-nostore-refresh3",
-           endpoint=ENDPOINT_OPENSEARCH),
+           endpoint=ENDPOINT_OPENSEARCH,
+           env=OS_RAM_NOSTORE + (("OS_REFRESH", "3s"),)),
+    Target(flag="--opensearch-ram-nostore-refresh30",
+           config="opensearch-ramindex-refresh30",
+           engine=OPENSEARCH, variant="ram-nostore-refresh30",
+           endpoint=ENDPOINT_OPENSEARCH, in_campaign=False,
+           env=OS_RAM_NOSTORE + (("OS_REFRESH", "30s"),)),
     Target(flag="--opensearch-disk-store-refresh1",
            config="opensearch",
            engine=OPENSEARCH, variant="disk-store-refresh1",
-           endpoint=ENDPOINT_OPENSEARCH, in_campaign=False),
+           endpoint=ENDPOINT_OPENSEARCH, in_campaign=False,
+           env=OS_DISK + (("OS_REFRESH", "1s"),)),
     Target(flag="--opensearch-disk-store-refresh30",
            config="opensearch-refresh30",
            engine=OPENSEARCH, variant="disk-store-refresh30",
-           endpoint=ENDPOINT_OPENSEARCH, in_campaign=False),
+           endpoint=ENDPOINT_OPENSEARCH, in_campaign=False,
+           env=OS_DISK + (("OS_REFRESH", "30s"),)),
+    # `scylla-cdc` carries no env of its own: it predates the registry holding
+    # knobs, and its artifacts were taken with whatever `.env.sut` happened to
+    # say at the time — which is why nothing in them records the writer buffer,
+    # and why the three explicit arms below exist rather than this label being
+    # redefined underneath its own data.
     Target(flag="--scylladb-cdc",
            config="scylla-cdc",
            engine=SCYLLADB, variant="cdc",
            endpoint=ENDPOINT_CQL),
+    Target(flag="--scylladb-cdc-buf15",
+           config="scylla-cdc-buf15",
+           engine=SCYLLADB, variant="cdc-threshold0-buf15-commit3s",
+           endpoint=ENDPOINT_CQL, in_campaign=False,
+           env=VS_COMMON + (("VS_FTS_WRITER_MEMORY_MB", UNSET),
+                            ("VS_FTS_COMMIT_INTERVAL", UNSET))),
+    Target(flag="--scylladb-cdc-buf376",
+           config="scylla-cdc-buf376",
+           engine=SCYLLADB, variant="cdc-threshold0-buf376-commit3s",
+           endpoint=ENDPOINT_CQL, in_campaign=False,
+           env=VS_COMMON + (("VS_FTS_WRITER_MEMORY_MB", "376"),
+                            ("VS_FTS_COMMIT_INTERVAL", UNSET))),
+    Target(flag="--scylladb-cdc-buf376-commit30",
+           config="scylla-cdc-buf376-commit30",
+           engine=SCYLLADB, variant="cdc-threshold0-buf376-commit30s",
+           endpoint=ENDPOINT_CQL, in_campaign=False,
+           env=VS_COMMON + (("VS_FTS_WRITER_MEMORY_MB", "376"),
+                            ("VS_FTS_COMMIT_INTERVAL", "30s"))),
     Target(flag="--scylladb-bootstrap",
            config="scylla-bootstrap",
            engine=SCYLLADB, variant="bootstrap",
@@ -215,4 +269,61 @@ def header_fields(target: Target) -> dict[str, str]:
         "target_flag": target.flag,
         "variant": target.variant,
         "endpoint_kind": target.endpoint,
+        "target_env": format_env(target),
     }
+
+
+def format_env(target: Target) -> str:
+    """The arm's knobs as one readable string, for an artifact header.
+
+    This is the *intent*. What the engine actually did is read back off its own
+    startup log by `run_manifest`, because an environment variable that the
+    image ignores — as public vector-store 1.10.0 ignores every `VS_FTS_*` —
+    looks identical here to one that took effect.
+    """
+    return " ".join(f"{name}={value or '<unset>'}" for name, value in target.env)
+
+
+def shell_bindings(target: Target) -> str:
+    """The arm, as something a shell driver can `eval`.
+
+    The drivers used to answer "which deployment is this" with their own `case`
+    block — that is how `vector-store-direct` came to exist in
+    `tools/read_sweep.sh` and in no Python list at all. A driver that evals this
+    cannot disagree with the registry, because it is not restating it.
+    """
+    lines = [
+        f"TARGET_CONFIG={target.config}",
+        f"TARGET_ENGINE={target.engine}",
+        f"TARGET_VARIANT={target.variant}",
+        f"TARGET_ENDPOINT={target.endpoint}",
+        f"TARGET_FLAG={target.flag}",
+    ]
+    lines += [f"export {name}={value!r}".replace("'", '"')
+              for name, value in target.env]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Resolve one measurable arm.")
+    add_target_args(parser)
+    parser.add_argument("--shell", action="store_true",
+                        help="print eval-able bindings for a shell driver")
+    args = parser.parse_args()
+    arm = resolve(args)
+    print(shell_bindings(arm) if args.shell else arm.config)
+    return 0
+
+
+def env_exports(target: Target) -> dict[str, str]:
+    """The knobs to put in the environment before the engine stack starts.
+
+    Returned including the empty values: docker compose resolves interpolation
+    from the shell environment before `--env-file`, so exporting a knob empty is
+    what overrides a value `.env.sut` sets, and omitting it is what inherits it.
+    """
+    return dict(target.env)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -182,3 +182,86 @@ def test_a_configs_repetition_glob_never_matches_another_configs_artifact(arm):
             artifact = f"{chart}-{other}-1.jsonl"
             assert not Path(artifact).match(f"{chart}-{arm.config}-[0-9]*.jsonl"), (
                 f"{arm.config}'s glob matches {other}'s artifact {artifact}")
+
+
+# --- deployment knobs -------------------------------------------------------
+#
+# The knobs used to live in `tools/sweep_build_rate.sh`'s `case` block and in
+# `docker/.env.sut`, which meant an arm's identity was split across a shell
+# script and a file the arm did not name. These hold the registry to carrying
+# it instead.
+
+KNOB_ARMS = tuple(arm for arm in target.TARGETS if arm.env)
+
+
+@pytest.mark.parametrize("arm", KNOB_ARMS, ids=lambda arm: arm.config)
+def test_an_arms_knobs_round_trip_into_the_environment(arm):
+    exported = target.env_exports(arm)
+    assert exported == dict(arm.env)
+
+
+@pytest.mark.parametrize("arm", KNOB_ARMS, ids=lambda arm: arm.config)
+def test_an_unset_knob_survives_as_an_empty_export(arm):
+    """Empty is not the same as absent. docker compose resolves interpolation
+    from the shell before `--env-file`, so exporting a knob empty is what
+    overrides `.env.sut`; dropping it from the dict would inherit 376 into the
+    arm whose whole point is that the buffer is unset."""
+    for name, value in arm.env:
+        if value == target.UNSET:
+            assert name in target.env_exports(arm)
+
+
+def test_the_three_scylla_knob_arms_differ_only_where_they_claim_to():
+    buf15 = dict(target.by_config("scylla-cdc-buf15").env)
+    buf376 = dict(target.by_config("scylla-cdc-buf376").env)
+    commit30 = dict(target.by_config("scylla-cdc-buf376-commit30").env)
+
+    assert buf15["VS_FTS_WRITER_MEMORY_MB"] == target.UNSET
+    assert buf376["VS_FTS_WRITER_MEMORY_MB"] == "376"
+    assert {k: v for k, v in buf15.items() if k != "VS_FTS_WRITER_MEMORY_MB"} \
+        == {k: v for k, v in buf376.items() if k != "VS_FTS_WRITER_MEMORY_MB"}
+
+    assert buf376["VS_FTS_COMMIT_INTERVAL"] == target.UNSET
+    assert commit30["VS_FTS_COMMIT_INTERVAL"] == "30s"
+    assert {k: v for k, v in buf376.items() if k != "VS_FTS_COMMIT_INTERVAL"} \
+        == {k: v for k, v in commit30.items() if k != "VS_FTS_COMMIT_INTERVAL"}
+
+
+@pytest.mark.parametrize("config", ["scylla-cdc-buf15", "scylla-cdc-buf376",
+                                    "scylla-cdc-buf376-commit30"])
+def test_the_commit_threshold_and_metrics_are_held_equal_across_the_scylla_arms(config):
+    """Both are deviations from release behaviour. Setting either on some arms
+    and not others would confound the knob under test with the deviation."""
+    knobs = dict(target.by_config(config).env)
+    assert knobs["VS_FTS_COMMIT_THRESHOLD"] == "0"
+    assert knobs["VS_FTS_METRICS_INTERVAL"] == "1s"
+
+
+def test_the_two_ramindex_arms_differ_only_in_refresh():
+    three = dict(target.by_config("opensearch-ramindex").env)
+    thirty = dict(target.by_config("opensearch-ramindex-refresh30").env)
+    assert three["OS_REFRESH"] == "3s"
+    assert thirty["OS_REFRESH"] == "30s"
+    assert {k: v for k, v in three.items() if k != "OS_REFRESH"} \
+        == {k: v for k, v in thirty.items() if k != "OS_REFRESH"}
+
+
+@pytest.mark.parametrize("arm", KNOB_ARMS, ids=lambda arm: arm.config)
+def test_an_opensearch_arm_always_states_whether_the_index_is_in_ram(arm):
+    """`opensearch-ramindex` was never a one-axis change, and an arm that left
+    OS_RAM_INDEX to whatever the shell happened to hold would inherit the
+    previous arm's tmpfs — silently, because the label would still read right."""
+    if arm.engine != target.OPENSEARCH:
+        return
+    knobs = dict(arm.env)
+    assert "OS_RAM_INDEX" in knobs
+    assert "OS_INDEX_CONFIG" in knobs
+
+
+@pytest.mark.parametrize("arm", KNOB_ARMS, ids=lambda arm: arm.config)
+def test_the_header_records_the_knobs_the_arm_was_run_with(arm):
+    """`config` alone cannot distinguish five arms that differ only by knob."""
+    rendered = target.header_fields(arm)["target_env"]
+    for name, value in arm.env:
+        assert name in rendered
+        assert (value if value else "<unset>") in rendered

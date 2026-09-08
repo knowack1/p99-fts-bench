@@ -258,9 +258,17 @@ C1_MONITOR_SCYLLA = --engine scylladb --vs-url $(VS_URL) \
 # wall-clock cap bounds that; it must stay well above a healthy build.
 C1_MAX_SECONDS ?= 600
 
+# Documents are written, then become searchable one refresh/commit later; the
+# settle phase is that gap, and a timeout there means the index stopped
+# refreshing rather than that we were hasty. It has to clear the slowest cadence
+# any arm configures — at refresh_interval=30s the 120 s default is four cycles,
+# but leaving it implicit is how it would silently become one.
+C1_SETTLE_TIMEOUT ?= 120
+
 C1_MONITOR_COMMON = --interval $(C1_INTERVAL) \
 	--idle-timeout $(C1_IDLE_TIMEOUT) --until-docs $(C1_UNTIL_DOCS) \
 	--max-seconds $(C1_MAX_SECONDS) --corpus $(CORPUS) \
+	--settle-timeout $(C1_SETTLE_TIMEOUT) \
 	--label "$(LABEL)" --cache-state $(CACHE_STATE)
 
 # C1 measures the ceiling, so no --target-rate: the loader runs unpaced.
