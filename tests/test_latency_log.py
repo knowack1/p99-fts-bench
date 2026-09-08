@@ -2,11 +2,14 @@ import argparse
 import json
 import threading
 import time
+import uuid
+from pathlib import Path
 from concurrent import futures
 
 import pytest
 
-from ftsbench import latency_log, load_retry, opensearch_load, runmeta
+from ftsbench import (latency_log, load_driver, load_retry, opensearch_load,
+                      runmeta, scylla_load)
 
 ORIGIN = 1000.0
 
@@ -21,16 +24,22 @@ def timing(i: int, intended: float, start: float, end: float) -> latency_log.OpT
 
 
 def write_corpus(path, doc_count: int) -> str:
+    """Mirrors the corpus contract: `uuid` is a real uuid5 of the page id, which
+    scylla_load parses into the partition key."""
     with open(path, "w", encoding="utf-8") as handle:
         for doc_id in range(doc_count):
-            handle.write(json.dumps({"id": doc_id, "uuid": str(doc_id),
+            doc_uuid = uuid.uuid5(uuid.NAMESPACE_URL, str(doc_id))
+            handle.write(json.dumps({"id": doc_id, "uuid": str(doc_uuid),
                                      "title": f"t{doc_id}", "text": f"body {doc_id}"}) + "\n")
     return str(path)
 
 
 def loader_args(corpus: str, batch_size: int) -> argparse.Namespace:
     return argparse.Namespace(corpus=corpus, max_docs=0, batch_size=batch_size,
-                              index="wiki-articles", target_rate=0.0)
+                              index="wiki-articles", target_rate=0.0,
+                              concurrency=1, latency_log=None, label="",
+                              cache_state="unspecified",
+                              no_refresh_during_load=False)
 
 
 def action_ids(payload: bytes) -> list[str]:
@@ -49,13 +58,11 @@ def dispatch_with_fake_transport(monkeypatch, corpus: str, batch_size: int,
 
     monkeypatch.setattr(opensearch_load, "send_bulk", fake_send)
     monkeypatch.setattr(opensearch_load, "thread_session", lambda: None)
+    monkeypatch.setattr(opensearch_load.samplers, "OpenSearchSampler",
+                        lambda *a, **k: argparse.Namespace(version=lambda: "test"))
     args = loader_args(corpus, batch_size)
-    origin_s = time.perf_counter()
-    with futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        pool = opensearch_load.BulkPool(executor, concurrency)
-        opensearch_load.dispatch_all(pool, make_log(origin_s=origin_s), args,
-                                     "http://localhost:9200", origin_s,
-                                     load_retry.RetryTally())
+    args.concurrency = concurrency
+    load_driver.run(args, opensearch_load.build_loader(args, "http://localhost:9200"))
     return sent
 
 
@@ -224,9 +231,54 @@ def test_every_document_is_sent_exactly_once_under_concurrency(monkeypatch, tmp_
     assert sorted(int(doc_id) for doc_id in ids) == list(range(250))
 
 
+def scylla_dispatch_with_fake_driver(monkeypatch, corpus: str, batch_size: int,
+                                     concurrency: int) -> list[list[tuple]]:
+    sent: list[list[tuple]] = []
+    lock = threading.Lock()
+
+    def fake_results(session, statement, parameters, rows_in_flight):
+        with lock:
+            sent.append(list(parameters))
+        return [(True, None) for _ in parameters]
+
+    monkeypatch.setattr(scylla_load, "concurrent_results", fake_results)
+    args = loader_args(corpus, batch_size)
+    args.concurrency = concurrency
+    args.rows_in_flight = 0
+    args.unlogged_batch_rows = 0
+    args.keyspace, args.table = "wiki", "articles"
+    load_driver.run(args, scylla_load.build_loader(args, object(), None))
+    return sent
+
+
+def test_scylla_also_sends_every_document_exactly_once_under_concurrency(
+        monkeypatch, tmp_path):
+    """The ScyllaDB side dispatched one batch at a time on the caller's thread
+    until the loaders were unified, which capped it at one GIL core. It now
+    goes through the same pool as OpenSearch, so it has to survive the same
+    test — losing or duplicating a document under concurrency would shorten a
+    corpus without failing a run."""
+    corpus = write_corpus(tmp_path / "corpus.jsonl", 250)
+    batches = scylla_dispatch_with_fake_driver(monkeypatch, corpus, 16,
+                                               concurrency=8)
+    page_ids = [row[1] for batch in batches for row in batch]
+    assert sorted(page_ids) == list(range(250))
+
+
+@pytest.mark.parametrize("loader", [scylla_load, opensearch_load])
+def test_both_loaders_dispatch_through_the_shared_driver(loader):
+    """The property the unification exists to guarantee: neither side may own
+    its own dispatch loop, because that is how the two --concurrency flags came
+    to mean different quantities."""
+    source = (Path(__file__).resolve().parent.parent / "ftsbench" /
+              f"{loader.__name__.rsplit('.', 1)[-1]}.py").read_text()
+    assert "ThreadPoolExecutor" not in source
+    assert "load_driver.run(" in source
+
+
 def test_bulk_pool_surfaces_a_worker_exception_rather_than_dropping_it():
     with futures.ThreadPoolExecutor(max_workers=2) as executor:
-        pool = opensearch_load.BulkPool(executor, 2)
+        pool = load_driver.InFlightPool(executor, 2)
         pool.submit(lambda: 1 / 0)
         with pytest.raises(ZeroDivisionError):
             pool.drain()
@@ -242,7 +294,7 @@ def test_bulk_pool_blocks_the_dispatcher_once_max_inflight_is_reached():
         release.wait(timeout=5)
 
     with futures.ThreadPoolExecutor(max_workers=4) as executor:
-        pool = opensearch_load.BulkPool(executor, 2)
+        pool = load_driver.InFlightPool(executor, 2)
         pool.submit(blocking_work)
         pool.submit(blocking_work)
         dispatcher = threading.Thread(
@@ -256,9 +308,9 @@ def test_bulk_pool_blocks_the_dispatcher_once_max_inflight_is_reached():
 
 
 def test_client_bound_warning_fires_only_at_concurrency_one(capsys):
-    opensearch_load.warn_if_client_bound(1)
+    load_driver.warn_if_client_bound(1)
     assert "not quotable" in capsys.readouterr().err
-    opensearch_load.warn_if_client_bound(16)
+    load_driver.warn_if_client_bound(16)
     assert capsys.readouterr().err == ""
 
 

@@ -17,8 +17,8 @@ symmetry, or judgement, and not yet tested).
 | Knob | OpenSearch (`opensearch_load`) | ScyllaDB (`scylla_load`) | Why | Evidence |
 |---|---|---|---|---|
 | Batch size | `--batch-size 500` (default) | `--batch-size 1000` (default) | Historical defaults, kept so the preliminary C1 run stays reproducible. | **measured, and the defaults are wrong for C3** — see §4 |
-| Client concurrency | `--concurrency 1` (default) | `--concurrency 128` (default) | The defaults are *not* comparable; see §4. Both are now settable and both are recorded in the artifact header. | **measured** |
-| Meaning of "concurrency" | whole `_bulk` requests in flight | rows in flight inside one batch (`execute_concurrent_with_args`) | The two engines have no common unit of client pressure; the flags share a name, not a quantity. | measured |
+| Client concurrency | `--concurrency` = operations in flight | `--concurrency` = operations in flight | **Unified 2026-09-08** (`ftsbench.load_driver`). One operation is `--batch-size` documents on both sides, and the Makefile passes the same `INGEST_CONCURRENCY` to each. Recorded in the artifact header with an explicit `concurrency_unit`. | **measured** |
+| Meaning of "concurrency" | operations (`_bulk` requests) in flight | operations (batches) in flight | Was the harness's worst asymmetry: the flags shared a name, not a quantity. Both now dispatch through one driver, so they share the quantity too. ScyllaDB's driver-internal rows-in-flight is `--rows-in-flight`, defaulting to the whole batch, which mirrors one `_bulk` carrying `--batch-size` documents. | measured |
 | Offered rate | `--target-rate` docs/s, `0` = closed loop | `--target-rate` docs/s, `0` = closed loop | C3 needs a *controlled* offered rate. At saturation the recorded tail is queueing delay, not engine behaviour. | assumed (rate to be picked from the C1 maxima) |
 | Dispatch schedule | fixed intended-start schedule (`ftsbench.pacer`) | same | Coordinated-omission safety. `queue_ms` is recorded per op so the reader can check it. | measured (unit-tested) |
 | Document identity | explicit `_id = page_id` | `article_id = uuid5(page_id)` as PK | Both loaders are idempotent, so a re-run overwrites instead of doubling the corpus and the exact-doc-count gate stays meaningful. | assumed |
@@ -30,9 +30,9 @@ symmetry, or judgement, and not yet tested).
 
 ## 2. Engine knobs
 
-> **SUT supersessions (AWS campaign, 2026-09-01).** The rows below record the
-> laptop pass. On the SUT box (`docker/.env.sut`, `SUT-CONFIG.md`) three of
-> them are superseded:
+> **SUT supersessions (AWS campaign, 2026-09-01; writer buffer added
+> 2026-09-07).** The rows below record the laptop pass. On the SUT box
+> (`docker/.env.sut`, `SUT-CONFIG.md`) four of them are superseded:
 >
 > - **vector-store image** is `scylladb/vector-store:1.10.0-43-ge242fa3-arm64`
 >   (published-source build, knowack1/vector-store branch
@@ -44,6 +44,19 @@ symmetry, or judgement, and not yet tested).
 >   RELEASE BEHAVIOUR — disclosed on every chart footer.
 > - **OpenSearch `refresh_interval: 3s`** is therefore clean parity across the
 >   whole load range, and is the SUT default for every build-rate measurement.
+> - **`VECTOR_STORE_FTS_WRITER_MEMORY_MB=376`** raises tantivy's per-thread
+>   `IndexWriter` buffer off its 15 MB floor. The knob is decimal MB
+>   (`megabytes * 1_000_000`); 376 MB × 4 worker threads
+>   (`num_worker_threads = perf::num_workers() = tokio workers = 4`) ≈ 1.5 GB,
+>   matching OpenSearch's default `indices.memory.index_buffer_size` (10% of
+>   the 14 GiB heap = 1.4 GiB, node-total for the single shard). The vector
+>   store states worker count and per-thread buffer in a startup log line —
+>   verify both there. The 15 MB floor cost the vector-store ~9× more segment
+>   merges and ~24% build throughput on the laptop
+>   (`results/fts-bottleneck-2026-08-27`); the gain plateaus by 64 MB/thread,
+>   so this is a parity correction, not a tuning maximum. Needs the tunables
+>   build. Invalidates the laptop-pass build-rate numbers (S11–S15) — those
+>   must be re-measured on the SUT before the deck quotes them.
 
 | Knob | OpenSearch | ScyllaDB + vector-store | Why | Evidence |
 |---|---|---|---|---|
@@ -97,10 +110,21 @@ find if we do not.
    also the index's residency limit, and exceeding it makes the vector-store
    stop adding documents while still answering queries — which is why every run
    must assert the index doc count equals the corpus count.
-3. **`--concurrency` means different things.** Whole `_bulk` requests in flight
-   on one side, rows in flight within a batch on the other. There is no shared
-   unit of offered client pressure, so the honest statement on an ingest chart
-   is both raw settings, not a single "concurrency = N".
+3. **`--concurrency` meant different things — RESOLVED 2026-09-08.** Whole
+   `_bulk` requests in flight on one side, rows in flight within a batch on the
+   other, so there was no shared unit of offered client pressure. Both loaders
+   now dispatch through `ftsbench.load_driver` and the flag counts operations
+   in flight on both sides, so an ingest chart may state a single
+   "concurrency = N" again.
+
+   The asymmetry was not only cosmetic. `scylla_load` ran its whole dispatch
+   loop on one thread, so all row encoding was serialised behind the GIL and it
+   capped near **9,800 docs/s** against `opensearch_load`'s **~11,400**.
+   OpenSearch's client ceiling sat *above* its engine ceiling and ScyllaDB's sat
+   *below* — so one side measured its engine and the other measured its client,
+   and the difference was published as an engine result. **Every ingest number
+   recorded before this change carries that defect**; the ScyllaDB ones are
+   lower bounds.
 4. **Per-operation latency is only comparable at equal `--batch-size`.** The
    defaults differ (500 vs 1000), so a C3 taken at defaults would compare the
    p99 of a 500-document `_bulk` against the p99 of a 1000-row batch. **Every
@@ -133,6 +157,17 @@ find if we do not.
    laptop. Bounded rather than removed: `queue_ms` is recorded per operation, and
    a run whose `queue_ms` p99 is a material fraction of its `latency_ms` p99 is
    generator-bound and must be labelled so (SCHEMAS.md).
+9. **Index writer buffer — laptop pass ran it ~24x apart; SUT equalises it.**
+   The laptop build-rate charts compared OpenSearch's ~410 MB Lucene index
+   buffer against tantivy at its **15 MB per-thread minimum**
+   (`memory_budget_per_thread` unset). `results/fts-bottleneck-2026-08-27`
+   measured the cost: **~9x more segment merges (44 vs 5) and ~24% build
+   throughput** on the ScyllaDB side; OpenSearch did not move. On the SUT
+   (`docker/.env.sut`, §2 box) `VECTOR_STORE_FTS_WRITER_MEMORY_MB=376` sets the
+   per-thread buffer so the total (× 4 worker threads ≈ 1.5 GB) matches
+   OpenSearch's node-total default (10% of the 14 GiB heap ≈ 1.4 GiB). This is a config disparity, not an engine property —
+   any laptop-pass build-rate number carries it as a caveat, and it is one of
+   the reasons S11–S15 must be re-measured on the SUT.
 
 ## 5. What a C3 run must state
 

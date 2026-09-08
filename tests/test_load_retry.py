@@ -18,7 +18,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ftsbench import load_retry, opensearch_load, scylla_load
+from functools import partial
+
+from ftsbench import (load_driver, load_retry, opensearch_load,
+                      scylla_load)
 
 ROWS = [("doc-1",), ("doc-2",), ("doc-3",), ("doc-4",)]
 MIDDLE_ROW = ROWS[1]
@@ -58,7 +61,8 @@ def scylla_batch(monkeypatch, driver: FlakyDriver,
                  rows: list[tuple] = ROWS) -> load_retry.RetryTally:
     monkeypatch.setattr(scylla_load, "concurrent_results", driver)
     tally = load_retry.RetryTally()
-    scylla_load.execute_batch(None, None, rows, 128, tally)
+    attempt = partial(scylla_load.attempt_rows, None, None, 128)
+    scylla_load.send(attempt, rows, tally)
     return tally
 
 
@@ -116,9 +120,9 @@ class FlakyBulk:
 
 def opensearch_bulk(monkeypatch, bulk: FlakyBulk) -> load_retry.RetryTally:
     monkeypatch.setattr(opensearch_load, "send_bulk", bulk)
+    monkeypatch.setattr(opensearch_load, "thread_session", lambda: None)
     tally = load_retry.RetryTally()
-    opensearch_load.send_bulk_with_retries(None, "http://localhost:9200",
-                                           b"{}\n", tally)
+    opensearch_load.send("http://localhost:9200", b"{}\n", tally)
     return tally
 
 
@@ -153,10 +157,24 @@ def test_both_loaders_retry_under_the_same_policy(monkeypatch):
     assert policies == [load_retry.DEFAULT_POLICY, load_retry.DEFAULT_POLICY]
 
 
-@pytest.mark.parametrize("loader", [scylla_load, opensearch_load])
-def test_the_retry_budget_is_recorded_in_the_run_header(loader):
+def test_the_retry_budget_is_recorded_in_the_run_header():
     """A run whose header does not state the retry budget cannot be compared
-    with one taken under a different budget."""
+    with one taken under a different budget.
+
+    Asserted once, on the shared driver, because both loaders now build their
+    header there — which is the stronger property: the budget cannot be stated
+    for one engine and omitted for the other."""
+    source = (Path(__file__).resolve().parent.parent / "ftsbench" /
+              "load_driver.py").read_text()
+    assert "retry_attempts=load_retry.DEFAULT_POLICY.attempts" in source
+
+
+@pytest.mark.parametrize("loader", [scylla_load, opensearch_load])
+def test_neither_loader_builds_its_own_header(loader):
+    """The header is the artifact's provenance. Two hand-built headers is how
+    `concurrency` came to mean different things per engine without either side
+    saying so."""
     source = (Path(__file__).resolve().parent.parent / "ftsbench" /
               f"{loader.__name__.rsplit('.', 1)[-1]}.py").read_text()
-    assert "retry_attempts=load_retry.DEFAULT_POLICY.attempts" in source
+    assert "runmeta.header(" not in source, \
+        f"{loader.__name__} builds its own header instead of using load_driver"

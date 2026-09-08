@@ -5,12 +5,17 @@ per-point statistics come from ftsbench.build_report.summarize, the same
 function the C1 sidecar uses, so a point here and a C1 number over the same
 series cannot disagree.
 
-Comparability caveat, recorded here because it travels with the artifact:
-`--concurrency` is not the same quantity on both sides. For OpenSearch it is
-whole `_bulk` requests in flight; for ScyllaDB it is rows in flight inside one
-batch, held by the driver. The two curves therefore share an axis label but not
-an axis, and a point-for-point reading across engines at equal x is not valid.
-The ceiling each curve reaches is the comparable part.
+Comparability, recorded here because it travels with the artifact:
+`--concurrency` is now the same quantity on both sides — operations in flight,
+one operation being `--batch-size` documents — because both loaders dispatch
+through `ftsbench.load_driver`. Equal-x points are therefore comparable.
+
+This was not true of series recorded before that unification: OpenSearch counted
+whole `_bulk` requests in flight while ScyllaDB counted rows inside one batch,
+so those two curves shared an axis label but not an axis. Worse, the ScyllaDB
+loader encoded on a single thread and capped near 9.8k docs/s, so its "ceiling"
+was the client's. For any such series read the ceilings only, and treat the
+ScyllaDB one as a lower bound.
 """
 from __future__ import annotations
 
@@ -28,9 +33,12 @@ from ftsbench import build_report
 SERIES_RE = re.compile(r"c1-(?P<config>.+)-c(?P<concurrency>\d+)-(?P<rep>\d+)\.jsonl$")
 
 AXIS_CAVEAT = (
-    "x is not one quantity across engines: OpenSearch --concurrency is whole "
-    "_bulk requests in flight, ScyllaDB --concurrency is rows in flight inside "
-    "one batch (driver-held). Compare the ceilings, not equal-x points."
+    "x is operations in flight on both engines — one operation is --batch-size "
+    "documents, dispatched by the shared ftsbench.load_driver — so equal-x "
+    "points are comparable. Series recorded BEFORE the loaders were unified do "
+    "not satisfy this: there ScyllaDB's --concurrency counted rows inside one "
+    "batch while OpenSearch's counted whole _bulk requests, and only the "
+    "ceilings of those curves may be read, never equal-x points."
 )
 COMMIT_NOTE = (
     "OpenSearch runs refresh_interval=3s to match the vector-store's 3 s "
