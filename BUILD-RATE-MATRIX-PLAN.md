@@ -10,6 +10,47 @@ Companion documents: `results/client-model-2026-09-08/README.md` (why we
 stopped), `WRITE-PATH-TEST-PLAN.md` (the S11–S15 slides this feeds),
 `TUNING.md` (why each knob is set where it is).
 
+## Start here — which session am I in?
+
+This campaign runs as **two separate fleet sessions**, in this order. Doing them
+in one sitting is what the split exists to prevent: the second depends on numbers
+only the first can produce, and the second is ~5 hours on a fully staged fleet
+while the first is minutes on a bare one.
+
+**Session 1 — Phase 0 client calibration.** Full detail in "Phase 0" below.
+Produces two constants the campaign cannot be trusted without:
+
+| Constant | Currently | Must become |
+|---|---|---|
+| `N_max` (worker processes) | 4, extrapolated from a per-process ceiling measured with the OLD thread-per-operation client | a measurement on `fts-harness` |
+| `LOADER_CORE_BOUND_AT` | 0.70, anchored to a ~0.80-core reading from the same pre-rewrite era | a measurement against a known-bound client |
+
+Needs both boxes but **no engines, no corpus, no images**. Build and test the
+null sink, the calibration runner and the gate's positive case LOCALLY first —
+none of that needs a fleet.
+
+**Session 2 — the five-arm matrix.** Everything else in this document. Do not
+start it until every gate below clears.
+
+**How to tell which session you are in:** look at the two constants above in this
+file. If they still read "extrapolated" / "anchored", Phase 0 has not run and you
+are in session 1. Session 1's exit condition is recording them here as measured
+values, with the run that produced them.
+
+**Known state of the harness** (update as this changes):
+
+- `ftsbench/verify_generator.py` — the gate — is **designed, not written**. The
+  design and its corrections are in this file's Gates section; the constant is
+  0.70 and not 0.85 for a reason recorded there.
+- `N = min(c, N_max)`, `M = c / N` is **specified here but not wired into any
+  driver**. `ftsbench/mp_load.py` takes `workers` as a parameter; nothing yet
+  computes it from `c`.
+- Built and tested (locally, against fakes — never against a real engine):
+  `ftsbench/mp_load.py`, `ftsbench/corpus_shard.py`,
+  `ftsbench/generator_probe.py`, `ftsbench/async_http.py`, the async
+  `ftsbench/load_driver.py`, `ftsbench/target.py`'s five arms,
+  `ftsbench/verify_arm.py`, `tools/knob_matrix.sh`.
+
 ## Why this campaign exists
 
 The S12 ceiling ladder in `data/sweep-aws/` was measured 2026-09-01/09-03.
