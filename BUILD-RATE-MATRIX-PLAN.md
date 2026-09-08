@@ -122,6 +122,37 @@ VectorDBBench's own *ingest* is single-process
 pattern comes from its **search** runner, so applying it to ingest is an
 extension of their concept, not a copy.
 
+**G2a — client shape, decided 2026-09-08.** N worker processes, each holding M
+async operations in flight — a superset of VectorDBBench's model, which is the
+same thing at M=1. Processes buy CPU parallelism past the GIL; the async layer
+inside each buys I/O overlap without one process per unit of concurrency, which
+an 8-vCPU harness box cannot afford at the top rungs. This is the shape
+`tools/sharded_build_rate.sh` already has (`SHARDS` x `CONC`), with async
+replacing threads inside.
+
+**Corpus sharding: contiguous.** Balanced on this corpus — the existing
+`corpus-ab-a` / `corpus-ab-b` split is 2,369,432,161 vs 2,373,429,951 bytes for
+600,000 documents each, 0.17% apart — and it is what `sharded_build_rate.sh`
+already assumes. Round-robin would be balanced regardless of corpus ordering but
+needs the frozen corpus re-sharded, and buys nothing measurable here. Order of
+insertion does not affect the result: BM25 term statistics are collection-wide,
+and the invariant that matters is every document exactly once, same set per
+engine — which disjoint shards preserve.
+
+**Note on the cap and sharding together:** at `SWEEP_DOCS=1000000` over N shards,
+contiguous sharding takes 1M/N from the head of each shard, which is a different
+*set* than the first 1,000,000 documents. Fine for engine-vs-engine as long as
+both sides shard identically, but it breaks comparability with the existing
+1M-capped ladders and must be stated on the chart rather than discovered later.
+
+**C3 per-operation latency: keep the asymmetry, disclose it.** A ScyllaDB
+operation carries `--batch-size` rows sent as individual prepared statements;
+one OpenSearch operation is a single `_bulk`. So per-operation `service_ms` is
+not comparable across engines, while per-document throughput remains honest.
+The alternative — making a ScyllaDB operation one row — would leave
+`--batch-size` meaning nothing on that side. C3's footer must state what an
+operation is on each engine.
+
 **G3 — the rungs are re-derived** against that client, with the generator probe
 in place to prove the top rung is engine-bound.
 
