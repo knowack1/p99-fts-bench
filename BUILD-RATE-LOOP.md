@@ -525,6 +525,53 @@ more efficient.** At full corpus it wins on both axes, so the "per box vs per
 core" tension from iteration 3 disappears: that tension only existed at the
 small-corpus operating point.
 
+### Iteration 11 — the merge storm, measured directly in CPU
+
+Same sharded generator, same 1.2M corpus, N=3, **only the writer buffer
+differs** — so this isolates the buffer from the generator:
+
+| buffer | scylladb | vector-store | VS / scylla |
+|---|---|---|---|
+| 15 MB (stock) | 2.00 | **3.76** | **1.88x** |
+| 376 MB (parity) | 2.77 | **2.99** | **1.08x** |
+
+**The vector-store drops 3.76 → 2.99 cores (−20%) from the buffer alone.**
+That is the merge storm `results/fts-bottleneck-2026-08-27` inferred from merge
+counts (~9x more merges at the 15 MB floor), now visible directly as **~0.8 of a
+core spent merging undersized segments instead of indexing**. It also explains
+the long-standing observation that the vector-store "always ate more CPU than
+ScyllaDB": at stock it did, by 1.88x; at parity the two sides are level.
+
+**ScyllaDB's 2.00 → 2.77 is not more work** — it is a measurement-window
+artifact. Scylla performs identical writes in both configurations and the
+loaders finish at ~63 s either way, but the whole build shortens from 139 s to
+98 s, so the write-saturated phase is 64% of the window instead of 45% and the
+median rises. Same numerator, smaller denominator.
+
+**Consequence for the growth charts.** The full-corpus S14-style chart at
+376 MB shows ScyllaDB *above* the vector-store early, inverting the original.
+That inversion is **two effects compounded**, and only the first is an engine
+property:
+
+- buffer → vector-store down ~0.8 core (isolated above);
+- sharded generator → ScyllaDB up early, because two loader processes deliver
+  ~18,900 docs/s while the index consumes ~6,500. Measured on b4 rep 1: the
+  loaders finished all 8,967,625 rows at **t=474 s**, when the index held only
+  **3,060,955** — which is exactly where the curves cross. The remaining
+  **592 s (56% of the build) is pure drain with no write load at all.**
+
+**So the sharded generator is right for ceilings (S12) and wrong for growth
+charts (S13/S14/S15)**: it front-loads every write into the first 44% of the
+build instead of pacing them alongside indexing, which is what the original
+single-loader runs did. Those charts should use `scylla_load --target-rate`
+(the pacer already exists) to hold writes near the index's own rate, rather
+than saturating and then draining.
+
+**Retraction:** the earlier note that "the ~7.0–7.5M dip disappeared after the
+buffer fix" **cannot be supported** — that comparison changed the buffer *and*
+the generator, and the generator alone reshapes the curve. Settling it needs a
+15 MB full-corpus run through the same sharded generator, which was never taken.
+
 ### Status against the loop's goal
 
 The original target — lift `scylla-cdc` from ~9k to near OpenSearch's ~11.7k —
