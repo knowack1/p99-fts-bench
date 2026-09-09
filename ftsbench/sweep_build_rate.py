@@ -6,9 +6,14 @@ function the C1 sidecar uses, so a point here and a C1 number over the same
 series cannot disagree.
 
 Comparability, recorded here because it travels with the artifact:
-`--concurrency` is now the same quantity on both sides — operations in flight,
-one operation being `--batch-size` documents — because both loaders dispatch
-through `ftsbench.load_driver`. Equal-x points are therefore comparable.
+`--concurrency` is now the same quantity on both sides — outstanding requests
+to the engine — because both loaders dispatch through `ftsbench.load_driver`.
+What one request CARRIES is deliberately not the same quantity: on OpenSearch
+it is `--batch-size` documents in one `_bulk`, on ScyllaDB one row in one
+INSERT, the CQL path having no wire batch. Equal-x points therefore hold equal
+requests and unequal documents in flight, and each point records the batch size
+it ran with so the difference is auditable from the files — a series that
+predates that header field says so rather than being read as agreement.
 
 This was not true of series recorded before that unification: OpenSearch counted
 whole `_bulk` requests in flight while ScyllaDB counted rows inside one batch,
@@ -33,12 +38,20 @@ from ftsbench import build_report
 SERIES_RE = re.compile(r"c1-(?P<config>.+)-c(?P<concurrency>\d+)-(?P<rep>\d+)\.jsonl$")
 
 AXIS_CAVEAT = (
-    "x is operations in flight on both engines — one operation is --batch-size "
-    "documents, dispatched by the shared ftsbench.load_driver — so equal-x "
-    "points are comparable. Series recorded BEFORE the loaders were unified do "
-    "not satisfy this: there ScyllaDB's --concurrency counted rows inside one "
-    "batch while OpenSearch's counted whole _bulk requests, and only the "
-    "ceilings of those curves may be read, never equal-x points."
+    "x is outstanding requests to the engine on both engines, dispatched by the "
+    "shared ftsbench.load_driver. What one request CARRIES differs by design: "
+    "--batch-size documents in one _bulk on OpenSearch against one row in one "
+    "INSERT on ScyllaDB, which runs at --batch-size 1 because the CQL path has "
+    "no wire batch. At equal x the two engines hold equal requests and unequal "
+    "documents in flight — for example x=64 at batch 512 is 64 requests "
+    "carrying 32,768 documents against 64 carrying 64 — so read equal-x points "
+    "as equal request pressure, never as equal document pressure. The batch "
+    "size each engine actually ran at is recorded per point and named below. "
+    "Series recorded BEFORE the loaders were unified do not satisfy even the "
+    "request reading: "
+    "there ScyllaDB's --concurrency counted rows inside one batch while "
+    "OpenSearch's counted whole _bulk requests, and only the ceilings of those "
+    "curves may be read, never equal-x points."
 )
 COMMIT_NOTE = (
     "OpenSearch runs refresh_interval=3s to match the vector-store's 3 s "
@@ -51,7 +64,8 @@ COMMIT_NOTE = (
 )
 
 CSV_COLUMNS = (
-    "config", "engine", "concurrency", "rep", "docs_total",
+    "config", "engine", "concurrency", "batch_size", "rows_in_flight",
+    "rep", "docs_total",
     "build_wall_seconds", "docs_per_s_overall", "docs_per_s_median",
     "docs_per_s_mean", "docs_per_s_p10", "docs_per_s_p90", "docs_per_s_max",
     "throughput_variability", "stall_fraction", "merges_total",
@@ -69,6 +83,22 @@ class Point:
     summary: dict
     header: dict
     path: str
+
+    @property
+    def engine(self) -> str:
+        return str(self.header.get("engine") or "unrecorded")
+
+    @property
+    def batch_size(self) -> int | None:
+        """None where the series predates the header field — which is a missing
+        record, never an agreement with whatever the other points recorded."""
+        size = self.header.get("batch_size")
+        return None if size is None else int(size)
+
+    @property
+    def rows_in_flight(self) -> int | None:
+        rows = self.header.get("rows_in_flight")
+        return None if rows is None else int(rows)
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,11 +147,70 @@ def load_point(path: str) -> Point | None:
                  summary=summary, header=header, path=path)
 
 
+def plotted_points(points: list[Point], metric: str) -> list[Point]:
+    """The points that reach the axes: a point with no value for the plotted
+    metric contributes nothing to the chart and nothing to its agreements."""
+    return [point for point in points if point.summary.get(metric) is not None]
+
+
+def batch_sizes_by_engine(points: list[Point]) -> dict[str, dict[int | None, list[str]]]:
+    grouped: dict[str, dict[int | None, list[str]]] = {}
+    for point in points:
+        by_size = grouped.setdefault(point.engine, {})
+        by_size.setdefault(point.batch_size, []).append(point.path)
+    return grouped
+
+
+def batch_label(size: int | None) -> str:
+    if size is None:
+        return "batch size UNRECORDED (series predates the header field)"
+    return f"{size} document per operation" if size == 1 else \
+        f"{size} documents per operation"
+
+
+def batch_disagreement(engine: str, by_size: dict[int | None, list[str]]) -> str:
+    detail = "; ".join(
+        f"{batch_label(size)} -> {', '.join(sorted(paths))}"
+        for size, paths in sorted(by_size.items(), key=lambda item: str(item[0])))
+    return (f"{engine}: points on this axis ran at more than one batch size "
+            f"({detail}). One engine's curve is then a batch effect and a "
+            "concurrency effect at once, and the chart cannot say which. Each "
+            "batch level writes to its own OUT_DIR/b<batch>/ directory — "
+            "summarise them one directory at a time, and render the batch axis "
+            "with tools/plot_batch_ceiling.py")
+
+
+def assert_one_batch_size_per_engine(points: list[Point]) -> None:
+    """Every plotted point of one engine must have recorded the same batch size.
+
+    x is outstanding requests, so a curve mixing batch levels moves for two
+    reasons at once. An unrecorded batch size is its own value here rather than
+    a wildcard: the S28 retraction turned on a header that recorded no
+    concurrency, and reading silence as agreement is how that became
+    unauditable.
+    """
+    for engine, by_size in sorted(batch_sizes_by_engine(points).items()):
+        if len(by_size) > 1:
+            raise SystemExit(batch_disagreement(engine, by_size))
+
+
+def write_shape_note(points: list[Point]) -> str:
+    """What one request carried, per engine, read from the headers rather than
+    from the flags this summariser was launched with."""
+    parts = [f"{engine}: {', '.join(batch_label(size) for size in sorted(by_size, key=str))}"
+             for engine, by_size in sorted(batch_sizes_by_engine(points).items())]
+    if not parts:
+        return ""
+    return "one request carried — " + "; ".join(parts)
+
+
 def csv_row(point: Point) -> dict:
     env = point.header.get("env", {})
     row = {
         "config": point.config,
         "concurrency": point.concurrency,
+        "batch_size": point.batch_size,
+        "rows_in_flight": point.rows_in_flight,
         "rep": point.rep,
         "swap_used_bytes": env.get("swap_used_bytes"),
         "load_avg_1m": round(env.get("load_avg_1m", 0.0), 3),
@@ -194,7 +283,8 @@ def ensure_parent(path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
 
-def plot(path: str, table: dict, args: argparse.Namespace) -> None:
+def plot(path: str, table: dict, args: argparse.Namespace,
+         write_shape: str = "") -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -204,7 +294,7 @@ def plot(path: str, table: dict, args: argparse.Namespace) -> None:
     for index, config in enumerate(sorted(table)):
         draw_config(axes, config, table[config], index, plotlib)
     finish_axes(axes, table)
-    annotate(figure, axes, args)
+    annotate(figure, axes, args, write_shape)
     ensure_parent(path)
     figure.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(figure)
@@ -240,13 +330,14 @@ def finish_axes(axes, table: dict) -> None:
     axes.legend(loc="center right", frameon=True, fontsize=10)
 
 
-def annotate(figure, axes, args: argparse.Namespace) -> None:
+def annotate(figure, axes, args: argparse.Namespace, write_shape: str = "") -> None:
     from ftsbench import plotlib
     axes.set_title(args.title, fontsize=14, loc="left", pad=18)
     axes.text(0.0, 1.02, "docs/s ceiling vs loader concurrency, median of repetitions "
                          "(bars span min..max)", transform=axes.transAxes,
               fontsize=9, color="#444444")
-    footer = "\n".join(part for part in (AXIS_CAVEAT, COMMIT_NOTE, args.footer_extra) if part)
+    footer = "\n".join(part for part in (AXIS_CAVEAT, write_shape, COMMIT_NOTE,
+                                         args.footer_extra) if part)
     figure.text(0.01, -0.02, footer, fontsize=7.8, color="#444444", ha="left", va="top",
                 wrap=True)
     if args.stamp:
@@ -263,7 +354,10 @@ def main() -> int:
     if not points:
         print("no usable series")
         return 1
-    table = aggregate(points, args.metric)
+    drawn = plotted_points(points, args.metric)
+    assert_one_batch_size_per_engine(drawn)
+    write_shape = write_shape_note(drawn)
+    table = aggregate(drawn, args.metric)
 
     write_csv(args.output_csv, points)
     wide = f"{os.path.splitext(args.output_csv)[0]}-wide.csv"
@@ -271,9 +365,10 @@ def main() -> int:
     ensure_parent(args.output_json)
     with open(args.output_json, "w") as handle:
         json.dump({"metric": args.metric, "axis_caveat": AXIS_CAVEAT,
+                   "write_shape_note": write_shape,
                    "commit_policy_note": COMMIT_NOTE, "configs": table,
                    "runs": [csv_row(p) for p in points]}, handle, indent=1)
-    plot(args.output_png, table, args)
+    plot(args.output_png, table, args, write_shape)
 
     print(f"per-run CSV  : {args.output_csv}  ({len(points)} runs)")
     print(f"wide CSV     : {wide}")

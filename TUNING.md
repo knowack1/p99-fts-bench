@@ -16,9 +16,9 @@ symmetry, or judgement, and not yet tested).
 
 | Knob | OpenSearch (`opensearch_load`) | ScyllaDB (`scylla_load`) | Why | Evidence |
 |---|---|---|---|---|
-| Batch size | `--batch-size 500` (default) | `--batch-size 1000` (default) | Historical defaults, kept so the preliminary C1 run stays reproducible. | **measured, and the defaults are wrong for C3** — see §4 |
-| Client concurrency | `--concurrency` = operations in flight | `--concurrency` = operations in flight | **Unified 2026-09-08** (`ftsbench.load_driver`). One operation is `--batch-size` documents on both sides, and the Makefile passes the same `INGEST_CONCURRENCY` to each. Recorded in the artifact header with an explicit `concurrency_unit`. | **measured** |
-| Meaning of "concurrency" | operations (`_bulk` requests) in flight | operations (batches) in flight | Was the harness's worst asymmetry: the flags shared a name, not a quantity. Both now dispatch through one driver, so they share the quantity too. ScyllaDB's driver-internal rows-in-flight is `--rows-in-flight`, defaulting to the whole batch, which mirrors one `_bulk` carrying `--batch-size` documents. | measured |
+| Batch size | `--batch-size 500` (default); the axis the build-rate matrix sweeps | **no such flag** — one operation is one prepared INSERT | There is no CQL wire batch to size, so a batch flag on that side could only ever set a client-side dispatch window while reading like a wire quantity. Removed 2026-09-09. | **measured** — see §4 and "Batch size on the C1 build path" |
+| Client concurrency | `--concurrency` = operations in flight | `--concurrency` = operations in flight, **and the only write-side knob** | **Unified 2026-09-08** (`ftsbench.load_driver`). The Makefile passes the same `INGEST_CONCURRENCY` to each. Recorded in the artifact header with an explicit `concurrency_unit`. | **measured** |
+| Meaning of "concurrency" | operations (`_bulk` requests) in flight | operations (single INSERTs) in flight | Was the harness's worst asymmetry: the flags shared a name, not a quantity. Both now dispatch through one driver, so they share the quantity too. What one request *carries* still differs — N documents versus one row — and that is the real difference between a bulk API and per-row CQL, so it belongs in the chart footer rather than in a knob. The ScyllaDB-only `--rows-in-flight` was a second bound that could only disagree with `--concurrency`; removed 2026-09-09. | measured |
 | Offered rate | `--target-rate` docs/s, `0` = closed loop | `--target-rate` docs/s, `0` = closed loop | C3 needs a *controlled* offered rate. At saturation the recorded tail is queueing delay, not engine behaviour. | assumed (rate to be picked from the C1 maxima) |
 | Dispatch schedule | fixed intended-start schedule (`ftsbench.pacer`) | same | Coordinated-omission safety. `queue_ms` is recorded per op so the reader can check it. | measured (unit-tested) |
 | Document identity | explicit `_id = page_id` | `article_id = uuid5(page_id)` as PK | Both loaders are idempotent, so a re-run overwrites instead of doubling the corpus and the exact-doc-count gate stays meaningful. | assumed |
@@ -235,3 +235,154 @@ process on the harness box (`make calibrate-os` / `calibrate-scylla`):
 The GIL-bound request path is why every cube cell runs through
 `ftsbench.cell_bench_mp` (K spawned processes, raw-sample merge); each cell
 carries `shard_qps` so the client-bound gate can be re-checked per artifact.
+
+## 8. Write-path build-rate ceilings and `c_sat` (AWS fleet, measured 2026-09-08)
+
+Concurrency ladder `4 8 16 32 64 96 128` at `--batch-size 512`,
+1,000,000-doc points, **N=3**, on the frozen enwiki corpus. `c_sat` is the
+smallest rung reaching 97% of the best rung observed — stated rather than
+eyeballed, because the argmax on a shallow plateau pins later runs to a
+concurrency the engine does not need. Evidence:
+`results/aws-batch-axis-2026-09-08/matrix/`.
+
+| Arm | `c_sat` | Ceiling (N=3) | Plateau band | G7 headroom |
+|---|---|---|---|---|
+| `opensearch-ramindex` (refresh 3 s) | **8** | **12,913 docs/s** | 12,576–12,913 from c=8, flat | 2.15x — clears |
+| `opensearch-ramindex-refresh30` | **8** | **13,997 docs/s** | 13,267–13,997 from c=8, noisier | **1.98x — LOWER BOUND** |
+| `scylla-cdc-buf15` / `-buf376` / `-buf376-commit30` | owed | owed | — | needs its own ladder at `--batch-size 1`, and P0 says that needs **four loader processes** — see below |
+
+Refresh 30 s buys **+8.4%** over refresh 3 s at N=3.
+
+**These supersede the withdrawn 11,063 / 8,992 docs/s at `c_sat`=64.** Those
+were taken with the thread-per-request client at concurrencies where it was the
+constraint. The rebuilt async client saturates at c=8 and does not improve
+above it.
+
+**They also supersede an N=1 ladder run the same evening**, which read
+`c_sat`=16 and 13,431 docs/s for the refresh-3 s arm on an apparently
+monotonic curve. At N=3 that rise does not reproduce: the curve is flat from
+c=8 with a 2.7% band and no trend, so the N=1 rise was noise. This is the
+argument for N=3 stated as a measurement rather than as a policy.
+
+**`opensearch-ramindex-refresh30`'s ceiling is a lower bound.** A single loader
+process ceilings at 27,699 docs/s at this batch size, so 13,997 sits at 1.98x
+— under the 2x rule that separates an engine number from a client-bound one.
+Certifying it needs a second loader process, not a longer run.
+
+**`--concurrency` now demonstrably means outstanding requests to the engine.**
+The OpenSearch write thread pool held 4.0 of its 4 threads active with a queue
+of almost exactly `c - 5` at every rung — 3 at c=8, 11 at c=16, 27 at c=32, 59
+at c=64, 91 at c=96, 123 at c=128 — with zero rejections throughout. The pool
+depth is recorded per sample in every C1 series from this pass onward
+(`write_active`, `write_queue`, `write_rejected`, `write_pool_size`).
+
+| | |
+|---|---|
+| Engine CPU at `c_sat` | **3.99 of 4 cores** (`OS_CPUS=4`, `OS_CPUSET=4-7`) — CPU-bound, not concurrency-bound |
+| Loader CPU at `c_sat` | **0.59–0.61 of one core**, single-threaded (`busiest_thread_cores` equals the process total) |
+| Harness box | 0.60–0.64 of 8 cores, 1% CPU pressure |
+
+The loader figure is the one the generator gate reads, and P0 measured the
+bound the same evening: **`LOADER_CORE_BOUND_AT` = 0.850** for the OpenSearch
+client (0.85 of a fully saturated 1.000-core thread, 48 points) and **0.747**
+for the ScyllaDB client (0.85 of a measured 0.879 thread, 12 points). The old
+0.70 was too conservative for OpenSearch. At 0.6 of a core the loader sits
+about 1.4x under its bound — not the ~13x the box-level number suggests — so
+the headroom is in processes, which is what the `N x M` shape exists for.
+
+### Per-process client ceilings (P0, null sink, one process)
+
+| Client | Ceiling | Note |
+|---|---|---|
+| OpenSearch, any of `--batch-size` 16/64/128/256/512 | **26.5k–27.7k docs/s** (1,658.9 → 54.1 operations/s) | flat in batch size: the client's cost is per-document, so batch moves how many requests it makes, not how fast it can go |
+| ScyllaDB at `--batch-size 1` | **8,003 docs/s** | one operation is one document is one prepared statement |
+
+| Processes | OpenSearch | ScyllaDB (batch 1) |
+|---|---|---|
+| 1 | 27,686 docs/s | 8,003 docs/s |
+| 2 | 52,469 (1.90x) | 15,438 (1.93x) |
+| 4 | 99,443 (3.59x) | 28,530 (3.56x) |
+
+**`N_max` = 4 is a lower bound** — neither ladder had stopped scaling.
+
+**The ScyllaDB arms need four loader processes at batch 1.** 8,003 docs/s in
+one process against a ScyllaDB engine ceiling near 12,228 is 0.66x: the client
+would be the constraint. N=2 gives 1.26x and still fails the 2x rule; N=4
+gives 2.34x. `tools/sweep_build_rate.sh` launches one loader, so wiring
+`ftsbench.mp_load` into it is what unblocks R1–R3. That is the price of the
+batch-1 decision, and the answer is more processes, never a larger batch.
+
+### The ramindex arm cannot hold the frozen corpus (measured 2026-09-08)
+
+`OS_RAM_INDEX_SIZE=12 GiB` holds about **4.0 million documents** of the frozen
+enwiki corpus — 45% of it. A full-corpus growth run filled the tmpfs at
+**4,025,699 documents**, OpenSearch threw `No space left on device`, the shard
+failed and the cluster went red mid-run. Roughly **3 GB of tmpfs per million
+documents**, merge working space included.
+
+**The budget cannot be raised at parity.** tmpfs pages count against the
+container's memory, so with `OS_MEM_LIMIT=28g` and `OS_HEAP=-Xmx14g` the tmpfs
+cannot exceed about 14 GiB, while the full corpus needs ~27 GB of index plus
+headroom for merges. Reaching it would mean an `OS_MEM_LIMIT` near 55–70g on a
+61 GB box — which is both most of the machine and a larger memory budget than
+the ScyllaDB side gets, so it would break the equal-budget claim the ramindex
+parity choice exists to support.
+
+Consequences, in the order they bite:
+
+- **Any full-corpus OpenSearch measurement must use the disk-store arm**
+  (`--opensearch-disk-store-refresh1` / `-refresh30`), whose index lives on
+  `/mnt/nvme`. That is a different arm from the one the deck's write-path
+  slides use, so its numbers do not pair with a ramindex ceiling.
+- **Growth curves on the ramindex arm are bounded by the arm, not by choice.**
+  Measured at a 3,000,000-document cap, which leaves ~3 GB of the tmpfs for
+  merges.
+- The failure is loud rather than silent — ENOSPC, a red cluster and a
+  `sample failed: 'merges'` storm in the monitor — but it is loud *after* four
+  million documents, so a full-corpus run has to be planned around it rather
+  than discovered by it.
+
+### Batch size on the C1 build path
+
+**An OpenSearch quantity only.** `OS_BATCH_SIZE` is 512; the ScyllaDB loader
+has no batch flag at all, because one ScyllaDB operation is one document is one
+prepared statement. That is what makes `--concurrency` the same quantity on both
+engines, and the ceiling on the ScyllaDB arm is found by raising it alone.
+
+**Consequence for C3:** its two arms no longer record the same quantity. One
+OpenSearch latency covers a `C3_BATCH`-document `_bulk`; one ScyllaDB latency
+covers one INSERT. There is no CQL batch to match, so the chart has to say so
+rather than the harness pretending otherwise. C3 is not in the deck and is kept
+as a diagnostic.
+
+Measured on `opensearch-ramindex` at `c_sat`=16, N=3
+(`results/aws-batch-axis-2026-09-08/axis/`):
+
+| `--batch-size` | docs/s | docs per engine core-second |
+|---|---|---|
+| 16 | 12,273 | 3,076 |
+| 64 | 13,078 | 3,279 |
+| 128 | 13,093 | 3,283 |
+| 256 | 13,246 | 3,321 |
+| 512 | 13,237 | 3,319 |
+
+**Worth 6.8% between 16 and the plateau, and nothing measurable above 64** —
+the plateau spans 0.7% against repetition spreads of 1.1–3.8%. The mechanism is
+engine-side: the engine held 3.99/4 cores and a 4.0/4-active pool with 11
+queued at *every* level, so what the batch size changed was CPU per document,
+not how busy the engine was. The loader's own CPU is flat across a 32-fold
+change in requests per document, which is the measured form of §4's point that
+encode cost is per-document work and does not amortise over batch size.
+
+Doubling the concurrency at every level moved the result by −2.5% to +0.0%, so
+512 is not a starved reading of a knob that wanted more parallelism.
+
+`opensearch-ramindex-refresh30` at `c_sat`=8 reads the same shape a little
+higher and a lot noisier — 12,584 / 13,431 / 13,822 / 13,639 / **13,993**
+docs/s at batch 16/64/128/256/512, spreads 2.9–5.7%, plateau 13,731, batch 16
+at −8.4%. **Two of its cells are lower bounds, not ceilings.** A single loader
+process ceilings near 27.5k docs/s, so the G7 headroom is 2.08–2.16x on the
+`opensearch-ramindex` arm but only **1.98x** at refresh30's batch 128 and
+batch 512 — just under the 2x rule. **Its 13,993 docs/s is the highest figure
+in the pass and the gate declines to certify it**; promoting those two cells
+needs a second loader process, not a longer run.

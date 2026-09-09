@@ -37,7 +37,12 @@ from matplotlib.figure import Figure  # noqa: E402
 from .runmeta import read_jsonl  # noqa: E402
 from .stats import is_stable, is_supported, min_samples_for, percentile  # noqa: E402
 
-PRELIMINARY_STAMP = "PRELIMINARY — laptop, simplewiki, not quotable"
+# Every renderer takes this as its --stamp-text default and none overrides it,
+# so it must not name a machine or a corpus: it named the laptop and simplewiki
+# long after the campaign moved to the fleet and enwiki, which put the wrong
+# provenance on the face of a chart whose footer already carries the right one
+# from the manifests. A caller with provenance to state passes --stamp-text.
+PRELIMINARY_STAMP = "PRELIMINARY — not quotable"
 WRITE_PATH_DISCLOSURE = (
     "Write paths are not the same shape: the ScyllaDB side performs a durable "
     "base-table write plus a CDC hop plus an in-RAM Tantivy index build; the "

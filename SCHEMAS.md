@@ -21,6 +21,7 @@ never per record.
   "cache_state": "cold",
   "corpus": "data/corpus.jsonl",
   "max_docs": 0,
+  "batch_size": 512,
   "started_at": "2026-08-19T18:00:00+00:00",
   "git_commit": "ef62eb7",
   "host": {"hostname": "...", "cpu_count": 22, "total_ram_bytes": 0},
@@ -33,9 +34,40 @@ never per record.
 `os.sched_getaffinity(0)` sorted, so a run that was *not* pinned is visible as
 the full core list.
 
+`batch_size` is the **write shape**: how many documents one operation carried.
+It is optional and **absent rather than zero** where the caller did not name it
+— a query producer has no batch to report, and a synthesised default would read
+as a measured fact.
+
+The shape has to be recorded because a batch is not the same object on the two
+engines. On OpenSearch it is a wire batch: N documents in one `_bulk`, one
+request the engine sees, and it is the axis the build-rate matrix sweeps
+(16/64/128/256/512). On ScyllaDB every row goes as its own prepared statement,
+so there is no wire batch at all: the loader takes no batch flag, one operation
+is exactly one INSERT, `batch_size` is recorded as the constant 1, and
+`--concurrency` is the whole write-side axis. Two series at the same concurrency
+are therefore two different write shapes, and
+`results/aws-enwiki-2026-09/S28-RETRACTION.md` is what an unrecorded run shape
+costs: that header named no concurrency, so a defect found later could not be
+audited from the files the run produced.
+
+**Retired fields.** `rows_in_flight` and `unlogged_batch_rows` were ScyllaDB-only
+and are no longer written by any producer: the first duplicated `--concurrency`,
+the second grouped rows inside an operation that now holds one. Artifacts
+produced before 2026-09-09 carry them and every reader still parses them; new
+runs do not.
+
 Shared helper: `ftsbench.runmeta.header(...)` builds this dict. Producers must
 not hand-roll it — a header that differs between producers breaks the results
 tree generator.
+
+## `run_manifest` — one file per (config, repetition)
+
+Produced by `ftsbench.run_manifest` beside the series it names. Carries the
+same write-shape field as the header — `batch_size` — under the same
+absent-rather-than-zero rule. The duplication is deliberate: a manifest that
+disagrees with its series is the only way to catch a sweep that passed one batch
+size to `make` and another to the loader.
 
 ## `sample` — index build progress (C1, C2) — EXISTS, unchanged
 
@@ -200,3 +232,26 @@ for `index_status == "SERVING"`.
 is the only place they are enumerated; `scylla-bootstrap` is among them but
 is out of the campaign. Plot modules glob `<chart>-<config>-*.jsonl`,
 matching the `plot_c1` convention already in use.
+
+The build-rate sweep adds a concurrency token: `c1-<config>-c<N>-<rep>.jsonl`
+(`ftsbench/sweep_build_rate.py`'s `SERIES_RE`), with repetition 0 the discarded
+warm-up.
+
+When `tools/sweep_build_rate.sh` is given `BATCHES`, each batch level's
+artifacts go in **`$OUT_DIR/b<batch>/`** — `b16/`, `b64/`, … — and the filenames
+inside are **unchanged**:
+
+```
+data/sweep-batch/b512/c1-opensearch-ramindex-c64-1.jsonl
+data/sweep-batch/b512/manifest-opensearch-ramindex-c64-1.json
+data/sweep-batch/b512/cpu-opensearch-ramindex-c64-1.jsonl
+```
+
+The level is in the directory and not in the filename on purpose: `SERIES_RE`
+needs no new token, and every summary, chart and CPU verdict taken over one
+directory is internally single-batch. `ftsbench/sweep_build_rate.py` asserts
+that on the reading side — one recorded batch size per engine, with an
+unrecorded one counted as its own value rather than as agreement — and
+`tools/plot_batch_ceiling.py` renders the levels against each other for one
+engine at a time. With `BATCHES` unset there is no subdirectory and the series
+sit directly in `$OUT_DIR`, as every measured pass in `results/` has them.

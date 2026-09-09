@@ -59,6 +59,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--corpus", default="", help="corpus path used")
     parser.add_argument("--max-docs", type=int, default=0, help="0 = uncapped")
     parser.add_argument("--series", default="", help="time series this run produced")
+    # Second, independent record of the write shape the run used: the series
+    # header carries it too, and a manifest that disagrees with its series is
+    # the only way to catch a sweep that passed one batch size to make and
+    # another to the loader. None keeps the key out of manifests whose caller
+    # says nothing about batching, so existing manifests stay byte-identical.
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="documents per loader operation")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_FILE),
                         help="compose env file the image pins are read from")
     parser.add_argument("--os-url", default="http://localhost:9200")
@@ -205,6 +212,16 @@ def engine_probes(config: str, args: argparse.Namespace) -> dict:
     }
 
 
+def write_shape(args: argparse.Namespace) -> dict[str, int]:
+    """The loader's write shape, recorded only where the caller named it.
+
+    An unset flag is absent from the manifest rather than recorded as a guess:
+    a zero or a default would read as a measured fact.
+    """
+    shape = {"batch_size": args.batch_size}
+    return {key: value for key, value in shape.items() if value is not None}
+
+
 def build_manifest(args: argparse.Namespace) -> dict:
     return {
         "record": "run_manifest",
@@ -216,6 +233,7 @@ def build_manifest(args: argparse.Namespace) -> dict:
         "cache_state": args.cache_state,
         "corpus": args.corpus,
         "max_docs": args.max_docs,
+        **write_shape(args),
         "series": args.series,
         "images": pinned_images(args.env_file),
         "engines": engine_probes(args.config, args),

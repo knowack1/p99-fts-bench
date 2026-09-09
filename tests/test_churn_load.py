@@ -85,7 +85,7 @@ def churn_args(concurrency: int, batch_size: int, **overrides):
 
 
 def fixed_source(stream: churn_stream.ChurnStream, count: int):
-    def source(args, origin_s):
+    def source(args, origin_s, _docs_per_operation):
         for _ in range(count):
             yield stream.next_batch()
 
@@ -235,3 +235,41 @@ class _StopAfter:
     def __call__(self) -> bool:
         self._remaining -= 1
         return self._remaining < 0
+
+
+class StubResponseFuture:
+    """The driver's `ResponseFuture` surface `awaitable` bridges: a pair of
+    callbacks, called on the driver's own reactor thread."""
+
+    def add_callbacks(self, callback, errback) -> None:
+        callback(None)
+
+
+class StubStatements:
+    def __init__(self) -> None:
+        self.sent: list[tuple] = []
+
+    def execute_async(self, statement, params) -> StubResponseFuture:
+        self.sent.append((statement, params))
+        return StubResponseFuture()
+
+
+def test_a_churn_operation_reaches_the_session_it_was_given():
+    """`attempt_statements` is the ScyllaDB half of every churn operation and
+    `churn_load` is its only caller, so nothing else exercises it — the
+    concurrency tests above drive the OpenSearch dispatch path.
+
+    Without this, a coroutine handed to `outcome_of` unawaited raises
+    `TypeError: 'coroutine' object is not iterable` on the very first churn
+    operation of a run, and the S28 grid's ScyllaDB column cannot be measured
+    at all.
+    """
+    from ftsbench import scylla_load
+
+    session = StubStatements()
+    statements = [("insert", ("a",)), ("delete", ("b",))]
+    attempt = asyncio.run(
+        scylla_load.attempt_statements(session, statements))
+
+    assert session.sent == statements, "the operation never reached the session"
+    assert attempt.failed == [] and not attempt.error

@@ -160,6 +160,7 @@ def opensearch_loader(args: argparse.Namespace) -> Iterator[load_driver.EngineLo
     yield load_driver.EngineLoader(
         name="churn", engine="opensearch", op_kind=churn_stream.OP_STEADY,
         engine_version="unknown",
+        docs_per_operation=args.batch_size,
         encode=partial(bulk_payload, index=args.index),
         send=partial(opensearch_load.send,
                      opensearch_load.bulk_pool(url, args.concurrency)),
@@ -176,10 +177,11 @@ def scylla_loader(args: argparse.Namespace) -> Iterator[load_driver.EngineLoader
             "INSERT INTO articles (article_id, page_id, title, body) "
             "VALUES (?, ?, ?, ?)")
         delete = session.prepare("DELETE FROM articles WHERE article_id = ?")
-        attempt = partial(scylla_load.attempt_statements, session, 0)
+        attempt = partial(scylla_load.attempt_statements, session)
         yield load_driver.EngineLoader(
             name="churn", engine="scylladb", op_kind=churn_stream.OP_STEADY,
             engine_version=scylla_load.engine_version(session),
+            docs_per_operation=args.batch_size,
             encode=partial(statement_parameters, insert=insert, delete=delete),
             send=partial(send_statements, attempt),
             header_fields={"keyspace": args.keyspace,

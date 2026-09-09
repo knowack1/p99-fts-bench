@@ -32,6 +32,9 @@ SWEEP_DOCS="${SWEEP_DOCS:-1000000}"
 # median of 5 is the third, which it cannot. That is what the 2026-09-01
 # no-warm-up decision rested on, so dropping to N=3 buys the warm-up point back.
 WARMUP="${WARMUP:-1}"
+# DRY_RUN=1 explains the matrix instead of running it: no stack, no
+# directories, no log files — see tools/explain_build_rate.sh.
+DRY_RUN="${DRY_RUN:-0}"
 
 ARMS=(
   --scylladb-cdc-buf15
@@ -41,14 +44,18 @@ ARMS=(
   --opensearch-ram-nostore-refresh30
 )
 
-export OUT_DIR LADDER SWEEP_DOCS WARMUP
-mkdir -p "$OUT_DIR" "$LOG_DIR"
+export OUT_DIR LADDER SWEEP_DOCS WARMUP DRY_RUN
+[[ "$DRY_RUN" == 1 ]] || mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 log() { printf '\n######## [%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 for arm in "${ARMS[@]}"; do
   name="${arm#--}"
   log "ARM $arm  (reps=$REPS, ladder='$LADDER', cap=$SWEEP_DOCS)"
+  if [[ "$DRY_RUN" == 1 ]]; then
+    tools/sweep_build_rate.sh "$arm" "$REPS"
+    continue
+  fi
   if ! tools/sweep_build_rate.sh "$arm" "$REPS" 2>&1 | tee "$LOG_DIR/$name.log"; then
     # An arm aborts only when its knobs did not take effect, which invalidates
     # every point after it too. Stopping is the point: continuing would fill the
@@ -57,6 +64,8 @@ for arm in "${ARMS[@]}"; do
     exit 1
   fi
 done
+
+[[ "$DRY_RUN" == 1 ]] && exit 0
 
 log "matrix complete — $(ls "$OUT_DIR"/c1-*.jsonl 2>/dev/null | wc -l) points in $OUT_DIR"
 if [[ -s "$OUT_DIR/failed-points.log" ]]; then

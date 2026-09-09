@@ -69,7 +69,23 @@ C1_SCYLLA_CDC_MANIFEST ?= $(DATA_DIR)/manifest-scylla-cdc-$(REP).json
 # the same batch size to both loaders: batch size sets how many documents one
 # recorded latency covers, and comparing a 500-doc p99 against a 2000-doc p99
 # is comparing two different quantities.
+# Removed with the ScyllaDB batch axis: one operation is one prepared INSERT,
+# --concurrency is the only knob, and the UNLOGGED BATCH diagnostic is gone with
+# them. A caller still setting one of these asked for a shape this harness no
+# longer has. Ignoring it would run the per-row path under a label saying
+# otherwise — the S28 failure — so the run is refused instead. Six scripts in
+# tools/ drive the removed mode and will stop here by design.
+RETIRED_SCYLLA_KNOBS = SCYLLA_BATCH_SIZE SCYLLA_ROWS_IN_FLIGHT SCYLLA_UNLOGGED_BATCH_ROWS
+$(foreach knob,$(RETIRED_SCYLLA_KNOBS),$(if $(filter command\ line environment,$(origin $(knob))),$(error $(knob) was removed: ScyllaDB has no batch axis and no second in-flight bound — one operation is one prepared INSERT and --concurrency is the only knob)))
+
+# Batch size is an OpenSearch quantity only. On OpenSearch a batch is a wire
+# batch: N documents in one _bulk, one request. ScyllaDB has no wire batch — the
+# rows go as individual prepared statements — so its loader takes no batch flag
+# at all and one operation is exactly one INSERT. --concurrency therefore counts
+# outstanding requests on both engines, and the batch axis the build-rate matrix
+# sweeps is OpenSearch's alone.
 BATCH_SIZE ?= 500
+OS_BATCH_SIZE ?= $(BATCH_SIZE)
 INGEST_CONCURRENCY ?= 8
 OS_CONCURRENCY ?= $(INGEST_CONCURRENCY)
 SCYLLA_CONCURRENCY ?= $(INGEST_CONCURRENCY)
@@ -111,39 +127,20 @@ VS_CONTAINER ?= fts-bench-vector-store
 # two different clients again.
 OS_LOAD = $(TASKSET) $(PYTHON) -m ftsbench.opensearch_load --corpus $(CORPUS) \
 	--url $(OS_URL) --index $(OS_INDEX) --max-docs $(MAX_DOCS) \
-	--batch-size $(BATCH_SIZE) --concurrency $(OS_CONCURRENCY) \
+	--batch-size $(OS_BATCH_SIZE) --concurrency $(OS_CONCURRENCY) \
 	--label "$(LABEL)" --cache-state $(CACHE_STATE)
-# Diagnostic only; 0 keeps the per-row prepared-statement path.
-SCYLLA_UNLOGGED_BATCH_ROWS ?= 0
 
-# How many of a batch's rows are outstanding at once. This is what makes
-# --concurrency mean the same thing on both engines.
-#
-# --batch-size is NOT symmetric. On OpenSearch it is a wire batch: 500 documents
-# in one _bulk, one request. On ScyllaDB there is no wire batch — the rows go as
-# individual prepared statements — so --batch-size is only a dispatch window,
-# and scylla_load's default of 0 ("the whole batch") makes ONE operation into
-# 500 concurrent CQL requests. At the ladder's c=64 that is 32,000 outstanding
-# requests from one Python process against 64 on the OpenSearch side.
-#
-# Measured on the SUT, 200k-doc points, buf376: 8,682 docs/s at c=1, 9,024 at
-# c=2, 3,386 at c=4, 488 at c=8 — the driver's queue collapses, and every rung
-# of the planned ladder sits past the cliff.
-#
-# 1 makes an operation dispatch its rows one at a time, so in-flight REQUESTS
-# are --concurrency on both engines. What a request carries still differs — 500
-# documents versus one row — and that is the real difference between a bulk API
-# and per-row CQL, so it belongs in the chart footer rather than in a knob.
-# Setting --batch-size 1 everywhere would equalise it instead by taking _bulk
-# away from OpenSearch, which costs 5.0x (9,035 -> 1,814 docs/s, measured) and
-# would compare against a deployment nobody runs.
-SCYLLA_ROWS_IN_FLIGHT ?= 1
-
+# No batch flag and no second in-flight bound: one operation is one prepared
+# INSERT, so --concurrency is outstanding requests here exactly as it is on the
+# OpenSearch side. What one request carries still differs — 500 documents
+# versus one row — and that is the real difference between a bulk API and
+# per-row CQL, so it belongs in the chart footer rather than in a knob.
+# Equalising it the other way, by taking _bulk away from OpenSearch, costs 5.0x
+# (9,035 -> 1,814 docs/s, measured) and would compare against a deployment
+# nobody runs.
 SCYLLA_LOAD = $(TASKSET) $(PYTHON) -m ftsbench.scylla_load --corpus $(CORPUS) \
 	--hosts $(SCYLLA_HOSTS) --port $(SCYLLA_PORT) --max-docs $(MAX_DOCS) \
-	--batch-size $(BATCH_SIZE) --concurrency $(SCYLLA_CONCURRENCY) \
-	--unlogged-batch-rows $(SCYLLA_UNLOGGED_BATCH_ROWS) \
-	--rows-in-flight $(SCYLLA_ROWS_IN_FLIGHT) \
+	--concurrency $(SCYLLA_CONCURRENCY) \
 	--label "$(LABEL)" --cache-state $(CACHE_STATE)
 
 .PHONY: download corpus queries os-up os-wait os-down os-reset os-index os-reindex os-load \
@@ -275,7 +272,14 @@ bench-scylla:
 # DDL returns long before the index finishes building. CACHE_STATE and LABEL
 # land in the series header and the chart footer.
 
-C1_MONITOR_OS = --engine opensearch --url $(OS_URL) --index $(OS_INDEX)
+# The ingest shape rides along in the engine-specific flags because the two
+# engines no longer run at one batch size, and because a build-rate artifact
+# that records only concurrency cannot be audited from the files it produced:
+# results/aws-enwiki-2026-09/S28-RETRACTION.md is that failure already on
+# record. The series header, the manifest and the point label each carry it, so
+# no single omission can hide what a run offered the engine.
+C1_MONITOR_OS = --engine opensearch --url $(OS_URL) --index $(OS_INDEX) \
+	--batch-size $(OS_BATCH_SIZE)
 C1_MONITOR_SCYLLA = --engine scylladb --vs-url $(VS_URL) \
 	--keyspace $(KEYSPACE) --vs-index $(VS_INDEX)
 # The idle timeout only fires once the doc count has moved, so a load that dies
@@ -325,7 +329,7 @@ define c1_run
 endef
 
 c1-os:
-	$(call manifest,$(C1_OS_MANIFEST),$(OS_CONFIG),$(C1_OS_SERIES),--command "make os-index" --command "make c1-os")
+	$(call manifest,$(C1_OS_MANIFEST),$(OS_CONFIG),$(C1_OS_SERIES),--command "make os-index" --command "make c1-os" --batch-size $(OS_BATCH_SIZE))
 	$(call c1_run,$(C1_MONITOR_OS),$(C1_OS_SERIES),$(C1_LOAD_OS))
 
 # CDC path: the index already exists and is SERVING, so the measured work is the
@@ -366,8 +370,10 @@ c1-plot:
 # out queues work inside itself, and its own backlog then appears in the tail as
 # if the engine had produced it. C3_RATE must be a rate BOTH engines sustain, so
 # it is chosen from the C1 result of the slower side, not from either ceiling.
-# Both loaders get the same BATCH_SIZE: batch size decides how many documents one
-# recorded latency covers, and a 500-doc p99 is not comparable to a 2000-doc p99.
+# C3_BATCH is OpenSearch's alone; ScyllaDB has no batch, so one ScyllaDB
+# recorded latency covers one INSERT while one OpenSearch latency covers a
+# C3_BATCH-document _bulk. The two are not the same quantity and the chart must
+# say so.
 C3_RATE ?= 2000
 # C3 needs its own batch size, smaller than the global BATCH_SIZE that C1 uses
 # for throughput. One recorded latency covers one batch, so operations per bucket
@@ -423,7 +429,7 @@ c3-os:
 
 c3-scylla-cdc:
 	$(call manifest,$(C3_SCYLLA_CDC_MANIFEST),scylla-cdc,$(C3_SCYLLA_CDC_LOG),--command "make scylla-schema" --command "make scylla-index" --command "make c3-scylla-cdc")
-	$(call c3_run,--engine scylladb --containers $(SCYLLA_CONTAINER):scylladb --containers $(VS_CONTAINER):vector-store --vs-url $(VS_URL) --keyspace $(KEYSPACE) --vs-index $(VS_INDEX),$(C3_PROBE_SCYLLA_CDC_OUT),$(SCYLLA_LOAD) --target-rate $(C3_RATE) --batch-size $(C3_BATCH) --latency-log $(C3_SCYLLA_CDC_LOG))
+	$(call c3_run,--engine scylladb --containers $(SCYLLA_CONTAINER):scylladb --containers $(VS_CONTAINER):vector-store --vs-url $(VS_URL) --keyspace $(KEYSPACE) --vs-index $(VS_INDEX),$(C3_PROBE_SCYLLA_CDC_OUT),$(SCYLLA_LOAD) --target-rate $(C3_RATE) --latency-log $(C3_SCYLLA_CDC_LOG))
 
 # --- C4: resource usage (RSS, CPU, index size) ----------------------------
 # The ScyllaDB side is sampled as two containers because it IS two services; a

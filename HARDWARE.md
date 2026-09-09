@@ -14,6 +14,8 @@ the load generator, not by either engine.
 ## The list — 3 machines
 
 Framing A (ScyllaDB+vector-store vs OpenSearch alone), single-node, RF=1.
+This table is the plan, and the fleet was built smaller — read "As built"
+below before quoting a vCPU count from it.
 
 | # | Role | Instance | Why this box exists |
 |---|---|---|---|
@@ -24,6 +26,17 @@ Framing A (ScyllaDB+vector-store vs OpenSearch alone), single-node, RF=1.
 All three `linux/arm64`. Verified 2026-08-19 that every pinned image
 publishes an arm64 manifest: `scylladb/scylla:2026.3.0-rc2`,
 `scylladb/vector-store:1.10.0`, `opensearchproject/opensearch:3.8.0`.
+
+### As built — what the fleet actually is
+
+The table above is the plan. The fleet that ran the AWS campaign is **two**
+`i8g.2xlarge` boxes (SUT + harness/generator), and `nproc` on both boxes
+reported **8 vCPU** with ~61 GB of RAM, measured on the fleet on
+**2026-09-08**. Every per-box vCPU figure below is that measured 8, not the
+`im4gn.4xlarge` 16 this document was written against; the instance-type rows
+in the cost tables keep their own specifications, which are correct for those
+types and are not what is running. `SUT-CONFIG.md` and `ENGINE-PREP-PLAN.md`
+carry the as-built configuration.
 
 ### Why the load generator must be its own machine
 
@@ -60,11 +73,11 @@ decompressed intermediate.
 ## Colocating vector-store with ScyllaDB is deliberate
 
 `SIZING.md` sizes box 1 for both processes on one machine. Giving the
-ScyllaDB side a separate vector-store box would hand it 32 vCPU against
-OpenSearch's 16 and break hardware parity. Colocated, ScyllaDB and
-vector-store contend for the same 16 vCPU while OpenSearch has 16 to itself
-— that is the conservative choice, and it is the one to state on the
-methodology slide when someone asks.
+ScyllaDB side a separate vector-store box would hand it twice the cores of
+OpenSearch's box and break hardware parity. Colocated, ScyllaDB and
+vector-store contend for the same 8 vCPU (measured, see "As built") while
+OpenSearch has 8 to itself — that is the conservative choice, and it is the
+one to state on the methodology slide when someone asks.
 
 Per `CLAUDE.md`: this is still **two clusters**, colocated on one box for the
 benchmark. It is not "one cluster", and the box count must never be used to
@@ -135,9 +148,9 @@ Call it **$300-500 including the debugging that always happens on unfamiliar
 hardware.** That is the cost of the measurement, not the cost of the project.
 
 Runs are serialized — box 3 drives one engine at a time, because a generator
-splitting 16 vCPU across two targets reintroduces exactly the contention box 3
-exists to remove. That leaves one engine box idle and billed through much of
-the schedule, for about $38 total. Not worth trading methodology for.
+splitting its 8 vCPU across two targets reintroduces exactly the contention
+box 3 exists to remove. That leaves one engine box idle and billed through
+much of the schedule, for about $38 total. Not worth trading methodology for.
 
 ### The number that actually decides the bill
 
@@ -155,7 +168,7 @@ boxes up to measure a harness that already works, not to debug one.
 
 Second lever, worth ~3 h of the setup budget: `prepare_corpus.py` streams the
 65 bz2 shards single-threaded, and decompressing ~236 GB at bz2 speeds takes
-3-4 h. One shard per core across 16 cores is ~15 min.
+3-4 h. One shard per core across the measured 8 cores is ~30 min.
 
 ### Stopping the boxes, and the trap
 
@@ -209,10 +222,18 @@ provisioning buys is scale and isolation, not code.
 Closed since that list was written:
 
 - **Loader parity.** Both loaders now take an explicit in-flight depth and run
-  at one shared value (`INGEST_CONCURRENCY ?= 8`, `BATCH_SIZE ?= 500`,
-  `Makefile` "Ingest knobs"). The asymmetry that made the earlier ingest
-  numbers incomparable — serial `_bulk` against 128-way concurrency — is gone,
-  and the setting is published rather than implicit.
+  at one shared concurrency (`INGEST_CONCURRENCY ?= 8`, `Makefile` "Ingest
+  knobs"). Batch size is only half shared: `BATCH_SIZE ?= 500` still reaches
+  both loaders on the C3 path, where one recorded latency has to cover the
+  same number of documents on both sides, but the C1 build path splits it —
+  `OS_BATCH_SIZE` (512 for the campaign) against a ScyllaDB arm with no batch
+  flag at all — one operation is one prepared INSERT —
+  because a batch is a wire batch on OpenSearch and only a client-side
+  dispatch window on ScyllaDB, and pinning ScyllaDB at one INSERT per
+  operation is what makes `--concurrency` the same quantity on both engines.
+  The asymmetry that made the earlier ingest numbers incomparable — serial
+  `_bulk` against 128-way concurrency — is gone, and the setting is published
+  rather than implicit.
 - **Open-loop generator** (C5, C7). `ftsbench/load_gen.py` dispatches from
   `pacer` on a fixed schedule into a worker pool, records `t_intended_s`
   alongside service time, and `tools/co_check.py` runs as a gate so a

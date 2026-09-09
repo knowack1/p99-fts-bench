@@ -718,3 +718,17 @@ def test_a_figure_with_bars_counts_as_drawn(tmp_path, monkeypatch):
     args = parsed(plot_c3, monkeypatch, ["--config", "x:y", "--output", output])
     plotlib.finish_figure(figure, args, ())
     assert os.path.exists(output)
+
+
+def test_the_default_stamp_names_no_machine_and_no_corpus():
+    """It is the default for every renderer and no renderer overrides it, so a
+    chart drawn from fleet data used to carry `laptop, simplewiki` and tell a
+    reader the opposite of the truth about where its number came from. The
+    provenance a chart CAN know comes from the manifests and is already in the
+    footer; a default must not assert one it cannot know."""
+    stamp = plotlib.PRELIMINARY_STAMP.lower()
+    assert "preliminary" in stamp
+    assert "not quotable" in stamp
+    for claim in ("laptop", "simplewiki", "enwiki", "aws", "fleet", "i8g"):
+        assert claim not in stamp, \
+            "the default stamp asserts %r, which it cannot know" % claim

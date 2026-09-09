@@ -81,7 +81,7 @@ class Batch:
 # built per engine; a source living there would let the two engines feed
 # themselves different work, and "the engines were offered the same work in the
 # same order" is the one property this module exists to guarantee.
-Source = Callable[[argparse.Namespace, float], Iterable[Batch]]
+Source = Callable[[argparse.Namespace, float, int], Iterable[Batch]]
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,12 @@ class EngineLoader:
     engine: str
     op_kind: str
     engine_version: str
+    # Documents in one operation. An engine property, not a flag: OpenSearch
+    # takes it from --batch-size because a _bulk really carries N documents,
+    # while ScyllaDB has no wire batch and fixes it at one INSERT. Keeping it
+    # here is what lets the driver own the schedule for an engine that offers
+    # no batch flag at all.
+    docs_per_operation: int
     encode: Callable[[list[dict]], Any]
     # A coroutine function. `encode` still runs on the dispatch loop, so batch k
     # holds the same documents at every concurrency; `send` is the one place the
@@ -100,16 +106,24 @@ class EngineLoader:
     header_fields: dict[str, Any] = field(default_factory=dict)
 
 
-def add_common_args(parser: argparse.ArgumentParser) -> None:
+def add_common_args(parser: argparse.ArgumentParser, *,
+                    batch_size: bool = True) -> None:
     """Flags whose meaning is identical on both sides.
 
     Kept in one place because a flag that drifts apart between the two loaders
     is exactly the defect this module exists to remove.
+
+    `batch_size=False` for an engine that has no wire batch to size. ScyllaDB
+    sends one prepared INSERT per document, so a batch flag there could only
+    ever set a client-side dispatch window while reading like a wire quantity —
+    it is absent rather than pinned to 1, so it cannot be set at all.
     """
     parser.add_argument("--corpus", required=True)
-    parser.add_argument("--batch-size", type=int, required=True,
-                        help="documents per operation; must match across "
-                             "engines for any per-operation latency comparison")
+    if batch_size:
+        parser.add_argument("--batch-size", type=int, required=True,
+                            help="documents per operation; must match across "
+                                 "engines for any per-operation latency "
+                                 "comparison")
     parser.add_argument("--concurrency", type=int, required=True,
                         help="operations in flight — the same quantity on both "
                              "engines")
@@ -191,8 +205,8 @@ def _operation(log: latency_log.LatencyLog, op: pacer.Op,
         lambda: loader.send(payload, tally))
 
 
-def corpus_batches(args: argparse.Namespace,
-                   origin_s: float) -> Iterator[Batch]:
+def corpus_batches(args: argparse.Namespace, origin_s: float,
+                   docs_per_operation: int) -> Iterator[Batch]:
     """The default source: replay the corpus once, in order.
 
     `origin_s` is unused here because a corpus replay ends when the corpus
@@ -201,7 +215,7 @@ def corpus_batches(args: argparse.Namespace,
     clock zero every `t_*_s` is relative to, never stamp its own.
     """
     for items in batched(read_corpus(args.corpus, args.max_docs),
-                         args.batch_size):
+                         docs_per_operation):
         yield Batch(items)
 
 
@@ -221,7 +235,7 @@ def _header(args: argparse.Namespace, loader: EngineLoader) -> dict[str, Any]:
         producer=f"{loader.name}_load", engine=loader.engine,
         engine_version=loader.engine_version,
         label=args.label, cache_state=args.cache_state, corpus=args.corpus,
-        max_docs=args.max_docs, batch_size=args.batch_size,
+        max_docs=args.max_docs, batch_size=loader.docs_per_operation,
         concurrency=args.concurrency,
         concurrency_unit="operations in flight",
         target_rate_docs_per_s=args.target_rate,
@@ -246,10 +260,11 @@ async def _await_intended(t_intended_s: float) -> None:
 async def _dispatch(context: Dispatch, loader: EngineLoader,
                     source: Source) -> None:
     schedule = latency_log.op_schedule(context.args.target_rate,
-                                       context.args.batch_size,
+                                       loader.docs_per_operation,
                                        context.origin_s, blocking_sleep=False)
     reporter = ThroughputReporter(f"{loader.engine} load")
-    for batch in source(context.args, context.origin_s):
+    for batch in source(context.args, context.origin_s,
+                        loader.docs_per_operation):
         payload = loader.encode(batch.items)
         op = next(schedule)
         await _await_intended(op.t_intended_s)

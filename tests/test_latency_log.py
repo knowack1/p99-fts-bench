@@ -231,21 +231,19 @@ def test_every_document_is_sent_exactly_once_under_concurrency(monkeypatch, tmp_
     assert sorted(int(doc_id) for doc_id in ids) == list(range(250))
 
 
-def scylla_dispatch_with_fake_driver(monkeypatch, corpus: str, batch_size: int,
+def scylla_dispatch_with_fake_driver(monkeypatch, corpus: str,
                                      concurrency: int) -> list[list[tuple]]:
+    """No batch size: a ScyllaDB operation is one INSERT, so what comes back is
+    one single-row attempt per document."""
     sent: list[list[tuple]] = []
-    lock = threading.Lock()
 
-    def fake_results(session, statement, parameters, rows_in_flight):
-        with lock:
-            sent.append(list(parameters))
-        return [(True, None) for _ in parameters]
+    async def fake_execute_all(session, statements):
+        sent.append([params for _statement, params in statements])
+        return [(True, None) for _ in statements]
 
-    monkeypatch.setattr(scylla_load, "concurrent_results", fake_results)
-    args = loader_args(corpus, batch_size)
+    monkeypatch.setattr(scylla_load, "execute_all", fake_execute_all)
+    args = loader_args(corpus, batch_size=1)
     args.concurrency = concurrency
-    args.rows_in_flight = 0
-    args.unlogged_batch_rows = 0
     args.keyspace, args.table = "wiki", "articles"
     load_driver.run(args, scylla_load.build_loader(args, object(), None))
     return sent
@@ -259,7 +257,7 @@ def test_scylla_also_sends_every_document_exactly_once_under_concurrency(
     test — losing or duplicating a document under concurrency would shorten a
     corpus without failing a run."""
     corpus = write_corpus(tmp_path / "corpus.jsonl", 250)
-    batches = scylla_dispatch_with_fake_driver(monkeypatch, corpus, 16,
+    batches = scylla_dispatch_with_fake_driver(monkeypatch, corpus,
                                                concurrency=8)
     page_ids = [row[1] for batch in batches for row in batch]
     assert sorted(page_ids) == list(range(250))

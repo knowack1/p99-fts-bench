@@ -36,11 +36,11 @@ class ConnectionBusy(Exception):
 
 
 class FlakyDriver:
-    """Stands in for execute_concurrent_with_args, failing nominated rows once.
+    """Stands in for the CQL dispatch, failing nominated rows once.
 
-    Records every batch it was handed, which is what makes the defect visible:
-    the first recorded attempt must contain the whole batch, not just the rows
-    up to the failure.
+    Records every attempt it was handed, which is what makes the defect
+    visible: the first recorded attempt must contain every row, not just the
+    rows up to the failure.
     """
 
     def __init__(self, failing: set[tuple], forever: bool = False) -> None:
@@ -55,17 +55,17 @@ class FlakyDriver:
             self.failing = self.failing - {row}
         return (False, ConnectionBusy("too many requests already in flight"))
 
-    async def __call__(self, session, statement, parameters,
-                       rows_in_flight) -> list:
-        self.attempts.append(list(parameters))
-        return [self.outcome_for(row) for row in parameters]
+    async def __call__(self, session, statements) -> list:
+        rows = [params for _statement, params in statements]
+        self.attempts.append(rows)
+        return [self.outcome_for(row) for row in rows]
 
 
 def scylla_batch(monkeypatch, driver: FlakyDriver,
                  rows: list[tuple] = ROWS) -> load_retry.RetryTally:
-    monkeypatch.setattr(scylla_load, "concurrent_results", driver)
+    monkeypatch.setattr(scylla_load, "execute_all", driver)
     tally = load_retry.RetryTally()
-    attempt = partial(scylla_load.attempt_rows, None, None, 128)
+    attempt = partial(scylla_load.attempt_rows, None, None)
     asyncio.run(scylla_load.send(attempt, rows, tally))
     return tally
 

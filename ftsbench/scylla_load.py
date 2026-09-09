@@ -8,17 +8,20 @@ the fulltext index before or after loading depending on which ingest path
 Everything about *how* the client offers work — the schedule, the in-flight
 bound, the timing, the retry accounting — lives in `ftsbench.load_driver` and is
 shared with `opensearch_load`. This module supplies only the two
-engine-specific halves: turn a batch into bound parameters, and execute them.
+engine-specific halves: turn a document into bound parameters, and execute it.
 
-One operation is one batch of `--batch-size` rows, and `--concurrency` batches
-are in flight — the same quantities `opensearch_load` uses, where one operation
-is one `_bulk` of `--batch-size` documents. Until this was unified the two
-flags named different things and the ScyllaDB side encoded everything on a
-single thread, which capped it near 9.8k docs/s and was mistaken for an engine
-ceiling. See `load_driver` and `TUNING.md`.
+**One operation is one prepared INSERT, and `--concurrency` is the only knob.**
+There is no CQL wire batch: every row is its own statement, so a batch flag here
+could only ever set a client-side dispatch window while reading like a wire
+quantity — and a second in-flight bound beside `--concurrency` could only
+disagree with it. Both are therefore absent rather than pinned to 1, and the
+build-rate ceiling is found by raising `--concurrency` alone. The batch axis
+belongs to `opensearch_load`, where a `_bulk` really does carry N documents;
+what one request carries still differs between the engines, and that belongs in
+the chart footer rather than in a knob. See `load_driver` and `TUNING.md`.
 
 Usage: python3 -m ftsbench.scylla_load --corpus data/corpus.jsonl \
-           --hosts 127.0.0.1 --batch-size 500 --concurrency 16
+           --hosts 127.0.0.1 --concurrency 16
 """
 import argparse
 import asyncio
@@ -28,32 +31,32 @@ from functools import partial
 
 from cassandra.cluster import Session
 
-from . import load_driver, load_retry
+from . import load_driver, load_retry, mp_load
 
 DEFAULT_HOSTS = "127.0.0.1"
 DEFAULT_PORT = 9042
 DEFAULT_KEYSPACE = "wiki"
 DEFAULT_TABLE = "articles"
+# One row per operation, so --concurrency counts outstanding requests on both
+# engines. Not a default a caller can raise: see the module docstring.
+DOCS_PER_OPERATION = 1
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    load_driver.add_common_args(parser)
+def add_engine_args(parser: argparse.ArgumentParser) -> None:
+    """The ScyllaDB-specific half, registered here so `mp_load`'s CLI can offer
+    the same flags to a sharded run rather than growing its own copy."""
     parser.add_argument("--hosts", default=DEFAULT_HOSTS,
                         help="comma-separated contact points")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--keyspace", default=DEFAULT_KEYSPACE)
     parser.add_argument("--table", default=DEFAULT_TABLE)
-    parser.add_argument("--rows-in-flight", type=int, default=0,
-                        help="driver-internal rows in flight within one batch; "
-                             "0 = the whole batch, which mirrors one _bulk "
-                             "carrying --batch-size documents. Not a fairness "
-                             "knob — --concurrency is the shared one")
-    parser.add_argument("--unlogged-batch-rows", type=int, default=0,
-                        help="DIAGNOSTIC: group this many rows per UNLOGGED "
-                             "BATCH (0 = per-row prepared statements, the "
-                             "default and the only mode fit for a published "
-                             "write number). See attempt_unlogged_batches.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    load_driver.add_common_args(parser, batch_size=False)
+    add_engine_args(parser)
+    mp_load.add_sharding_args(parser)
     return parser.parse_args()
 
 
@@ -111,31 +114,25 @@ def awaitable(response_future) -> "asyncio.Future":
     return waiter
 
 
-async def concurrent_results(session: Session, statement,
-                             parameters: list[tuple],
-                             rows_in_flight: int) -> list:
-    """Every row is attempted and the per-row outcomes come back, in the order
-    sent. Abandoning the rest of a batch on the first failure is how a single
-    ConnectionBusy cost one repetition 380 documents — see ftsbench.load_retry.
+async def execute_all(session: Session, statements: list[tuple]) -> list:
+    """Every item is attempted and the per-item outcomes come back, in the order
+    sent. Abandoning the rest of an operation on the first failure is how a
+    single ConnectionBusy cost one repetition 380 documents — see
+    ftsbench.load_retry.
 
-    `rows_in_flight` bounds the statements this operation has outstanding, so
-    the run's total is `--concurrency x rows_in_flight`. It used to default to
-    the whole batch, which made one operation 500 concurrent CQL requests
-    against one `_bulk` on the OpenSearch side — 32,000 outstanding at the
-    ladder's c=64. The Makefile now sets 1, so `--concurrency` is outstanding
-    requests on both engines.
+    Nothing is bounded here. The only in-flight bound is the driver's
+    `--concurrency`, which holds N operations; a second bound inside one
+    operation could only disagree with it.
     """
-    bound = asyncio.Semaphore(rows_in_flight or len(parameters))
+    async def one(statement, params):
+        try:
+            return (True, await awaitable(
+                session.execute_async(statement, params)))
+        except Exception as exc:
+            return (False, exc)
 
-    async def one(params):
-        async with bound:
-            try:
-                return (True, await awaitable(
-                    session.execute_async(statement, params)))
-            except Exception as exc:
-                return (False, exc)
-
-    return await asyncio.gather(*(one(params) for params in parameters))
+    return await asyncio.gather(
+        *(one(statement, params) for statement, params in statements))
 
 
 def outcome_of(sent: list, results: list) -> load_retry.Attempt:
@@ -150,95 +147,28 @@ def outcome_of(sent: list, results: list) -> load_retry.Attempt:
     return load_retry.Attempt(failed, error)
 
 
-async def attempt_rows(session: Session, statement, rows_in_flight: int,
+async def attempt_rows(session: Session, statement,
                        parameters: list[tuple]) -> load_retry.Attempt:
-    results = await concurrent_results(session, statement, parameters,
-                                       rows_in_flight)
+    """One operation carries one row, so this is one INSERT — but it stays
+    list-shaped because `load_retry` resends the failed items of an attempt."""
+    results = await execute_all(
+        session, [(statement, params) for params in parameters])
     return outcome_of(parameters, results)
 
 
-async def concurrent_statement_results(session: Session,
-                                       statements: list[tuple],
-                                       rows_in_flight: int) -> list:
-    """Churn mixes INSERT and DELETE in one operation, so each entry carries
-    its own statement rather than cycling one statement over many parameter
-    sets. Same bound and same outcome shape as `concurrent_results`."""
-    bound = asyncio.Semaphore(rows_in_flight or len(statements))
-
-    async def one(statement, params):
-        async with bound:
-            try:
-                return (True, await awaitable(
-                    session.execute_async(statement, params)))
-            except Exception as exc:
-                return (False, exc)
-
-    return await asyncio.gather(
-        *(one(statement, params) for statement, params in statements))
-
-
-async def attempt_statements(session: Session, rows_in_flight: int,
+async def attempt_statements(session: Session,
                              statements: list[tuple]) -> load_retry.Attempt:
     """One operation carrying a mix of statements.
 
+    Churn mixes INSERT and DELETE in one operation, so each entry carries its
+    own statement rather than cycling one statement over many parameter sets.
     Issued together rather than statement-kind by statement-kind, because the
     OpenSearch side puts adds and deletes in a single `_bulk`: doing it in two
     passes here would make one engine pay two round trips for the operation the
     other completes in one, and that gap would read as an engine difference.
     """
-    results = concurrent_statement_results(session, statements, rows_in_flight)
+    results = await execute_all(session, statements)
     return outcome_of(statements, results)
-
-
-def attempt_unlogged_batches(session: Session, statement, batch_rows: int,
-                             rows_in_flight: int,
-                             parameters: list[tuple]) -> load_retry.Attempt:
-    """UNLOGGED BATCH, in groups of `batch_rows`.
-
-    Diagnostic mode only. Every row here is its own partition, so a multi-row
-    batch is the documented anti-pattern: the coordinator fans out to every
-    partition's replica set and shard-aware routing is defeated. ScyllaDB logs a
-    warning per batch and returns WriteTimeout if pushed too hard.
-
-    It was added because the per-row path was bound by this client's GIL when
-    the whole loader ran on one thread. `load_driver` removed that constraint,
-    so this exists now only to reproduce older runs — never to produce a
-    published write number.
-    """
-    from cassandra.query import BatchStatement, BatchType
-
-    pending, failed, error = [], [], ""
-    for start in range(0, len(parameters), batch_rows):
-        rows = parameters[start:start + batch_rows]
-        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
-        for row in rows:
-            batch.add(statement, row)
-        pending.append((session.execute_async(batch), rows))
-        if len(pending) >= (rows_in_flight or len(parameters)):
-            failed_now, error_now = drain(pending)
-            failed += failed_now
-            error = error or error_now
-            pending = []
-    failed_now, error_now = drain(pending)
-    return load_retry.Attempt(failed + failed_now, error or error_now)
-
-
-def drain(pending: list) -> tuple[list[tuple], str]:
-    failed, error = [], ""
-    for future, rows in pending:
-        try:
-            future.result()
-        except Exception as exc:
-            failed += rows
-            error = error or f"{type(exc).__name__}: {exc}"
-    return failed, error
-
-
-def batch_attempt(args: argparse.Namespace, session: Session, statement):
-    if args.unlogged_batch_rows:
-        return partial(attempt_unlogged_batches, session, statement,
-                       args.unlogged_batch_rows, args.rows_in_flight)
-    return partial(attempt_rows, session, statement, args.rows_in_flight)
 
 
 async def send(attempt, parameters: list[tuple],
@@ -254,13 +184,13 @@ def build_loader(args: argparse.Namespace, session: Session,
     return load_driver.EngineLoader(
         name="scylla", engine="scylladb", op_kind="insert",
         engine_version=engine_version(session),
+        docs_per_operation=DOCS_PER_OPERATION,
         encode=insert_parameters,
-        send=partial(send, batch_attempt(args, session, statement)),
+        send=partial(send, partial(attempt_rows, session, statement)),
         header_fields={
             "keyspace": args.keyspace,
             "table": args.table,
-            "rows_in_flight": args.rows_in_flight or args.batch_size,
-            "unlogged_batch_rows": args.unlogged_batch_rows,
+            **mp_load.shard_header_fields(args),
         },
     )
 
@@ -270,19 +200,45 @@ def run_load(args: argparse.Namespace, session: Session):
     return load_driver.run(args, build_loader(args, session, statement))
 
 
-def main() -> int:
-    args = parse_args()
-    load_driver.warn_if_client_bound(args.concurrency)
+def report_load(args: argparse.Namespace, headline: str, docs: int,
+                retries: str) -> None:
+    print(f"scylladb load: {headline}", file=sys.stderr)
+    print(f"loaded {docs} docs into {args.keyspace}.{args.table} "
+          f"({retries})", file=sys.stderr)
+
+
+def run_in_process(args: argparse.Namespace) -> int:
     cluster, session = connect(args.hosts.split(","), args.port, args.keyspace)
     try:
         log, tally = run_load(args, session)
     finally:
         cluster.shutdown()
-    print(f"scylladb load: {log.summary_line()}", file=sys.stderr)
     summary = log.summary()
-    print(f"loaded {summary['docs']} docs into {args.keyspace}.{args.table} "
-          f"({tally.line()})", file=sys.stderr)
+    report_load(args, log.summary_line(), summary["docs"], tally.line())
     return 1 if summary["errors"] else 0
+
+
+def run_workers(args: argparse.Namespace,
+                shape: mp_load.ClientShape) -> int:
+    """N worker processes, each with its own session over its own shard.
+
+    Nothing connects in the parent: a session opened here would be inherited by
+    no child — `spawn` carries no sockets — and its own reactor threads would
+    compete with the pool for the client CPU this shape exists to spread.
+    """
+    summary = mp_load.run_sharded(args, "scylladb", shape)
+    report_load(args, mp_load.summary_line(summary), summary["docs"],
+                mp_load.retries_line(summary))
+    return 1 if summary["errors"] else 0
+
+
+def main() -> int:
+    args = parse_args()
+    load_driver.warn_if_client_bound(args.concurrency)
+    shape = mp_load.client_shape(args)
+    if shape is None:
+        return run_in_process(args)
+    return run_workers(args, shape)
 
 
 if __name__ == "__main__":

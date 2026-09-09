@@ -15,11 +15,12 @@ Usage: python3 -m ftsbench.opensearch_load --corpus data/corpus.jsonl \
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from functools import partial
 from urllib.parse import urlparse
 import requests
 
-from . import async_http, load_driver, load_retry, samplers
+from . import async_http, load_driver, load_retry, mp_load, samplers
 
 DEFAULT_URL = "http://localhost:9200"
 DEFAULT_INDEX = "wiki-articles"
@@ -29,14 +30,21 @@ RESTORED_REFRESH_INTERVAL = "1s"
 
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    load_driver.add_common_args(parser)
+def add_engine_args(parser: argparse.ArgumentParser) -> None:
+    """The OpenSearch-specific half, registered here so `mp_load`'s CLI can
+    offer the same flags to a sharded run rather than growing its own copy."""
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--index", default=DEFAULT_INDEX)
     parser.add_argument("--no-refresh-during-load", action="store_true",
                         help="set refresh_interval=-1 while loading, restore after "
                              "(a build-throughput tuning knob — publish it if used)")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    load_driver.add_common_args(parser)
+    add_engine_args(parser)
+    mp_load.add_sharding_args(parser)
     return parser.parse_args()
 
 
@@ -143,11 +151,13 @@ def build_loader(args: argparse.Namespace, url: str) -> load_driver.EngineLoader
     return load_driver.EngineLoader(
         name="opensearch", engine="opensearch", op_kind="bulk",
         engine_version=samplers.OpenSearchSampler(url, args.index).version(),
+        docs_per_operation=args.batch_size,
         encode=partial(bulk_payload, index=args.index),
         send=partial(send, bulk_pool(url, args.concurrency)),
         header_fields={
             "index": args.index,
             "refresh_during_load": not args.no_refresh_during_load,
+            **mp_load.shard_header_fields(args),
         },
     )
 
@@ -157,14 +167,42 @@ def run_load(args: argparse.Namespace, url: str):
 
 
 def load_with_refresh_restored(args: argparse.Namespace, url: str,
-                               control: requests.Session):
+                               control: requests.Session,
+                               load: Callable[[], tuple[int, str]]
+                               ) -> tuple[int, str]:
     if args.no_refresh_during_load:
         set_refresh_interval(control, url, args.index, "-1")
     try:
-        return run_load(args, url)
+        return load()
     finally:
         if args.no_refresh_during_load:
             set_refresh_interval(control, url, args.index, RESTORED_REFRESH_INTERVAL)
+
+
+def report_single_load(args: argparse.Namespace, url: str) -> tuple[int, str]:
+    log, tally = run_load(args, url)
+    print(f"opensearch load: {log.summary_line()}", file=sys.stderr)
+    return log.summary()["errors"], tally.line()
+
+
+def report_sharded_load(args: argparse.Namespace,
+                        shape: mp_load.ClientShape) -> tuple[int, str]:
+    """N worker processes, each POSTing its own shard over its own connections.
+
+    The refresh knob and the closing count stay in the parent: a child setting
+    `refresh_interval` would race its siblings, and N counts of one index say
+    nothing N-1 of them did not.
+    """
+    summary = mp_load.run_sharded(args, "opensearch", shape)
+    print(f"opensearch load: {mp_load.summary_line(summary)}", file=sys.stderr)
+    return summary["errors"], mp_load.retries_line(summary)
+
+
+def report_load(args: argparse.Namespace, url: str,
+                shape: mp_load.ClientShape | None) -> tuple[int, str]:
+    if shape is None:
+        return report_single_load(args, url)
+    return report_sharded_load(args, shape)
 
 
 def main() -> int:
@@ -172,12 +210,13 @@ def main() -> int:
     url = args.url.rstrip("/")
     load_driver.warn_if_client_bound(args.concurrency)
     control = requests.Session()
-    log, tally = load_with_refresh_restored(args, url, control)
-    print(f"opensearch load: {log.summary_line()}", file=sys.stderr)
+    errors, retries = load_with_refresh_restored(
+        args, url, control,
+        partial(report_load, args, url, mp_load.client_shape(args)))
     count = refresh_and_count(control, url, args.index)
-    print(f"index '{args.index}' now holds {count} docs ({tally.line()})",
+    print(f"index '{args.index}' now holds {count} docs ({retries})",
           file=sys.stderr)
-    return 1 if log.summary()["errors"] else 0
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

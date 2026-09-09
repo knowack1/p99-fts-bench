@@ -112,7 +112,8 @@ def churn_source(stream: ChurnStream, duration_s: float,
     why the driver's own schedule does the pacing and this only decides when to
     stop asking for work.
     """
-    def source(args, origin_s: float) -> Iterator[Batch]:
+    def source(args, origin_s: float, _docs_per_operation: int
+               ) -> Iterator[Batch]:
         while not should_stop() and time.perf_counter() - origin_s < duration_s:
             yield stream.next_batch()
 

@@ -83,11 +83,30 @@ def parse_args_from(argv: list[str] | None) -> argparse.Namespace:
                         default=DEFAULT_SETTLE_TIMEOUT_S,
                         help="after --until-docs is written, how long to keep "
                              "sampling for it to become searchable")
+    # The batch-size axis is swept on OpenSearch while ScyllaDB is pinned at 1,
+    # so the same x on two series means two different write shapes. A header
+    # that does not name the shape it ran with is the S28 failure again: the
+    # concurrency of that run was unrecorded, which left a defect unauditable
+    # from the artifacts it produced. Defaults are None so an existing
+    # invocation's header stays byte-identical.
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="documents per loader operation, recorded in the "
+                             "series header")
     return parser.parse_args(argv)
 
 
 def rate(delta_docs: int, delta_t: float) -> float:
     return delta_docs / delta_t if delta_t > 0 else 0.0
+
+
+def write_shape(args: argparse.Namespace) -> dict[str, int]:
+    """The loader's write shape, recorded only where the caller named it.
+
+    An unset flag is absent from the header rather than recorded as a guess: a
+    zero or a default would read as a measured fact.
+    """
+    shape = {"batch_size": args.batch_size}
+    return {key: value for key, value in shape.items() if value is not None}
 
 
 def write_header(out, args, sampler) -> None:
@@ -102,6 +121,7 @@ def write_header(out, args, sampler) -> None:
         max_docs=args.until_docs, interval_s=args.interval,
         idle_timeout_s=args.idle_timeout, max_seconds=args.max_seconds,
         settle_timeout_s=args.settle_timeout,
+        **write_shape(args),
     )
     out.write(json.dumps(header) + "\n")
     out.flush()

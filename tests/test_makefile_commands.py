@@ -32,13 +32,14 @@ TARGETS = (
 )
 
 
-def module_commands(target: str) -> list[tuple[str, list[str]]]:
+def module_commands(target: str,
+                    overrides: tuple[str, ...] = ()) -> list[tuple[str, list[str]]]:
     """The `python -m ftsbench.X` invocations one target would run.
 
     Line continuations are joined and shell operators split, because a C1 target
     puts the sampler and the measured work in one compound command.
     """
-    result = subprocess.run(["make", "-n", target], cwd=BENCH_DIR,
+    result = subprocess.run(["make", "-n", target, *overrides], cwd=BENCH_DIR,
                             capture_output=True, text=True)
     assert result.returncode == 0, f"make -n {target} failed:\n{result.stderr}"
     joined = result.stdout.replace("\\\n", " ")
@@ -52,17 +53,24 @@ def module_commands(target: str) -> list[tuple[str, list[str]]]:
     return commands
 
 
-def assert_parser_accepts(module_name: str, args: list[str]) -> None:
+def parser_exit_code(module_name: str, args: list[str]) -> int | None:
+    """The parser's verdict on one command rather than an assertion about it: a
+    target may legitimately produce a command its own parser must refuse."""
     module = importlib.import_module(module_name)
     saved = sys.argv
     sys.argv = [module_name] + args
     try:
         module.parse_args()
+        return None
     except SystemExit as exit_signal:
-        if exit_signal.code not in (0, None):
-            pytest.fail(f"{module_name} rejected: {' '.join(args)}")
+        return exit_signal.code
     finally:
         sys.argv = saved
+
+
+def assert_parser_accepts(module_name: str, args: list[str]) -> None:
+    if parser_exit_code(module_name, args) not in (0, None):
+        pytest.fail(f"{module_name} rejected: {' '.join(args)}")
 
 
 @pytest.mark.parametrize("target", TARGETS)
@@ -203,6 +211,28 @@ def test_c1_target_fails_when_the_loader_fails():
 
 C3_TARGETS = ("c3-os", "c3-scylla-cdc")
 
+# Documents one recorded latency covers. OpenSearch takes it from the recipe;
+# ScyllaDB has no batch flag at all, so its operation is one prepared INSERT.
+NO_BATCH_TARGETS = ("c3-scylla-cdc",)
+
+# Measured client ceilings, ops/s: the HTTP client saturates near 1,090 and the
+# CQL client near 4,368 (results/client-model-2026-09-08). C7 was invalidated by
+# outrunning the first of those, so each arm is held to the same fraction of its
+# own transport's ceiling rather than to one number borrowed from the other.
+GENERATOR_BUDGET = {"c3-os": 500.0, "c3-scylla-cdc": 2000.0}
+
+
+def docs_per_operation(target: str) -> float:
+    """What one recorded latency covers on this arm."""
+    if target in NO_BATCH_TARGETS:
+        return 1.0
+    return float(effective_flag(target, "--batch-size"))
+
+
+def rate_per_operation(target: str) -> float:
+    return (float(effective_flag(target, "--target-rate"))
+            / docs_per_operation(target))
+
 
 @pytest.mark.parametrize("target", C3_TARGETS)
 def test_c3_runs_a_resource_probe_beside_the_load(target):
@@ -280,12 +310,11 @@ def test_c3_offers_enough_operations_per_bucket_to_draw_a_tail(target):
     from ftsbench.stats import min_samples_for
 
     rate = float(effective_flag(target, "--target-rate"))
-    batch = float(effective_flag(target, "--batch-size"))
-    per_bucket = rate / batch * DEFAULT_BUCKET_S
+    per_bucket = rate / docs_per_operation(target) * DEFAULT_BUCKET_S
     assert per_bucket >= min_samples_for(99.9), (
         f"{target} offers {per_bucket:g} operations per {DEFAULT_BUCKET_S:g} s "
-        f"bucket ({rate:g} docs/s / batch {batch:g}); p999 needs "
-        f"{min_samples_for(99.9):,}")
+        f"bucket ({rate:g} docs/s / {docs_per_operation(target):g} docs per "
+        f"operation); p999 needs {min_samples_for(99.9):,}")
 
 
 @pytest.mark.parametrize("target", C3_TARGETS)
@@ -293,8 +322,173 @@ def test_c3_stays_under_the_generator_ceiling(target):
     """Shrinking the batch to deepen the buckets raises operations per second,
     and C7 was invalidated by exactly that -- the HTTP client saturates near
     1,090 ops/s. A C3 that outruns its own generator measures the generator."""
-    rate = float(effective_flag(target, "--target-rate"))
-    batch = float(effective_flag(target, "--batch-size"))
-    assert rate / batch <= 500, (
-        f"{target} offers {rate / batch:g} operations/s, too close to the "
-        "measured HTTP generator ceiling of ~1,090")
+    offered = rate_per_operation(target)
+    budget = GENERATOR_BUDGET[target]
+    assert offered <= budget, (
+        f"{target} offers {offered:g} operations/s against a budget of "
+        f"{budget:g} — too close to the measured client ceiling for this "
+        "engine's transport")
+
+
+C1_WRITERS = ("ftsbench.run_manifest", "ftsbench.build_monitor",
+              "ftsbench.opensearch_load", "ftsbench.scylla_load")
+
+
+def module_flag(target: str, module: str, flag: str,
+                overrides: tuple[str, ...] = ()) -> str:
+    """The value one module of one target would receive, last occurrence wins.
+
+    Per module rather than per recipe, because the redundancy is the point: the
+    manifest, the series header and the loader each carry the write shape, and a
+    recipe-wide search would let one of the three go missing unnoticed.
+    """
+    for name, argv in module_commands(target, overrides):
+        if name != module:
+            continue
+        found = [argv[i + 1] for i, token in enumerate(argv) if token == flag]
+        assert found, f"{target}: {module} never receives {flag}"
+        return found[-1]
+    pytest.fail(f"{target} does not run {module}")
+
+
+def c1_writers(target: str) -> tuple[str, ...]:
+    ran = {name for name, _ in module_commands(target)}
+    return tuple(module for module in C1_WRITERS if module in ran)
+
+
+def test_c1_gives_opensearch_the_batch_size_its_wire_actually_has():
+    """On OpenSearch a batch is N documents in one _bulk — one request the
+    engine sees — so every writer on that arm has to name the same one."""
+    for module in c1_writers("c1-os"):
+        assert module_flag("c1-os", module, "--batch-size") == "500", \
+            f"c1-os: {module} disagrees with the arm's batch size"
+
+
+RETIRED_SCYLLA_FLAGS = ("--batch-size", "--rows-in-flight",
+                        "--unlogged-batch-rows")
+
+
+@pytest.mark.parametrize("flag", RETIRED_SCYLLA_FLAGS)
+def test_no_scylla_arm_passes_a_shape_flag_the_loader_no_longer_has(flag):
+    """ScyllaDB sends one prepared INSERT per document: there is no wire batch
+    to size and no second in-flight bound beside --concurrency. The loader
+    rejects all three, so a recipe still passing one would fail the run rather
+    than reshape it."""
+    for target in ("c1-scylla-cdc", "c3-scylla-cdc", "scylla-load"):
+        for module, argv in module_commands(target):
+            assert flag not in argv, \
+                f"{target}: {module} was given the retired {flag}"
+
+
+@pytest.mark.parametrize("target", ["c1-os", "c1-scylla-cdc"])
+def test_c1_writes_both_records_that_describe_the_run(target):
+    """results/aws-enwiki-2026-09/S28-RETRACTION.md is the failure already on
+    record: a header that recorded no concurrency left a defect unauditable from
+    the files the run produced. Both records must be written on both arms."""
+    writers = c1_writers(target)
+    assert "ftsbench.run_manifest" in writers, "the manifest is not written"
+    assert "ftsbench.build_monitor" in writers, "the series header is not written"
+
+
+def test_c1_opensearch_records_one_batch_size_across_its_artifacts():
+    """The redundancy is the point: the manifest, the series header and the
+    loader each carry the shape, so no single omission can hide what was
+    offered — and a disagreement between them catches a sweep that passed one
+    batch size to make and another to the loader."""
+    recorded = {module_flag("c1-os", module, "--batch-size")
+                for module in c1_writers("c1-os")}
+    assert len(recorded) == 1, \
+        f"c1-os records {sorted(recorded)} — the artifacts disagree"
+
+
+def test_no_arm_records_the_retired_rows_in_flight_field():
+    """`rows_in_flight` was a ScyllaDB-only bound that duplicated
+    --concurrency, and the recorders no longer accept it. A number appearing
+    there again would be a knob on an axis that has none."""
+    for target in ("c1-os", "c1-scylla-cdc"):
+        for module, argv in module_commands(target):
+            assert "--rows-in-flight" not in argv, \
+                f"{target}: {module} was given a retired flag"
+
+
+@pytest.mark.parametrize("target,setting", [("c1-os", "OS_BATCH_SIZE")])
+def test_the_sweep_is_the_authority_on_the_batch_size_it_records(target, setting):
+    """tools/sweep_build_rate.sh resolves the level itself and passes it to
+    make, because the same number has to reach the label, the header and the
+    manifest at once. A command-line OS_BATCH_SIZE must therefore beat the
+    historical BATCH_SIZE=500 that every legacy tools/ script still passes."""
+    overrides = ("BATCH_SIZE=500", f"{setting}=16")
+    for module in c1_writers(target):
+        assert module_flag(target, module, "--batch-size", overrides) == "16", \
+            f"{target}: {module} ignored a swept {setting}"
+
+
+def test_a_legacy_caller_still_gets_the_historical_opensearch_batch():
+    """Seven scripts in tools/ drive `make c1-os BATCH_SIZE=500`. Their
+    OpenSearch points must keep landing at 500, or every one of them measures
+    something other than what it measured before."""
+    assert module_flag("c1-os", "ftsbench.opensearch_load", "--batch-size",
+                       ("BATCH_SIZE=500",)) == "500"
+
+
+def test_c3_records_what_one_latency_covers_on_each_arm():
+    """C3 compares a per-operation latency, and the two arms no longer cover the
+    same number of documents: OpenSearch records one C3_BATCH-document _bulk,
+    ScyllaDB records one INSERT. That is a property of the wire — there is no
+    CQL batch to match — so the chart has to say so rather than the harness
+    pretending the quantities are equal."""
+    assert docs_per_operation("c3-scylla-cdc") == 1
+    assert docs_per_operation("c3-os") > 1
+
+
+def test_c3_overrides_the_opensearch_macros_baked_in_batch_size():
+    """OS_LOAD bakes in OS_BATCH_SIZE for the throughput path; C3 needs its own,
+    smaller batch to get enough operations per bucket, and gets it by appending
+    a second --batch-size that argparse's last-wins resolves."""
+    loader = next(argv for name, argv in module_commands("c3-os")
+                  if name.endswith("_load"))
+    assert loader.count("--batch-size") == 2, \
+        "c3-os no longer overrides the macro's baked-in batch size"
+
+
+def test_the_c3_scylla_arm_carries_no_batch_flag_to_override():
+    """Nothing to append: the loader has no such flag, and a C3 recipe that
+    started passing one would be rejected by the parser rather than silently
+    reshaping the arm."""
+    loader = next(argv for name, argv in module_commands("c3-scylla-cdc")
+                  if name.endswith("_load"))
+    assert "--batch-size" not in loader
+
+
+RETIRED_KNOBS = ("SCYLLA_BATCH_SIZE=500", "SCYLLA_ROWS_IN_FLIGHT=64",
+                 "SCYLLA_UNLOGGED_BATCH_ROWS=30")
+
+
+@pytest.mark.parametrize("override", RETIRED_KNOBS)
+def test_a_caller_setting_a_removed_knob_is_refused_not_ignored(override):
+    """Six scripts in tools/ drive the UNLOGGED BATCH mode, and others pin a
+    ScyllaDB batch size. That mode is gone: one operation is one prepared
+    INSERT. Ignoring the setting would run the per-row path under a label and a
+    manifest saying 30 rows per batch — the S28 failure, a complete and
+    plausible artifact describing a run nobody performed. make refuses."""
+    refused = subprocess.run(["make", "-n", "c1-scylla-cdc", override],
+                             cwd=BENCH_DIR, capture_output=True, text=True)
+    assert refused.returncode != 0, f"{override} was accepted and ignored"
+    assert override.split("=")[0] in refused.stderr
+
+
+def test_the_campaign_targets_still_run_without_those_knobs():
+    """The refusal must be about an explicit setting and nothing else."""
+    for target in ("c1-scylla-cdc", "c3-scylla-cdc", "scylla-load"):
+        done = subprocess.run(["make", "-n", target], cwd=BENCH_DIR,
+                              capture_output=True, text=True)
+        assert done.returncode == 0, f"{target}: {done.stderr}"
+
+
+def test_the_campaign_scylla_load_command_is_still_accepted():
+    """The refusal above must be about the combination and nothing else: the
+    campaign's own per-row path (--unlogged-batch-rows 0 at --batch-size 1) has
+    no group to fill and has to keep running."""
+    assert_parser_accepts(*next((name, argv) for name, argv
+                                in module_commands("scylla-load")
+                                if name == "ftsbench.scylla_load"))
