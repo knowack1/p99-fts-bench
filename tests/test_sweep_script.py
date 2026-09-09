@@ -42,24 +42,10 @@ SCYLLA_ARM = "--scylladb-cdc-buf376"
 SWEEP_DOCS = 1000
 
 MAKE_STUB = r"""#!/usr/bin/env bash
-# Records every invocation. The C1 series is written here as well as in the
-# python stub, because the COMMITTED script measures through `make c1-*` and its
-# point gate reads what that wrote — the two stubs together let both versions of
-# the ladder run under one set of stubs.
-printf '%q ' "$@" >> "$MAKE_LOG"
-printf '\n' >> "$MAKE_LOG"
-series=""
-for arg in "$@"; do
-  case "$arg" in
-    C1_OS_SERIES=*|C1_SCYLLA_CDC_SERIES=*) series="${arg#*=}" ;;
-  esac
-done
-if [[ -n "$series" ]]; then
-  mkdir -p "$(dirname "$series")"
-  printf '%s\n' '{"record": "header", "engine": "opensearch"}' > "$series"
-  printf '{"record": "sample", "i": 0, "docs_indexed": %s}\n' \
-    "$STUB_DOCS" >> "$series"
-fi
+# The stack and the index DDL are all the ladder asks make for now. Recorded so
+# the tests can assert that one engine comes up and both go down.
+line=$(printf '%q ' "$@")
+printf '%s\n' "$line" >> "$MAKE_LOG"
 exit 0
 """
 
@@ -162,13 +148,6 @@ def flag(argv: list[str], name: str) -> str | None:
     return argv[argv.index(name) + 1]
 
 
-def variable(argv: list[str], name: str) -> str | None:
-    for token in argv:
-        if token.startswith(f"{name}="):
-            return token.split("=", 1)[1]
-    return None
-
-
 def points(result: subprocess.CompletedProcess) -> list[list[str]]:
     """One manifest invocation per point, in the order the ladder ran them.
 
@@ -197,47 +176,9 @@ def canonical(point: list[str], out_dir: Path) -> tuple[str, ...]:
     )
 
 
-def canonical_via_make(argv: list[str], out_dir: Path) -> tuple[str, ...]:
-    """The same tuple off the committed script's `make c1-*` invocation."""
-    series = (variable(argv, "C1_OS_SERIES")
-              or variable(argv, "C1_SCYLLA_CDC_SERIES") or "")
-    return (
-        series.replace(str(out_dir), "$OUT_DIR"),
-        variable(argv, "REP") or "",
-        variable(argv, "OS_BATCH_SIZE") or "",
-        variable(argv, "LABEL") or "",
-    )
-
-
-def make_points(make_log: str) -> list[list[str]]:
-    return [shlex.split(line) for line in make_log.splitlines()
-            if line.startswith("c1-os ") or line.startswith("c1-scylla-cdc ")]
-
-
 def artifacts(out_dir: Path) -> list[str]:
     return sorted(str(path.relative_to(out_dir))
                   for path in out_dir.rglob("*") if path.is_file())
-
-
-def head_tree(tmp_path: Path) -> Path:
-    """The committed ladder, runnable: it does `cd "$(dirname "$0")/.."`, so it
-    needs a tree beside it. Everything but the script itself is a link to the
-    real one, so the two runs differ in exactly one file."""
-    committed = subprocess.run(["git", "show", "HEAD:tools/sweep_build_rate.sh"],
-                               cwd=BENCH_DIR, capture_output=True, text=True)
-    assert committed.returncode == 0, committed.stderr
-    root = tmp_path / "head-tree"
-    (root / "tools").mkdir(parents=True)
-    for entry in BENCH_DIR.iterdir():
-        if entry.name != "tools":
-            (root / entry.name).symlink_to(entry)
-    for entry in (BENCH_DIR / "tools").iterdir():
-        if entry.name != "sweep_build_rate.sh":
-            (root / "tools" / entry.name).symlink_to(entry)
-    script = root / "tools" / "sweep_build_rate.sh"
-    script.write_text(committed.stdout, encoding="utf-8")
-    script.chmod(0o755)
-    return script
 
 
 def test_the_script_still_parses():
@@ -245,37 +186,44 @@ def test_the_script_still_parses():
 
 
 def test_legacy_mode_writes_the_artifacts_it_always_wrote(tmp_path):
-    """Path-for-path against the committed script under the same stubs. With
-    BATCHES unset there are no level subdirectories, because every reader of
-    data/sweep-aws expects the series at the top."""
-    now = run_sweep(tmp_path / "now", SCRIPT, OPENSEARCH_ARM,
-                    out_dir=tmp_path / "out-now")
-    before = run_sweep(tmp_path / "before", head_tree(tmp_path / "before"),
-                       OPENSEARCH_ARM, out_dir=tmp_path / "out-before")
-    assert now.returncode == 0, now.stderr[-2000:]
-    assert before.returncode == 0, before.stderr[-2000:]
-    assert artifacts(tmp_path / "out-now") == artifacts(tmp_path / "out-before")
-    assert artifacts(tmp_path / "out-now"), "the run produced nothing to compare"
-    assert not any("/" in name for name in artifacts(tmp_path / "out-now"))
+    """The names every reader depends on, written down rather than derived.
+
+    `ftsbench/sweep_build_rate.py`'s SERIES_RE and `tools/plot_batch_ceiling.py`
+    parse these, and data/sweep-aws is full of them. With BATCHES unset there
+    are no level subdirectories, because every reader of that tree expects the
+    series at the top."""
+    out = tmp_path / "out"
+    run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=out)
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert artifacts(out) == [
+        "c1-opensearch-ramindex-c16-1.jsonl",
+        "c1-opensearch-ramindex-c8-1.jsonl",
+    ]
 
 
-@pytest.mark.parametrize("arm", [OPENSEARCH_ARM, SCYLLA_ARM])
-def test_the_points_are_the_points_it_always_ran(tmp_path, arm):
-    """The ladder stopped measuring through make; it must not have stopped
-    measuring the same points. Same files, same repetitions, same levels, same
-    labels, same order — reached by two different mechanisms, which is exactly
-    why the comparison is worth making."""
-    now = run_sweep(tmp_path / "now", SCRIPT, arm,
-                    out_dir=tmp_path / "out-now", reps="2")
-    before = run_sweep(tmp_path / "before", head_tree(tmp_path / "before"),
-                       arm, out_dir=tmp_path / "out-before", reps="2")
-    assert now.returncode == 0, now.stderr[-2000:]
-    assert before.returncode == 0, before.stderr[-2000:]
-    after = [canonical(point, tmp_path / "out-now") for point in points(now)]
-    prior = [canonical_via_make(argv, tmp_path / "out-before")
-             for argv in make_points(before.make_log)]
-    assert after, "the run recorded no points"
-    assert after == prior, f"\nnow:    {after}\nbefore: {prior}"
+@pytest.mark.parametrize("arm,config,batch", [
+    (OPENSEARCH_ARM, "opensearch-ramindex", "500"),
+    (SCYLLA_ARM, "scylla-cdc-buf376", ""),
+])
+def test_the_points_are_the_points_it_always_ran(tmp_path, arm, config, batch):
+    """Which points, in which order, under which label — stated, not compared.
+
+    This used to diff against `git show HEAD:tools/sweep_build_rate.sh`, which
+    was the right baseline while the ladder was being rewritten and worthless
+    the moment the rewrite landed: HEAD became the new script and the
+    comparison started passing against itself. What the archived measurements
+    actually pin is this enumeration, so it is written down. The ScyllaDB arm
+    records no batch size, because one operation is one prepared INSERT."""
+    out = tmp_path / "out"
+    run = run_sweep(tmp_path, SCRIPT, arm, out_dir=out, reps="2")
+    assert run.returncode == 0, run.stderr[-2000:]
+    label = f"build-rate sweep, {config}, concurrency=%s batch={batch or 1}"
+    assert [canonical(point, out) for point in points(run)] == [
+        (f"$OUT_DIR/c1-{config}-c8-1.jsonl", "1", batch, label % 8),
+        (f"$OUT_DIR/c1-{config}-c16-1.jsonl", "1", batch, label % 16),
+        (f"$OUT_DIR/c1-{config}-c8-2.jsonl", "2", batch, label % 8),
+        (f"$OUT_DIR/c1-{config}-c16-2.jsonl", "2", batch, label % 16),
+    ]
 
 
 def test_legacy_mode_offers_the_batch_size_make_would_have_chosen(tmp_path):
