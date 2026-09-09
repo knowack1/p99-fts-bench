@@ -160,6 +160,21 @@ CONFIG_STYLES = {
     "scylla-bootstrap": {"color": "#2b6cb0", "linestyle": "-"},
     "scylla-cdc": {"color": "#2f855a", "linestyle": "--"},
     "scylladb": {"color": "#2b6cb0", "linestyle": "-"},
+    # The five knob-matrix arms (BUILD-RATE-MATRIX-PLAN.md's run table). They
+    # kept the engine families the deck already uses — OpenSearch warm,
+    # ScyllaDB cool — and the third ScyllaDB arm is magenta rather than the
+    # obvious teal because teal against #2f855a measures ΔE 7.0 to NORMAL
+    # vision (dataviz validator, all pairs): two lines nobody could tell apart.
+    # This five-colour set passes every check of that validator, worst
+    # all-pairs ΔE 15.2 normal / 7.1 deuteranopic — the latter inside the
+    # 6-8 band that is legal only with a secondary encoding, which is why
+    # plot_build_rate_matrix direct-labels every arm rather than relying on
+    # its colour.
+    "opensearch-ramindex": {"color": "#c2432b", "linestyle": "-"},
+    "opensearch-ramindex-refresh30": {"color": "#dd8452", "linestyle": ":"},
+    "scylla-cdc-buf15": {"color": "#2b6cb0", "linestyle": "-."},
+    "scylla-cdc-buf376": {"color": "#2f855a", "linestyle": "--"},
+    "scylla-cdc-buf376-commit30": {"color": "#97266d", "linestyle": (0, (5, 1))},
 }
 FALLBACK_COLORS = ["#6b46c1", "#b7791f", "#2c7a7b", "#97266d"]
 ROLE_COLORS = {
