@@ -308,9 +308,14 @@ the headroom is in processes, which is what the `N x M` shape exists for.
 **The ScyllaDB arms need four loader processes at batch 1.** 8,003 docs/s in
 one process against a ScyllaDB engine ceiling near 12,228 is 0.66x: the client
 would be the constraint. N=2 gives 1.26x and still fails the 2x rule; N=4
-gives 2.34x. `tools/sweep_build_rate.sh` launches one loader, so wiring
-`ftsbench.mp_load` into it is what unblocks R1–R3. That is the price of the
-batch-1 decision, and the answer is more processes, never a larger batch.
+gives 2.34x. `ftsbench.mp_load`'s `--workers` now reaches the loaders through
+`tools/build_rate_point.sh` (`WORKERS=` on the ladder, a roster column per
+row), which is what unblocks R1–R3 — but it is **off by default and not yet
+measured on the fleet**: with `WORKERS` unset a point is exactly the
+single-process run every archived artifact was taken with. Turning it on is a
+change to the client, so it needs its own pass with `verify_generator` applied.
+That is the price of the batch-1 decision, and the answer is more processes,
+never a larger batch.
 
 ### The ramindex arm cannot hold the frozen corpus (measured 2026-09-08)
 

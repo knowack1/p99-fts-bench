@@ -89,14 +89,41 @@ For the real corpus: `make download WIKI=enwiki` (65 shards, ~40 GB — see
 
 ## C1 — index build throughput
 
-`make c1-os` / `make c1-scylla` run a loader and a sampler together and write
-a time series to `data/c1-<engine>.jsonl`, one record per sample:
+### The build-rate campaign
+
+Three files, in order of how much they decide:
 
 ```bash
-make c1-os     MAX_DOCS=150000 LABEL="simplewiki 150k, laptop" CACHE_STATE=cold
-make c1-scylla MAX_DOCS=150000 LABEL="simplewiki 150k, laptop" CACHE_STATE=cold
+tools/build_rate_campaign.sh              # the roster: every run, and what is left
+tools/build_rate_campaign.sh run          # execute the rows that are not done
+tools/sweep_build_rate.sh <arm> <reps>    # one arm's ladder
+tools/build_rate_point.sh --arm <flag> --concurrency 8 --rep 1 --dry-run
+                                          # ONE point, with its exact commands
+```
+
+`build_rate_point.sh` is the file to open to see what is measured: the reset,
+the two probes, the monitor and the loader, the gates and the artifacts, with
+every flag written out. `--dry-run` prints them without touching an engine.
+`sweep_build_rate.sh` is the loop around it (rungs, repetitions, batch levels),
+and `build_rate_campaign.sh` is the table of runs the campaign intends.
+
+### The C1 make targets
+
+`make c1-os` / `make c1-scylla-cdc` run a loader and a sampler together and
+write a time series to `data/c1-<engine>.jsonl`, one record per sample. They
+are what nine diagnostic scripts in `tools/` drive, and
+`tests/test_build_rate_point.py` holds them and the point script to issuing
+the same run:
+
+```bash
+make c1-os          MAX_DOCS=150000 LABEL="simplewiki 150k, laptop" CACHE_STATE=cold
+make c1-scylla-cdc  MAX_DOCS=150000 LABEL="simplewiki 150k, laptop" CACHE_STATE=cold
 make c1-report                 # summarise both series side by side
 ```
+
+Unlike the campaign path they do NOT empty the index first — that is the
+ladder's step — so a repetition run by hand needs `make os-reindex` (or
+`make scylla-reset`) before it, or the monitor sees no new documents.
 
 Two properties this harness deliberately has, because C1 is wrong without
 them:

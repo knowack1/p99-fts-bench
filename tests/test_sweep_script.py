@@ -1,21 +1,29 @@
-"""The sweep driver, without a stack: what it asks make for and where it puts it.
+"""The ladder driver, without a stack: which points it runs and where they go.
 
-`BATCHES` adds an axis to a script every arm of the campaign already runs, and
-two of its properties cannot be checked by reading it:
+The ladder no longer assembles the measured commands — tools/build_rate_point.sh
+does, and tests/test_build_rate_point.py pins those against the Makefile. What
+is under test here is the driver's own arithmetic: the rungs, the repetitions,
+the batch levels, the directories and the set-aside, which is where an axis is
+either right or silently wrong.
+
+Two properties cannot be checked by reading it:
 
 - with `BATCHES` unset the run has to be the run it was. Every measurement in
   results/ was taken by this script, and a driver that quietly moved its
-  artifacts or changed a make variable would make the next pass
-  non-comparable with the last for a reason nobody wrote down.
-- with `BATCHES` set, each level's artifacts have to land in
-  `$OUT_DIR/b<batch>/` under UNCHANGED filenames. That is what lets
-  `SERIES_RE` stay as it is and every summary over one directory be
-  internally single-batch — the property `sweep_build_rate.py` asserts on the
-  reading side.
+  artifacts or changed a point would make the next pass non-comparable with the
+  last for a reason nobody wrote down. `test_the_points_are_the_points_it_always_ran`
+  compares against the committed script point for point.
+- with `BATCHES` set, each level's artifacts have to land in `$OUT_DIR/b<batch>/`
+  under UNCHANGED filenames. That is what lets `SERIES_RE` stay as it is and
+  every summary over one directory be internally single-batch — the property
+  `sweep_build_rate.py` asserts on the reading side.
 
-The stack is stubbed: `make` records its argv and writes the series the point
-gate reads, and the resource probe sleeps. What is under test is the driver's
-own arithmetic, which is where the axis is either right or silently wrong.
+The stack is stubbed: `make` records its argv (and, for the committed script,
+writes the series its point gate reads), `docker` is inert, and the interpreter
+is a stub that records every ftsbench invocation, writes the series when asked
+to be the build monitor, and sleeps as the probes. The point script itself is
+REAL, so what these tests drive is the ladder-to-point boundary rather than a
+reimplementation of it.
 """
 import os
 import re
@@ -25,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from .test_makefile_commands import parse_module_commands
+
 BENCH_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = BENCH_DIR / "tools" / "sweep_build_rate.sh"
 OPENSEARCH_ARM = "--opensearch-ram-nostore-refresh3"
@@ -32,8 +42,10 @@ SCYLLA_ARM = "--scylladb-cdc-buf376"
 SWEEP_DOCS = 1000
 
 MAKE_STUB = r"""#!/usr/bin/env bash
-# Records every invocation, and writes the series the point gate reads so that
-# a stubbed point completes rather than being set aside.
+# Records every invocation. The C1 series is written here as well as in the
+# python stub, because the COMMITTED script measures through `make c1-*` and its
+# point gate reads what that wrote — the two stubs together let both versions of
+# the ladder run under one set of stubs.
 printf '%q ' "$@" >> "$MAKE_LOG"
 printf '\n' >> "$MAKE_LOG"
 series=""
@@ -52,29 +64,51 @@ exit 0
 """
 
 DOCKER_STUB = r"""#!/usr/bin/env bash
-# `docker logs` is called with the script's stdin attached, so a stub that read
-# stdin unconditionally would hang the sweep rather than fail it.
+# `docker logs` and `docker exec -i cqlsh` are both called with input attached,
+# so a stub that read stdin unconditionally would hang the ladder rather than
+# fail it.
 exit 0
 """
 
 PYTHON_STUB = r"""#!/usr/bin/env bash
-# The probes are the only long-running python the sweep starts; everything else
-# (ftsbench.target, the point gate) has to be the real interpreter. Both probes
-# are logged rather than run: what the tests assert is that each point starts
-# one and hands it that point's own label, which is the invariant
-# ftsbench.verify_generator depends on.
+# Every ftsbench invocation is recorded as it would have been issued, so the
+# tests read one log with the same parser test_makefile_commands uses. Two
+# modules cannot be stubbed away: ftsbench.target resolves the arm, and the
+# point-completeness gate is an inline script (`python - <series> <cap>`).
 for arg in "$@"; do
   case "$arg" in
-    ftsbench.resource_probe) exec sleep 600 ;;
-    ftsbench.generator_probe)
-      # %q per argument: the point label carries spaces, and joining with "$*"
-      # would split it into tokens on the way back out.
-      { printf 'generator_probe'; printf ' %q' "$@"; printf '\n'; } >> "$PROBE_LOG"
-      exec sleep 600
-      ;;
+    ftsbench.target) exec "$REAL_PYTHON" "$@" ;;
   esac
 done
-exec "$REAL_PYTHON" "$@"
+case "$1" in
+  -) exec "$REAL_PYTHON" "$@" ;;
+esac
+# ONE write: the probes are backgrounded, so two processes append here at the
+# same time, and a line built from two printf calls can interleave with
+# another's. That showed up as a point whose probe "did not exist".
+line=$(printf '%q ' "$@")
+printf '%s\n' "$line" >> "$PYTHON_LOG"
+for arg in "$@"; do
+  case "$arg" in
+    ftsbench.resource_probe|ftsbench.generator_probe) exec sleep 600 ;;
+  esac
+done
+# The monitor is what writes the series the gate reads.
+if [[ " $* " == *" ftsbench.build_monitor "* ]]; then
+  output=""
+  previous=""
+  for arg in "$@"; do
+    [[ "$previous" == "--output" ]] && output="$arg"
+    previous="$arg"
+  done
+  if [[ -n "$output" ]]; then
+    mkdir -p "$(dirname "$output")"
+    printf '%s\n' '{"record": "header", "engine": "opensearch"}' > "$output"
+    printf '{"record": "sample", "i": 0, "docs_indexed": %s}\n' \
+      "$STUB_DOCS" >> "$output"
+  fi
+fi
+exit 0
 """
 
 
@@ -95,13 +129,13 @@ def run_sweep(tmp_path: Path, script: Path, arm: str, *, out_dir: Path,
     stubs = stub_path(tmp_path)
     make_log = tmp_path / "make.log"
     make_log.touch()
-    probe_log = tmp_path / "probe.log"
-    probe_log.touch()
+    python_log = tmp_path / "python.log"
+    python_log.touch()
     environment = {
         **os.environ,
         "PATH": f"{stubs}:{os.environ['PATH']}",
         "MAKE_LOG": str(make_log),
-        "PROBE_LOG": str(probe_log),
+        "PYTHON_LOG": str(python_log),
         "STUB_DOCS": str(SWEEP_DOCS),
         "REAL_PYTHON": str(BENCH_DIR / ".venv" / "bin" / "python3"),
         "PYTHON": str(stubs / "python-stub"),
@@ -117,14 +151,15 @@ def run_sweep(tmp_path: Path, script: Path, arm: str, *, out_dir: Path,
     result = subprocess.run(["bash", str(script), arm, reps],
                             cwd=BENCH_DIR, capture_output=True, text=True,
                             env=environment, timeout=300)
-    result.make_log = make_log.read_text(encoding="utf-8") if make_log.exists() else ""
-    result.probe_log = probe_log.read_text(encoding="utf-8") if probe_log.exists() else ""
+    result.make_log = make_log.read_text(encoding="utf-8")
+    result.python_log = python_log.read_text(encoding="utf-8")
     return result
 
 
-def c1_invocations(make_log: str) -> list[list[str]]:
-    return [shlex.split(line) for line in make_log.splitlines()
-            if line.startswith("c1-os ") or line.startswith("c1-scylla-cdc ")]
+def flag(argv: list[str], name: str) -> str | None:
+    if name not in argv:
+        return None
+    return argv[argv.index(name) + 1]
 
 
 def variable(argv: list[str], name: str) -> str | None:
@@ -134,16 +169,49 @@ def variable(argv: list[str], name: str) -> str | None:
     return None
 
 
-def label_of(argv: list[str]) -> str:
-    return variable(argv, "LABEL") or ""
+def points(result: subprocess.CompletedProcess) -> list[list[str]]:
+    """One manifest invocation per point, in the order the ladder ran them.
+
+    The manifest is the natural per-point record: it is the one command that
+    carries the configuration, the repetition, the label, the series it belongs
+    to and the batch size at once.
+    """
+    return [argv for module, argv in parse_module_commands(result.python_log)
+            if module == "ftsbench.run_manifest"]
 
 
-def comparable(argv: list[str], out_dir: Path) -> set[str]:
-    """Make variables with the run's own OUT_DIR folded out, and the label
-    dropped: the two runs write to different directories, and the contract
-    appends the write shape to the label, so both are compared separately."""
-    return {token.replace(str(out_dir), "$OUT_DIR") for token in argv
-            if not token.startswith("LABEL=")}
+def probes(result: subprocess.CompletedProcess, module: str) -> list[list[str]]:
+    return [argv for name, argv in parse_module_commands(result.python_log)
+            if name == f"ftsbench.{module}"]
+
+
+def canonical(point: list[str], out_dir: Path) -> tuple[str, ...]:
+    """A point as the campaign cares about it: which file, which repetition,
+    which level, under which label. Compared across two ladder versions that
+    reach it by different mechanisms, so it names the result and not the route."""
+    return (
+        (flag(point, "--series") or "").replace(str(out_dir), "$OUT_DIR"),
+        flag(point, "--rep") or "",
+        flag(point, "--batch-size") or "",
+        flag(point, "--label") or "",
+    )
+
+
+def canonical_via_make(argv: list[str], out_dir: Path) -> tuple[str, ...]:
+    """The same tuple off the committed script's `make c1-*` invocation."""
+    series = (variable(argv, "C1_OS_SERIES")
+              or variable(argv, "C1_SCYLLA_CDC_SERIES") or "")
+    return (
+        series.replace(str(out_dir), "$OUT_DIR"),
+        variable(argv, "REP") or "",
+        variable(argv, "OS_BATCH_SIZE") or "",
+        variable(argv, "LABEL") or "",
+    )
+
+
+def make_points(make_log: str) -> list[list[str]]:
+    return [shlex.split(line) for line in make_log.splitlines()
+            if line.startswith("c1-os ") or line.startswith("c1-scylla-cdc ")]
 
 
 def artifacts(out_dir: Path) -> list[str]:
@@ -152,7 +220,7 @@ def artifacts(out_dir: Path) -> list[str]:
 
 
 def head_tree(tmp_path: Path) -> Path:
-    """The committed script, runnable: it does `cd "$(dirname "$0")/.."`, so it
+    """The committed ladder, runnable: it does `cd "$(dirname "$0")/.."`, so it
     needs a tree beside it. Everything but the script itself is a link to the
     real one, so the two runs differ in exactly one file."""
     committed = subprocess.run(["git", "show", "HEAD:tools/sweep_build_rate.sh"],
@@ -191,39 +259,32 @@ def test_legacy_mode_writes_the_artifacts_it_always_wrote(tmp_path):
     assert not any("/" in name for name in artifacts(tmp_path / "out-now"))
 
 
-def test_legacy_mode_changes_only_the_variables_the_contract_adds(tmp_path):
-    """The one difference a legacy run is allowed: the batch value the Makefile
-    would have chosen anyway, resolved here so the same number can also reach
-    the point label. Anything else would make this pass non-comparable with the
-    measured ones."""
-    now = run_sweep(tmp_path / "now", SCRIPT, OPENSEARCH_ARM,
-                    out_dir=tmp_path / "out-now")
+@pytest.mark.parametrize("arm", [OPENSEARCH_ARM, SCYLLA_ARM])
+def test_the_points_are_the_points_it_always_ran(tmp_path, arm):
+    """The ladder stopped measuring through make; it must not have stopped
+    measuring the same points. Same files, same repetitions, same levels, same
+    labels, same order — reached by two different mechanisms, which is exactly
+    why the comparison is worth making."""
+    now = run_sweep(tmp_path / "now", SCRIPT, arm,
+                    out_dir=tmp_path / "out-now", reps="2")
     before = run_sweep(tmp_path / "before", head_tree(tmp_path / "before"),
-                       OPENSEARCH_ARM, out_dir=tmp_path / "out-before")
-    after_all = c1_invocations(now.make_log)
-    prior_all = c1_invocations(before.make_log)
-    assert after_all, "the run invoked no C1 target"
-    assert len(after_all) == len(prior_all), \
-        "legacy mode runs a different number of points than it used to"
-    pairs = list(zip(after_all, prior_all))
-    for new, old in pairs:
-        after = comparable(new, tmp_path / "out-now")
-        prior = comparable(old, tmp_path / "out-before")
-        assert after - prior == {"OS_BATCH_SIZE=500"}, \
-            f"legacy mode changed more than the batch value: {after - prior}"
-        assert not prior - after, \
-            f"a make variable the committed script passed has gone: {prior - after}"
-        assert label_of(new) == f"{label_of(old)} batch=500", \
-            "the label gained more than the write shape"
+                       arm, out_dir=tmp_path / "out-before", reps="2")
+    assert now.returncode == 0, now.stderr[-2000:]
+    assert before.returncode == 0, before.stderr[-2000:]
+    after = [canonical(point, tmp_path / "out-now") for point in points(now)]
+    prior = [canonical_via_make(argv, tmp_path / "out-before")
+             for argv in make_points(before.make_log)]
+    assert after, "the run recorded no points"
+    assert after == prior, f"\nnow:    {after}\nbefore: {prior}"
 
 
-def test_legacy_mode_asks_make_for_the_batch_size_make_would_have_chosen(tmp_path):
-    """`OS_BATCH_SIZE ?= $(BATCH_SIZE)` is 500, so resolving the value in the
-    script has to reproduce that and not introduce a second default."""
+def test_legacy_mode_offers_the_batch_size_make_would_have_chosen(tmp_path):
+    """`OS_BATCH_SIZE ?= $(BATCH_SIZE)` is 500, so resolving the value outside
+    make has to reproduce that and not introduce a second default."""
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=tmp_path / "out")
     assert run.returncode == 0, run.stderr[-2000:]
-    for argv in c1_invocations(run.make_log):
-        assert variable(argv, "OS_BATCH_SIZE") == "500"
+    for point in points(run):
+        assert flag(point, "--batch-size") == "500"
 
 
 def test_a_caller_that_exports_the_shared_batch_size_still_gets_it(tmp_path):
@@ -231,7 +292,7 @@ def test_a_caller_that_exports_the_shared_batch_size_still_gets_it(tmp_path):
     reproduce make's own choice rather than override it."""
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=tmp_path / "out",
                     env={"BATCH_SIZE": "300"})
-    assert variable(c1_invocations(run.make_log)[0], "OS_BATCH_SIZE") == "300"
+    assert flag(points(run)[0], "--batch-size") == "300"
 
 
 def test_every_level_roots_its_artifacts_in_its_own_directory(tmp_path):
@@ -248,26 +309,26 @@ def test_every_level_roots_its_artifacts_in_its_own_directory(tmp_path):
         "a level's series also landed loose in OUT_DIR, where it has no level"
 
 
-def test_each_level_is_the_batch_size_it_asks_make_for(tmp_path):
-    """The directory is a label; the make variable is what the run actually
-    did. plot_batch_ceiling refuses a tree where those two disagree, so they
-    must be one decision here."""
+def test_each_level_is_the_batch_size_the_point_recorded(tmp_path):
+    """The directory is a label; the recorded batch size is what the run
+    actually did. plot_batch_ceiling refuses a tree where those two disagree,
+    so they must be one decision here."""
     out = tmp_path / "out"
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=out,
                     ladder="8", env={"BATCHES": "16 512"})
-    for argv in c1_invocations(run.make_log):
-        batch = variable(argv, "OS_BATCH_SIZE")
-        series = variable(argv, "C1_OS_SERIES")
+    for point in points(run):
+        batch = flag(point, "--batch-size")
+        series = flag(point, "--series")
         assert f"/b{batch}/" in series, f"{series} is not under b{batch}/"
 
 
 def test_the_level_reaches_the_label_that_reaches_all_three_records(tmp_path):
     """The label is the cheap independent second record: it lands in the series
-    header, the manifest and the CPU probe's header at once, so no single
+    header, the manifest and both probes' headers at once, so no single
     omission can hide what a point offered the engine."""
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=tmp_path / "out",
                     ladder="8", env={"BATCHES": "128"})
-    label = variable(c1_invocations(run.make_log)[0], "LABEL")
+    label = flag(points(run)[0], "--label")
     assert "concurrency=8" in label
     assert "batch=128" in label
 
@@ -277,8 +338,8 @@ def test_the_levels_are_an_inner_loop_so_one_container_serves_them_all(tmp_path)
     land it directly on the axis being measured."""
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=tmp_path / "out",
                     reps="2", ladder="8", env={"BATCHES": "16 512"})
-    order = [(variable(argv, "REP"), variable(argv, "OS_BATCH_SIZE"))
-             for argv in c1_invocations(run.make_log)]
+    order = [(flag(point, "--rep"), flag(point, "--batch-size"))
+             for point in points(run)]
     assert order == [("1", "16"), ("1", "512"), ("2", "16"), ("2", "512")], order
 
 
@@ -293,7 +354,7 @@ def test_a_multi_level_sweep_of_the_scylla_arm_is_refused(tmp_path):
     assert run.returncode == 2, run.stdout + run.stderr
     assert "no ScyllaDB batch axis" in run.stderr
     assert not out.exists(), "the refusal came after the run had begun"
-    assert c1_invocations(run.make_log) == []
+    assert points(run) == []
 
 
 def test_the_scylla_arm_may_still_be_pinned_at_one_level(tmp_path):
@@ -308,9 +369,8 @@ def test_the_scylla_arm_may_still_be_pinned_at_one_level(tmp_path):
 
 @pytest.mark.parametrize("levels", ["16,64", "0", "-8", "many"])
 def test_a_batch_list_that_is_not_a_list_of_levels_is_refused(tmp_path, levels):
-    """`BATCHES="16,64"` would otherwise become one make variable and a
-    directory named b16,64 — a plausible-looking tree measuring nothing
-    nameable."""
+    """`BATCHES="16,64"` would otherwise become one flag and a directory named
+    b16,64 — a plausible-looking tree measuring nothing nameable."""
     out = tmp_path / "out"
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=out,
                     env={"BATCHES": levels})
@@ -323,18 +383,25 @@ def test_a_set_aside_point_records_which_level_it_was(tmp_path):
     """failed-points.log is one file for the whole invocation, so without the
     level two set-aside points at the same concurrency and repetition in
     different level directories are indistinguishable."""
-    stubs_env = {"BATCHES": "16 512", "STUB_DOCS": "1"}
     out = tmp_path / "out"
     run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=out,
-                    ladder="8", env=stubs_env)
+                    ladder="8", env={"BATCHES": "16 512", "STUB_DOCS": "1"})
     assert run.returncode == 0, run.stderr[-2000:]
     failures = (out / "failed-points.log").read_text(encoding="utf-8")
     assert "batch=16" in failures and "batch=512" in failures
 
 
-def generator_probes(probe_log: str) -> list[list[str]]:
-    return [shlex.split(line) for line in probe_log.splitlines()
-            if line.startswith("generator_probe ")]
+def test_a_set_aside_point_takes_its_whole_artifact_set_out_of_the_way(tmp_path):
+    """An incomplete point silently lowers a rung of the median, so nothing it
+    wrote may stay where a summariser globs. The paths come from the point
+    script itself, which is what keeps one naming rule in one file."""
+    out = tmp_path / "out"
+    run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=out,
+                    ladder="8", env={"STUB_DOCS": "1"})
+    assert run.returncode == 0, run.stderr[-2000:]
+    written = artifacts(out)
+    assert "c1-opensearch-ramindex-c8-1.jsonl.failed" in written
+    assert "c1-opensearch-ramindex-c8-1.jsonl" not in written
 
 
 def test_every_point_starts_a_generator_probe_carrying_its_own_label(tmp_path):
@@ -348,17 +415,17 @@ def test_every_point_starts_a_generator_probe_carrying_its_own_label(tmp_path):
     result = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM,
                        out_dir=tmp_path / "out", ladder="8 16")
     assert result.returncode == 0, result.stderr[-2000:]
-    probes = generator_probes(result.probe_log)
-    points = c1_invocations(result.make_log)
-    assert len(probes) == len(points), \
-        "one generator probe per point, got %d for %d points" % (len(probes), len(points))
-    for argv in probes:
-        assert "--match" in argv, argv
-        assert argv[argv.index("--match") + 1] == "ftsbench.opensearch_load", argv
-        label = argv[argv.index("--label") + 1]
+    started = probes(result, "generator_probe")
+    recorded = points(result)
+    assert len(started) == len(recorded), \
+        "one generator probe per point, got %d for %d points" % (len(started),
+                                                                 len(recorded))
+    for argv in started:
+        assert flag(argv, "--match") == "ftsbench.opensearch_load", argv
+        label = flag(argv, "--label")
         assert "concurrency=" in label and "batch=" in label, label
-    labels = [argv[argv.index("--label") + 1] for argv in probes]
-    assert sorted(labels) == sorted(label_of(argv) for argv in points), \
+    assert sorted(flag(argv, "--label") for argv in started) \
+        == sorted(flag(point, "--label") for point in recorded), \
         "a probe carries a label that is not its point's"
 
 
@@ -369,7 +436,18 @@ def test_the_generator_series_lands_beside_the_point_it_measures(tmp_path):
                        out_dir=tmp_path / "out", ladder="8",
                        env={"BATCHES": "16 512"})
     assert result.returncode == 0, result.stderr[-2000:]
-    for argv in generator_probes(result.probe_log):
-        out = argv[argv.index("--output") + 1]
-        batch = argv[argv.index("--label") + 1].split("batch=")[1].split()[0]
-        assert "/b%s/gen-" % batch in out, (batch, out)
+    for argv in probes(result, "generator_probe"):
+        output = flag(argv, "--output")
+        batch = flag(argv, "--label").split("batch=")[1].split()[0]
+        assert "/b%s/gen-" % batch in output, (batch, output)
+
+
+def test_the_ladder_keeps_the_stack_to_one_engine(tmp_path):
+    """Both stacks are taken down whichever one came up: a ladder that left its
+    stack running hands the next arm a neighbour competing for the box."""
+    run = run_sweep(tmp_path, SCRIPT, OPENSEARCH_ARM, out_dir=tmp_path / "out",
+                    ladder="8")
+    assert run.returncode == 0, run.stderr[-2000:]
+    invoked = [shlex.split(line) for line in run.make_log.splitlines()]
+    assert ["os-up", "os-wait", "os-relax-watermarks"] in invoked
+    assert ["os-down"] in invoked and ["scylla-down"] in invoked

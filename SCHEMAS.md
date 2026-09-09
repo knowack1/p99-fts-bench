@@ -237,6 +237,13 @@ The build-rate sweep adds a concurrency token: `c1-<config>-c<N>-<rep>.jsonl`
 (`ftsbench/sweep_build_rate.py`'s `SERIES_RE`), with repetition 0 the discarded
 warm-up.
 
+The manifest's `commands` field names what actually ran. On the campaign path
+that is now `tools/build_rate_point.sh --arm <flag>`; artifacts taken before
+2026-09-09 name `make c1-os` / `make c1-scylla-cdc` instead, and those
+ScyllaDB manifests record `config: scylla-cdc` whatever arm they were, because
+the make target hardcodes that label — for them the filename is the recoverable
+arm identity.
+
 When `tools/sweep_build_rate.sh` is given `BATCHES`, each batch level's
 artifacts go in **`$OUT_DIR/b<batch>/`** — `b16/`, `b64/`, … — and the filenames
 inside are **unchanged**:

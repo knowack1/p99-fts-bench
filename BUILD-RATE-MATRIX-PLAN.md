@@ -109,7 +109,10 @@ OpenSearch side.
 | **R5** | `opensearch-ramindex-refresh30` | `--opensearch-ram-nostore-refresh30` | OpenSearch | **+ `refresh_interval: 30s`** | R3 |
 
 All five arms are registered in `ftsbench/target.py`, carry their knobs there
-rather than in `.env.sut`, and are runnable via `tools/knob_matrix.sh`.
+rather than in `.env.sut`, and are rows R1–R5 of the roster in
+`tools/build_rate_campaign.sh` (which replaced `tools/knob_matrix.sh` and
+`tools/batch_matrix.sh`: one table of runs, `list` for what is left, `run` for
+what is not done).
 `ftsbench/verify_arm.py` asserts the vector-store actually took the arm's
 tuning — an image that ignores a knob looks identical to one that honours it,
 and that already cost S11–S15 once. Both gate lines were confirmed present on
@@ -433,12 +436,13 @@ to every already-recorded generator series.
    R4/R5 tmpfs does not hit ENOSPC.
 3. **P1** — the concurrency ladder on the arms about to be pinned. Done for
    R4/R5; P3's ScyllaDB arms need their own.
-4. **P2** — the batch axis, `tools/batch_matrix.sh`, wrapped in a
+4. **P2** — the batch axis, roster rows `R4b R4p R5b R5p`, wrapped in a
    harness-box generator probe.
 5. **P3** — the five-arm matrix, one arm at a time, stack recreated between
-   arms: `tools/knob_matrix.sh 3`, order R1 → R2 → R3 → R4 → R5, so the two
-   ScyllaDB knob deltas land before the OpenSearch arms and a surprise in R2
-   can still change the plan.
+   arms: `tools/build_rate_campaign.sh run R1 R2 R3 R4 R5`, in that order, so
+   the two ScyllaDB knob deltas land before the OpenSearch arms and a surprise
+   in R2 can still change the plan. The generator probe now runs per point, so
+   no outer wrapper is needed for it.
 6. **P0** — client calibration, then apply `verify_generator` to every
    recorded generator series.
 7. Summarise; `verify_cpu_usage` per arm; record `c_sat` and the ceiling in

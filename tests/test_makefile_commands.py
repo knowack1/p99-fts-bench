@@ -32,25 +32,34 @@ TARGETS = (
 )
 
 
-def module_commands(target: str,
-                    overrides: tuple[str, ...] = ()) -> list[tuple[str, list[str]]]:
-    """The `python -m ftsbench.X` invocations one target would run.
+def parse_module_commands(text: str) -> list[tuple[str, list[str]]]:
+    """The `python -m ftsbench.X` invocations in a block of shell.
 
     Line continuations are joined and shell operators split, because a C1 target
     puts the sampler and the measured work in one compound command.
+
+    Shared with tests/test_build_rate_point.py: the point script and this
+    Makefile are two definitions of the same run, and comparing them is only
+    meaningful if one parser reads both sides.
     """
-    result = subprocess.run(["make", "-n", target, *overrides], cwd=BENCH_DIR,
-                            capture_output=True, text=True)
-    assert result.returncode == 0, f"make -n {target} failed:\n{result.stderr}"
-    joined = result.stdout.replace("\\\n", " ")
+    joined = text.replace("\\\n", " ")
     commands = []
     for line in re.split(r"[;&]+", joined.replace("\n", ";")):
         if "-m ftsbench." not in line:
             continue
-        argv = shlex.split(line.lstrip("@").strip())
+        argv = shlex.split(line.lstrip("@").lstrip("+").strip())
         marker = argv.index("-m")
         commands.append((argv[marker + 1], argv[marker + 2:]))
     return commands
+
+
+def module_commands(target: str,
+                    overrides: tuple[str, ...] = ()) -> list[tuple[str, list[str]]]:
+    """The `python -m ftsbench.X` invocations one target would run."""
+    result = subprocess.run(["make", "-n", target, *overrides], cwd=BENCH_DIR,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, f"make -n {target} failed:\n{result.stderr}"
+    return parse_module_commands(result.stdout)
 
 
 def parser_exit_code(module_name: str, args: list[str]) -> int | None:
