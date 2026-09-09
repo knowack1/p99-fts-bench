@@ -23,6 +23,14 @@ from ftsbench import target
 BENCH_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = BENCH_DIR / "tools" / "build_rate_campaign.sh"
 
+
+def nproc() -> int:
+    """The campaign's own denominator, asked for the same way the script asks:
+    `nproc` honours the affinity mask and os.cpu_count() does not."""
+    return int(subprocess.run(["nproc"], capture_output=True, text=True,
+                              check=True).stdout)
+
+
 KNOB_ARMS = (
     "--scylladb-cdc-buf15",
     "--scylladb-cdc-buf376",
@@ -93,14 +101,13 @@ def test_every_run_names_an_arm_the_registry_knows(tmp_path):
     assert named <= known, f"not in ftsbench/target.py: {named - known}"
 
 
-def test_the_knob_matrix_runs_five_arms_once_each_at_three_reps(tmp_path):
+def test_the_knob_matrix_runs_five_arms_once_each(tmp_path):
     """BUILD-RATE-MATRIX-PLAN.md's run table: R1 prices the writer buffer, R2
     adds parity, R3 adds the slow cadence, R4/R5 are the OpenSearch pair at the
     matching refresh cadences. A missing arm is a knob delta nobody measured."""
     laddered = [run for run in runs(tmp_path) if run["OUT_DIR"].endswith("/knobs")]
     assert [run["arm"] for run in laddered] == list(KNOB_ARMS)
     for run in laddered:
-        assert run["reps"] == "3", run
         assert run["LADDER"] == "4 8 16 32 64 96 128", run
 
 
@@ -126,16 +133,25 @@ def test_the_batch_axis_pins_each_arm_at_its_c_sat_and_probes_twice_that(tmp_pat
     """Offered document pressure is c x batch, so the c_sat measured at batch
     512 can sit below the c_sat at batch 16 — pinning one concurrency would
     under-report the small levels by exactly the amount that confirms "a bigger
-    batch is faster". Hence the one-rep probe at 2 x c_sat."""
+    batch is faster". Hence the probe at 2 x c_sat, at the same N as the
+    measurement so its verdict carries a spread of its own."""
     axis = [run for run in runs(tmp_path) if run["OUT_DIR"].endswith("/batch")]
     assert len(axis) == 4, axis
     for run in axis:
         assert run["BATCHES"] == "16 64 128 256 512", run
         assert "opensearch" in run["arm"], run
-    measured = [run for run in axis if run["reps"] == "3"]
-    probes = [run for run in axis if run["reps"] == "1"]
-    assert [run["LADDER"] for run in measured] == ["8", "8"]
-    assert [run["LADDER"] for run in probes] == ["16", "16"]
+    assert [run["LADDER"] for run in axis] == ["8", "16", "8", "16"]
+
+
+def test_every_run_uses_the_same_repetition_count(tmp_path):
+    """No line is quietly less certain than its neighbours: a curve drawn from
+    a mixture of N=3 and N=1 points has a spread on some markers and not on
+    others, and nothing on the chart says which."""
+    counts = {run["reps"] for run in runs(tmp_path / "default")}
+    assert counts == {"3"}, counts
+    overridden = {run["reps"] for run in
+                  runs(tmp_path / "override", env={"REPS": "5"})}
+    assert overridden == {"5"}, overridden
 
 
 def test_the_opensearch_knob_runs_offer_the_locked_batch_size(tmp_path):
@@ -170,15 +186,31 @@ def test_every_run_uses_the_locked_cap_and_keeps_its_warm_up(tmp_path):
         assert run["WARMUP"] == "1", run
 
 
-def test_a_knob_left_in_the_environment_does_not_reach_a_run(tmp_path):
-    """An inherited BATCHES would turn a concurrency ladder into a batch sweep,
-    and an inherited WORKERS would change the client under a label that says
-    nothing about it — both produce a complete, plausible, mislabelled curve."""
-    laddered = [run for run in runs(tmp_path, env={"BATCHES": "64", "WORKERS": "4"})
+def test_a_batch_level_left_in_the_environment_does_not_reach_a_run(tmp_path):
+    """An inherited BATCHES would turn a concurrency ladder into a batch sweep:
+    a complete, plausible, mislabelled curve."""
+    laddered = [run for run in runs(tmp_path, env={"BATCHES": "64"})
                 if run["OUT_DIR"].endswith("/knobs")]
     for run in laddered:
         assert run["BATCHES"] == "", run
-        assert run["WORKERS"] == "", run
+
+
+def test_every_run_gets_half_the_box_as_loader_processes(tmp_path):
+    """One process delivered 8,003 docs/s on the ScyllaDB client, 0.66x of a
+    ~12.2k engine ceiling, which G7's 2x rule refuses; N=4 is 2.34x. Half the
+    box leaves the other half for the parent, the mp.Manager, the monitor and
+    the open-loop generator. Every arm gets the same count — R4/R5 included, so
+    R2<->R4 and R3<->R5 do not compare across two client shapes."""
+    expected = str(max(nproc() // 2, 1))
+    for run in runs(tmp_path):
+        assert run["WORKERS"] == expected, run
+
+
+def test_the_worker_count_can_be_pinned_for_a_differently_shaped_box(tmp_path):
+    """Half of nproc is a budget for the as-built 8-vCPU fleet, not a law: a box
+    whose loader ceiling sits elsewhere is pinned rather than divided."""
+    for run in runs(tmp_path, env={"WORKERS": "2"}):
+        assert run["WORKERS"] == "2", run
 
 
 def test_dry_run_reaches_every_line_without_measuring_anything(tmp_path):

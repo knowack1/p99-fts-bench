@@ -43,7 +43,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ARM="${1:?usage: sweep_build_rate.sh <target-flag|opensearch|scylla-cdc> [reps]}"
-REPS="${2:-5}"
+# 3, the campaign's repetition count (tools/build_rate_campaign.sh), so a bare
+# invocation of this ladder measures what the campaign measures. The deck's
+# "5 thin lines" predates the N=3 decision in BUILD-RATE-MATRIX-PLAN.md.
+REPS="${2:-3}"
 LADDER="${LADDER:-8 16 32 64 96 128 192 256}"
 OUT_DIR="${OUT_DIR:-data/sweep}"
 PYTHON="${PYTHON:-.venv/bin/python3}"

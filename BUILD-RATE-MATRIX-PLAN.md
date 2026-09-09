@@ -22,7 +22,7 @@ can produce, so running them together is what the split exists to prevent.
 |---|---|---|---|---|
 | P1 | Concurrency ladder, both OpenSearch arms | fleet, corpus | `c_sat` and the ceiling per arm | **done** at N=1 in 23 min, then **superseded by P3 at N=3** |
 | P2 | Batch-size axis, both OpenSearch arms | P1's `c_sat` | docs/s vs batch size at `c_sat`, with a pin probe | **done**, 62 min |
-| P3 | The five-arm concurrency matrix | fleet, corpus; **R1–R3 additionally need four loader processes, per P0** | the R1→R2→R3 knob deltas against R4/R5 | R4/R5 **done**, 63 min, N=3; R1–R3 blocked |
+| P3 | The five-arm concurrency matrix | fleet, corpus; **R1–R3 additionally need four loader processes, per P0** | the R1→R2→R3 knob deltas against R4/R5 | R4/R5 **done**, 63 min, N=3; R1–R3 not yet run — the loader processes are plumbed, the campaign does not ask for them |
 | P0 | Client calibration, no engines | fleet only | `N_max`, `LOADER_CORE_BOUND_AT`, per-level client operations/s ceilings | **done**, 17 min |
 
 **P0 is last in the table and independent of the others on purpose.** It needs
@@ -50,7 +50,7 @@ provenance for the numbers the later passes pin to.
 | `N_max` | **≥4, a lower bound** — neither worker ladder stopped scaling | P0: OpenSearch 27,686 → 52,469 → 99,443 docs/s at N=1/2/4; ScyllaDB 8,003 → 15,438 → 28,530 |
 | `LOADER_CORE_BOUND_AT` | **0.850** OpenSearch client, **0.747** ScyllaDB client | P0, against the null sink; the old 0.70 was too conservative for OpenSearch |
 | Client operations/s ceiling per batch level | **1,658.9 / 430.3 / 213.3 / 107.7 / 54.1** at batch 16/64/128/256/512 — a flat 26.5–27.7k docs/s | P0. ScyllaDB at batch 1: 8,002.7 |
-| **The ScyllaDB arms need four loader processes** | 8,003 docs/s in one process is 0.66x of a ~12.2k engine ceiling; N=2 is 1.26x; N=4 is 2.34x | P0. `sweep_build_rate.sh` launches one loader, so wiring `ftsbench.mp_load` into it is what unblocks R1–R3 |
+| **Every arm runs four loader processes** | 8,003 docs/s in one process is 0.66x of a ~12.2k engine ceiling; N=2 is 1.26x; N=4 is 2.34x | P0. `ftsbench.mp_load` is plumbed through `sweep_build_rate.sh` (`WORKERS`/`N_MAX`) to `build_rate_point.sh` (`--workers`/`--n-max`) as of `262a227`, and the campaign now asks for it — `WORKERS=nproc/2`, which is 4 on the as-built 8-vCPU fleet. See "Four loader processes, on every arm" below |
 
 **The concurrency axis now provably means what the chart says.** Across every
 rung of P1 the OpenSearch write thread pool sat at 4.0 of 4 active with a queue
@@ -75,6 +75,66 @@ yields a silently default-configured index; `os-index` runs
 `os-verify-analyzer` immediately afterwards and that gate catches it (HTTP 400
 on `_analyze`), so the campaign path is safe and the defect is latent.
 `HARDWARE.md` records 16 vCPU per box against the measured 8.
+
+### Four loader processes, on every arm
+
+`262a227` wired `ftsbench.mp_load` into the campaign's scripts:
+`sweep_build_rate.sh` takes `WORKERS`/`N_MAX` from the environment and
+`build_rate_point.sh` forwards them as `--workers`/`--n-max` to whichever
+loader the arm runs, where `mp_load.client_shape` turns them into N spawned
+worker processes sharing `--concurrency` operations in flight.
+
+`build_rate_campaign.sh` now asks for it, campaign-wide:
+`WORKERS="${WORKERS:-$(( CPUS / 2 ))}"` from `nproc`, which is **4** on the
+as-built `i8g.2xlarge` fleet where `nproc` reports 8 (`HARDWARE.md` "As
+built" — the 16 in that document's own table is the `im4gn.4xlarge` that never
+ran). Below, `N` means worker processes, not the campaign's `N=3` repetition
+count.
+
+Half the box, for two reasons that agree here. The budget: the other half stays
+for the parent, the `mp.Manager`, the resource monitor and the open-loop
+generator whose CPU headroom C5/C6/C7 rest on — N=8 would put 11 processes on
+8 vCPU. The measurement: P0's worker ladder makes N=4 the first rung clearing
+G7's 2x rule, at **2.34x** on ScyllaDB against **0.66x** in one process. So the
+division is not a claim that N should track vCPU — on a box where the two
+disagree, `WORKERS` is pinned rather than divided, and
+`tests/test_build_rate_campaign.py` fixes both halves of that contract.
+
+**Both decisions the earlier draft of this section left open are settled by
+the count being campaign-wide.**
+
+- **Whether the OpenSearch arms move too — yes.** `client_shape` puts `auto`
+  through the process pool even at N=1 precisely so a ladder does not change
+  client architecture inside its own curve; the same argument applies across
+  arms being compared. Pinning only R1–R3 would make R2↔R4 and R3↔R5 cross a
+  client-shape boundary, so every arm gets the same N and R4/R5 are re-measured
+  at it. Their N=1 ceilings in the run table above are superseded by the AWS
+  pass, not compared against it.
+- **`N_MAX` stays unset.** It is the ceiling `--workers auto` divides
+  concurrency by, and `mp_load` refuses to guess it because it reaches the
+  artifact header as a *measured* ceiling. P0 put `N_max` at **≥4, a lower
+  bound** — neither worker ladder stopped scaling — so recording 4 there would
+  assert a ceiling P0 declined to claim. A fixed `WORKERS` records `workers=4`
+  and claims nothing beyond it.
+
+Two things this does **not** fix, both of which bite on the AWS pass:
+
+1. **`verify_generator` compares against a single-process ceiling.** The
+   per-level operations/s ceilings in the ceilings document are built from
+   `client_ceilings.single_process()` — the N=1 points — so a 4-worker run is
+   judged against roughly a quarter of the client capacity it actually had.
+   That is conservative rather than wrong-way (no point can falsely pass G7),
+   but it will refuse points that have 4x headroom: a ScyllaDB point at
+   12.2k docs/s reads 0.66x against the N=1 figure of 8,003 and 2.34x against
+   the N=4 figure of 28,530. Either P0's per-level calibration is re-run at
+   N=4, or G7's verdicts on this pass are read as a floor and the arms that
+   fail it are re-checked by hand against `aggregate_docs_per_s_by_workers`.
+2. **The point label still does not carry the client shape.** The per-worker
+   artifact header records `workers`, `shard`, `run_concurrency` and `n_max`
+   (`mp_load.shard_header_fields`), so the choice stays auditable from the
+   files, and the ladder logs `loader processes: workers=N` per arm. But
+   `build_rate_point.sh:162` builds a label from `concurrency=` and `batch=`
+   only, so one artifact's label alone does not distinguish N=4 from N=1.
 
 ## Why this campaign exists
 
@@ -109,10 +169,12 @@ OpenSearch side.
 | **R5** | `opensearch-ramindex-refresh30` | `--opensearch-ram-nostore-refresh30` | OpenSearch | **+ `refresh_interval: 30s`** | R3 |
 
 All five arms are registered in `ftsbench/target.py`, carry their knobs there
-rather than in `.env.sut`, and are rows R1–R5 of the roster in
+rather than in `.env.sut`, and are the first five run lines of
 `tools/build_rate_campaign.sh` (which replaced `tools/knob_matrix.sh` and
-`tools/batch_matrix.sh`: one table of runs, `list` for what is left, `run` for
-what is not done).
+`tools/batch_matrix.sh`). Since `262a227` that script takes `run` or `dry-run`
+and nothing else: it has no arm selection and no resume, so a re-run
+re-measures every line. To run one arm, run its line — each is a complete
+`sweep_build_rate.sh` command you can paste.
 `ftsbench/verify_arm.py` asserts the vector-store actually took the arm's
 tuning — an image that ignores a knob looks identical to one that honours it,
 and that already cost S11–S15 once. Both gate lines were confirmed present on
@@ -168,10 +230,10 @@ not in the deck and is kept as a diagnostic.
 | Levels | `--batch-size` **16, 64, 128, 256, 512** |
 | ScyllaDB arms | `--batch-size 1`, pinned, never swept |
 | Concurrency | each arm's own `c_sat` from P1 — R4 at 16, R5 at 8 — plus one probe rung at `2 x c_sat` |
-| Reps | **N=3** at `c_sat`, **N=1** at the probe rung |
+| Reps | **N=3** at `c_sat` and at the probe rung (Karol, 2026-09-09: one repetition count for the whole campaign) |
 | Everything else | inherited from the five-arm matrix unchanged — 1,000,000-document cap, contiguous sharding, `WARMUP=1`, `OS_RAM_INDEX_SIZE=12 GiB` |
 
-`2 arms × 5 levels × 3 reps = 30, + 2 arms × 5 levels × 1 probe = 10, + 4 warm-ups = 44 run points`
+`2 arms × 5 levels × 3 reps = 30, + 2 arms × 5 levels × 3 probe reps = 30, + 4 warm-ups = 64 run points`
 
 **Concurrency is not pinned on trust.** Offered document pressure is
 `c x batch` on OpenSearch, so the `c_sat` measured at batch 512 can sit below
@@ -198,6 +260,13 @@ whether the batch optimum moves with the refresh cadence, a real question
 because at 30 s the engine has more freedom in when it merges. P1 already
 measured R5's ceiling **4.3% above** R4's, which is the expected direction.
 
+**One repetition count for the whole campaign (Karol, 2026-09-09).** Every run
+in `tools/build_rate_campaign.sh` is N=3, the probe rungs included, and `REPS=`
+moves all of them together. The N=1 probe was defensible on cost — its verdict
+is only "does this beat the median by more than the spread" — but it produced a
+curve whose markers carried a spread on some points and not on others, with
+nothing on the chart to say which.
+
 **Pre-committed, so it is not decided under schedule pressure.** If the curve
 is still climbing at 512, or a smaller level beats it by more than the rep
 spread, the primary matrix's `OS_BATCH_SIZE` moves to the plateau value and P1
@@ -206,7 +275,9 @@ ceiling number as well as defend it, and the damaging case is the one a
 reviewer finds first: an under-sized bulk understates OpenSearch, which is an
 error in our own favour, on the side that has the bulk API.
 
-**Cost: ~1.4 h, band 1.3–1.6 h, ~$6 at the $4.37/h fleet rate.** Unit costs are
+**Cost: ~1.5 h, band 1.4–1.7 h, ~$6 at the $4.37/h fleet rate** (was ~1.4 h at
+N=1 probes; the whole campaign, both passes, is ~4.0 h / 174 points at the
+measured cadence). Unit costs are
 manifest-to-manifest marginals, which include `reset_index`, loader startup and
 settle; P1 measured a plateau point at 76–85 s of build wall against a ~82 s
 point-to-point cadence, so the overhead is roughly 8%.
@@ -219,6 +290,7 @@ mid-run).**
 | Drop R5, keep R4 | −0.7 h | Whether the batch optimum moves with the refresh cadence goes unanswered |
 | Drop the `2 x c_sat` probes | −0.3 h | Every level becomes a slice at a pinned `c`, and the curve inherits a bias in the hypothesis's own direction |
 | N=3 → N=1 on the three middle levels | −0.4 h | The middle of the curve carries no spread, so a knee inside it is not distinguishable from noise |
+| N=3 → N=1 on the `2 x c_sat` probes | −0.4 h | Back to where this started: the probe's verdict ("does it beat the median by more than the spread") then has no spread of its own |
 
 **Where it lands.** Nothing new on the main deck. S12's footer gains one line,
 and the curve goes to one backup slide.
@@ -439,10 +511,13 @@ to every already-recorded generator series.
 4. **P2** — the batch axis, roster rows `R4b R4p R5b R5p`, wrapped in a
    harness-box generator probe.
 5. **P3** — the five-arm matrix, one arm at a time, stack recreated between
-   arms: `tools/build_rate_campaign.sh run R1 R2 R3 R4 R5`, in that order, so
-   the two ScyllaDB knob deltas land before the OpenSearch arms and a surprise
-   in R2 can still change the plan. The generator probe now runs per point, so
-   no outer wrapper is needed for it.
+   arms. The five arm lines in `tools/build_rate_campaign.sh` are already in
+   R1→R5 order, so the two ScyllaDB knob deltas land before the OpenSearch arms
+   and a surprise in R2 can still change the plan; `dry-run` first, and settle
+   the loader-process question above before the R1–R3 lines run. The script
+   takes no arm arguments — `run R1 R2 R3` runs the whole campaign and ignores
+   the names — so a subset means running those lines directly. The generator
+   probe now runs per point, so no outer wrapper is needed for it.
 6. **P0** — client calibration, then apply `verify_generator` to every
    recorded generator series.
 7. Summarise; `verify_cpu_usage` per arm; record `c_sat` and the ceiling in

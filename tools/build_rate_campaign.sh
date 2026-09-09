@@ -29,6 +29,27 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="${ROOT:-data/build-rate-$(date -u +%Y-%m-%d)}"
+# One repetition count for every run, so no line is quietly less certain than
+# its neighbours. The median of 3 deviates from the median of 5 by =<3.5% across
+# the existing data, and the warm-up below is what makes 3 safe: the median of 3
+# is the middle value, which one cold repetition CAN move.
+REPS="${REPS:-3}"
+# Loader processes per point, N. Half the box: on the as-built i8g.2xlarge fleet
+# `nproc` reports 8 (HARDWARE.md "As built"), so N=4, and the other half stays
+# for the parent, the mp.Manager, the resource monitor and the open-loop
+# generator whose CPU headroom C5/C6/C7 rest on. P0's worker ladder arrived at
+# the same 4 from the other side — the first rung clearing G7's 2x rule, at
+# 2.34x on ScyllaDB against 0.66x in one process — so on this box the budget and
+# the measurement agree. On a box where they would not, pin WORKERS rather than
+# trusting the division.
+CPUS="$(nproc)"
+WORKERS="${WORKERS:-$(( CPUS / 2 > 1 ? CPUS / 2 : 1 ))}"
+# N_MAX stays unset on purpose. It is the ceiling `--workers auto` divides
+# concurrency by, and mp_load refuses to guess it because it reaches the
+# artifact header as a MEASURED ceiling: P0 put N_max at >=4 as a lower bound —
+# neither worker ladder stopped scaling — so writing 4 there would assert a
+# ceiling P0 declined to claim. A fixed count records workers=4 and claims
+# nothing beyond it.
 KNOB_RUNGS="4 8 16 32 64 96 128"
 BATCH_LEVELS="16 64 128 256 512"
 CSAT=8
@@ -42,10 +63,16 @@ OS_BATCH=512
 # Locked for every run, so they are set once here rather than repeated per line.
 export SWEEP_DOCS=1000000
 export WARMUP=1
+# Every arm gets the same client shape, R4/R5 included: pinning only the
+# ScyllaDB arms to N=4 would make the R2<->R4 and R3<->R5 comparisons cross a
+# client-shape boundary, which is the confound `mp_load.client_shape` puts even
+# a single worker through the process pool to avoid. The ladder logs the count
+# per arm ("loader processes: workers=..."); the point LABEL still does not, so
+# one artifact's label alone does not distinguish N=4 from N=1.
+export WORKERS
 # Cleared rather than inherited: a BATCHES left in the caller's environment
-# would turn a concurrency ladder into a batch sweep, and WORKERS would change
-# the client under a label that says nothing about it.
-unset BATCHES WORKERS
+# would turn a concurrency ladder into a batch sweep.
+unset BATCHES
 
 case "${1:-}" in
   run)     ;;
@@ -60,24 +87,27 @@ esac
 # R1 first on purpose: it prices the writer buffer, and if R2 does not beat it
 # by roughly the 1.42x BUILD-RATE-LOOP.md measured, the generator is binding and
 # the rest of the matrix is measuring the client, not the engine.
-OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" tools/sweep_build_rate.sh --scylladb-cdc-buf15             3
-OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" tools/sweep_build_rate.sh --scylladb-cdc-buf376            3
-OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" tools/sweep_build_rate.sh --scylladb-cdc-buf376-commit30   3
-OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" OS_BATCH_SIZE="$OS_BATCH" tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh3    3
-OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" OS_BATCH_SIZE="$OS_BATCH" tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh30   3
+OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" tools/sweep_build_rate.sh --scylladb-cdc-buf15             "$REPS"
+OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" tools/sweep_build_rate.sh --scylladb-cdc-buf376            "$REPS"
+OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" tools/sweep_build_rate.sh --scylladb-cdc-buf376-commit30   "$REPS"
+OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" OS_BATCH_SIZE="$OS_BATCH" tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh3    "$REPS"
+OUT_DIR="$ROOT/knobs" LADDER="$KNOB_RUNGS" OS_BATCH_SIZE="$OS_BATCH" tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh30   "$REPS"
 
 # P2, the batch axis. OpenSearch only: there a batch is a wire batch the engine
 # sees, while on the CQL path every row is its own prepared statement, so a
 # level would be a dispatch window inside the client and the curve would measure
 # ftsbench. Each arm runs at its own measured c_sat, then one rep at 2 x c_sat
-# as a pin probe — offered document pressure is c x batch, so the c_sat found at
-# batch 512 can sit below the c_sat at batch 16, and pinning one concurrency
-# would under-report the small levels by exactly the amount that confirms
-# "a bigger batch is faster".
-OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$CSAT"           tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh3    3
-OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$((CSAT * 2))"   tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh3    1
-OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$CSAT"           tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh30   3
-OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$((CSAT * 2))"   tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh30   1
+# as a pin probe at the same N — offered document pressure is c x batch, so the
+# c_sat found at batch 512 can sit below the c_sat at batch 16, and pinning one
+# concurrency would under-report the small levels by exactly the amount that
+# confirms "a bigger batch is faster". The probe used to run at N=1, cheap
+# because its verdict is only "does this beat the median by more than the
+# spread"; at the same N as everything else that verdict carries a spread of
+# its own, and no run in the campaign is less certain than its neighbours.
+OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$CSAT"           tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh3    "$REPS"
+OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$((CSAT * 2))"   tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh3    "$REPS"
+OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$CSAT"           tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh30   "$REPS"
+OUT_DIR="$ROOT/batch" BATCHES="$BATCH_LEVELS" LADDER="$((CSAT * 2))"   tools/sweep_build_rate.sh --opensearch-ram-nostore-refresh30   "$REPS"
 
 # --- what turns the points into numbers ------------------------------------
 
