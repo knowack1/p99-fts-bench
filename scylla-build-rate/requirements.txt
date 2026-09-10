@@ -1,0 +1,6 @@
+# Pinned so upgrading this tester never disturbs bench/.venv, which serves the
+# frozen harness (FREEZE.md, COMPARABILITY.md). 3.29.11 is the newest release:
+# PyPI info.version as of 2026-09-10, and tag 3.29.11-scylla upstream.
+scylla-driver==3.29.11
+pytest>=8.0
+pytest-cov>=5.0
