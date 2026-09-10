@@ -60,6 +60,14 @@ CQL_PORTS="${CQL_PORTS:-9042 9043}"
 
 PYTHON="${PYTHON:-.venv/bin/python3}"
 DRY_RUN="${DRY_RUN:-0}"
+# G5 refuses a point whose swap grew at all, because on a dedicated box any
+# growth means the measurement includes reclaim. A shared workstation is not a
+# dedicated box: with zram in the mix SwapFree moves a page in both directions
+# while nothing at all is under pressure, so a local ladder needs a floor under
+# which movement is background rather than this point's. Zero here keeps the
+# fleet's behaviour exactly as it was.
+MAX_SWAP_GROWTH_BYTES="${MAX_SWAP_GROWTH_BYTES:-0}"
+export MAX_SWAP_GROWTH_BYTES
 
 PROBE_PID=""
 FIRST_EXITED=""
@@ -228,6 +236,7 @@ set_aside_point() {  # dir stem reason
 gate_point() {  # dir stem workers expected_docs
   "$PYTHON" - "$@" <<'GATE'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -239,6 +248,7 @@ WARM_IN_TICKS = 2
 MIN_TICKS = 5
 WALL_SPREAD = 1.1
 MAX_STEAL_CORES = 0.05
+MAX_SWAP_GROWTH_BYTES = int(os.environ.get("MAX_SWAP_GROWTH_BYTES") or 0)
 problems = []
 
 
@@ -302,8 +312,10 @@ steal = max((r.get("steal_cores") or 0.0 for r in box), default=0.0)
 if steal > MAX_STEAL_CORES:
     problems.append(f"G5 steal: {steal:.3f} cores stolen — a noisy neighbour")
 swap = [r["swap_used_bytes"] for r in box if r.get("swap_used_bytes") is not None]
-if swap and max(swap) > min(swap):
-    problems.append(f"G5 swap: grew {max(swap) - min(swap)} bytes during the point")
+swap_growth = max(swap) - min(swap) if swap else 0
+if swap_growth > MAX_SWAP_GROWTH_BYTES:
+    problems.append(f"G5 swap: grew {swap_growth} bytes during the point, over "
+                    f"the {MAX_SWAP_GROWTH_BYTES} byte tolerance")
 
 # Printed either way: a rate that flattened while the box sat far below its
 # cores is the shape to distrust, and the reader needs the number to see it.
@@ -311,7 +323,8 @@ peak = max((r.get("cpu_cores_used") or 0.0 for r in box), default=0.0)
 cores = max((r.get("cores_available") or 0 for r in box), default=0)
 if cores:
     print(f"{stem}: box peak {peak:.2f}/{cores} cores ({peak / cores:.0%}), "
-          f"{len(box)} usable ticks", file=sys.stderr)
+          f"{len(box)} usable ticks, swap moved {swap_growth} bytes",
+          file=sys.stderr)
 
 for problem in problems:
     print(f"GATE FAIL {stem}: {problem}", file=sys.stderr)
