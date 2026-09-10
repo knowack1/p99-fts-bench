@@ -94,7 +94,7 @@ row before plotting.
 | `--url` | `$OS_URL` or `http://localhost:9200` | the same variable the repo's shell scripts export |
 | `--index` | `wiki-articles` | |
 | `--request-timeout` | 120.0 | seconds; `opensearch_load.BULK_TIMEOUT_S` |
-| `--queue-depth` | 2 | batches buffered per worker; see "Memory" |
+| `--queue-depth` | 10 | batches buffered per worker; see "Memory" |
 | `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
 | `--out` | `-` | CSV destination; `-` is stdout |
 
@@ -138,10 +138,23 @@ chart made at 4 workers cannot be silently compared against one made at 16.
 ### Memory
 
 The channel is bounded in **batches**, so the documents buffered ahead of the
-workers are `queue_depth * concurrency * batch_size`. At the campaign's
-`c=384 batch=512` the default depth of 2 already buffers ~393k documents, which
-is why the default is 2 and not `scyllarate`'s 10. Raise `--queue-depth` only if
-a point is producer-bound, and watch the resident set when you do.
+workers are `queue_depth * concurrency * batch_size`.
+
+The default depth is 10, the same number `scyllarate` fixes — but the same
+number is not the same buffer. That half loads one document per request, so
+depth 10 at `c=384` holds 3,840 documents; depth 10 at `c=384 batch=512` holds
+1,966,080. Matching the number here is a 512x larger buffer, not parity.
+
+What that costs depends on the corpus, which is why a laptop run never shows it.
+Against the 436 MB simplewiki corpus the ceiling sits above the whole corpus, so
+the channel holds at most the corpus. Against enwiki at ~4.5 kB a document the
+top of the campaign's ladder buffers **~9 GB resident** on the generator box.
+
+The read-ahead is worth most at the bottom of the ladder, where one worker can
+outrun the JSON parser between bulks; at `c=384` the depth is far past what
+keeps the workers fed. Lower `--queue-depth` if the generator cannot spare the
+resident set — a depth of 2 still buffers 393k documents at
+`c=384 batch=512` — and watch the resident set either way.
 
 ## Encoding is inside the measured latency
 
@@ -216,7 +229,7 @@ not a cold load.
 ## Tests
 
 ```bash
-cargo test                              # 167 tests, no endpoint needed
+cargo test                              # 168 tests, no endpoint needed
 cargo test -- --include-ignored         # adds the live-endpoint tests below
 cargo clippy --all-targets -- -D warnings
 cargo llvm-cov --summary-only -- --include-ignored

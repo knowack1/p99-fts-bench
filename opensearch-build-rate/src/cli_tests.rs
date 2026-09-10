@@ -234,6 +234,19 @@ fn settings_record_the_tokio_worker_count() {
     assert_eq!(setting(&args, "tokio_workers"), "4");
 }
 
+/// The default is the constant, and the README's memory arithmetic is written
+/// against that number: a change to one that leaves the other behind is what
+/// this pins.
+#[test]
+fn the_default_queue_depth_is_the_documented_constant() {
+    let args = parse(&a_minimal_command());
+    assert_eq!(
+        (args.queue_depth, setting(&args, "queue_depth")),
+        (QUEUE_DEPTH_PER_WORKER, QUEUE_DEPTH_PER_WORKER.to_string())
+    );
+    assert_eq!(QUEUE_DEPTH_PER_WORKER, 10);
+}
+
 #[test]
 fn settings_record_the_queue_depth_that_bounded_the_producer() {
     let args = parse(&[

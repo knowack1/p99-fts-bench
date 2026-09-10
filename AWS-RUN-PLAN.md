@@ -48,6 +48,15 @@ measuring.
 - [ ] **Re-check `C1_IDLE_TIMEOUT` against enwiki commit granularity.** At 30 s
       it is already exactly the refresh=30s interval. If enwiki commits are
       coarser than 30 s, a healthy build reads as a stall.
+- [ ] **Budget `osrate`'s read-ahead on the generator box.** The channel is
+      bounded in batches, so the default `--queue-depth 10` at the campaign's
+      `c=384 batch=512` buffers 1,966,080 documents — ~9 GB resident at
+      enwiki's ~4.5 kB a document, against 0.5 GB on the simplewiki corpus the
+      laptop pass used, so this cost does not appear until the corpus changes.
+      Box 3 has 64 GiB and also wants page cache for a 31 GB corpus. Either
+      confirm the footprint is affordable or lower `--queue-depth`; the
+      read-ahead earns its keep at the bottom of the ladder, not at `c=384`.
+      See `opensearch-build-rate/README.md`, "Memory".
 - [ ] **Raise `C7_RATE_MAX`.** The ladder tops out at 3200 qps, which the
       laptop generator could not reach against OpenSearch anyway. On a
       dedicated generator box the knee may sit above the ladder's ceiling, and
