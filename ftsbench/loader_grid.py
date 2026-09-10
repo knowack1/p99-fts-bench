@@ -22,6 +22,7 @@ the rest of the deck relies on.
 from __future__ import annotations
 
 import json
+import math
 import os
 import statistics
 from dataclasses import dataclass
@@ -37,6 +38,8 @@ ENGINE_FALLBACK = "#4a5568"
 # Four encodings per worker count, none of them hue. The widths descend so that
 # where two arms overlap the sparser style stays visible on top.
 WORKER_STYLES = {
+    1: {"linestyle": "-", "marker": "v", "linewidth": 3.0},
+    2: {"linestyle": (0, (6, 2)), "marker": "P", "linewidth": 2.4},
     4: {"linestyle": "-", "marker": "o", "linewidth": 2.6},
     6: {"linestyle": "--", "marker": "s", "linewidth": 2.1},
     8: {"linestyle": (0, (1, 1.4)), "marker": "^", "linewidth": 1.8},
@@ -340,16 +343,36 @@ def oversubscription_note(arms: Sequence[Arm]) -> str:
 
 
 def floor_note(arms: Sequence[Arm]) -> str:
+    """The x axis's floor, and whether the ladder is balanced — both read off
+    the arms actually drawn.
+
+    The divisibility sentence used to name lcm(4,6,8)=24 literally, which is the
+    campaign's ladder and not every ladder: a run at other worker counts would
+    have carried a footer stating a property of a rung set it does not have. An
+    unbalanced rung is worth a footer of its own — a worker holding one more
+    operation than its neighbours drags the whole point's rate, which is a
+    slope on the very axis being plotted.
+    """
     rungs = sorted({rung.concurrency for arm in arms for rung in arm.rungs})
-    workers = max((arm.workers for arm in arms), default=0)
-    if not rungs or not workers:
+    counts = sorted({arm.workers for arm in arms if arm.workers})
+    if not rungs or not counts:
         return ""
+    workers = max(counts)
+    step = math.lcm(*counts)
+    named = ",".join(str(count) for count in counts)
+    unbalanced = [rung for rung in rungs if rung % step]
+    if unbalanced:
+        divisibility = (f"Rung(s) {', '.join(str(rung) for rung in unbalanced)} "
+                        f"do not divide exactly by every worker count (N={named}), "
+                        f"so on those the loaders hold unequal shares and the "
+                        f"point's rate is the short share's")
+    else:
+        divisibility = (f"Every rung is a multiple of lcm({named})={step}, so "
+                        f"every worker count drawn divides it exactly")
     return (f"x is the run's TOTAL operations in flight, split across the N "
             f"loader processes, so the lowest per-process figure drawn is "
-            f"{rungs[0]}/{workers} = {rungs[0] // workers}. Every rung is a "
-            f"multiple of lcm(4,6,8)=24 so all three worker counts divide it "
-            f"exactly; the region below that per-process figure is not on this "
-            f"chart.")
+            f"{rungs[0]}/{workers} = {rungs[0] // workers}. {divisibility}; "
+            f"the region below that per-process figure is not on this chart.")
 
 
 SINK_NOTE = ("Sink: ftsbench.null_sink — accept and discard, TCP_QUICKACK set, "
