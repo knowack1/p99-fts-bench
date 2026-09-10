@@ -1,0 +1,182 @@
+//! osrate --corpus ../data/corpus.jsonl --concurrency 24,48,96,192,384
+//!
+//! Measures how fast this client can submit `_bulk` requests to OpenSearch, per
+//! concurrency level. That is a submit rate, not a searchable-index rate: a
+//! bulk OpenSearch has acknowledged is in the translog and the in-memory
+//! buffer, and is not visible to search until a refresh.
+use std::process::ExitCode;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use opensearch::OpenSearch;
+use tokio::runtime::Runtime;
+
+use osrate::cli::Args;
+use osrate::client::{self, Cluster};
+use osrate::corpus::CorpusSource;
+use osrate::insert::BulkInserter;
+use osrate::notes::Notes;
+use osrate::report::{note, summary_table, CsvSink, PointResult};
+use osrate::sweep::{self, Cancel, Shape};
+
+fn main() -> ExitCode {
+    match run(Args::parse()) {
+        Ok(code) => code,
+        Err(exc) => {
+            note(&format!("!! {exc:#}"));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(args: Args) -> Result<ExitCode> {
+    let workers = args.tokio_workers();
+    build_runtime(workers)?.block_on(measure(args, workers))
+}
+
+/// The knob this tool exists to expose: how many cores tokio may use to encode
+/// and serve the in-flight bulks. It is orthogonal to `--concurrency`, which
+/// says how many bulks are outstanding at once.
+fn build_runtime(workers: usize) -> Result<Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+        .with_context(|| format!("cannot start a tokio runtime with {workers} workers"))
+}
+
+async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
+    let client = client::connect(&args.connect_options()).await?;
+    let cluster = client::read_cluster(&client, &args.index, workers).await?;
+    describe(&cluster);
+
+    let mut sink = CsvSink::open(&args.out)?;
+    sink.write_preamble(&cluster, &args.settings())?;
+    let (results, aborted) = sweep_levels(&args, client, &mut sink).await;
+
+    echo_summary(&results);
+    Ok(exit_code(&results, aborted))
+}
+
+async fn sweep_levels(
+    args: &Args,
+    client: OpenSearch,
+    sink: &mut CsvSink,
+) -> (Vec<PointResult>, bool) {
+    let inserter = Arc::new(BulkInserter::new(client, &args.index));
+    let source = CorpusSource::new(&args.corpus, args.max_docs, args.batch_size);
+    let notes = Notes::stderr();
+    let cancel = watch_for_interrupt();
+    let mut results: Vec<PointResult> = Vec::new();
+
+    let outcome = {
+        let mut collect = |result: PointResult| -> Result<()> {
+            sink.append_row(&result)?;
+            results.push(result);
+            Ok(())
+        };
+        sweep::run_sweep(
+            inserter,
+            || source.open(),
+            &args.concurrency.0,
+            shape(args),
+            &notes,
+            &cancel,
+            &mut collect,
+        )
+        .await
+    };
+    (results, report_outcome(outcome, sink.destination()))
+}
+
+fn shape(args: &Args) -> Shape {
+    Shape {
+        batch_size: args.batch_size,
+        queue_depth: args.queue_depth,
+    }
+}
+
+/// Ctrl-C is the ordinary way a long ladder ends early, and the levels already
+/// measured are worth as much then as after a transport error.
+fn watch_for_interrupt() -> Cancel {
+    let cancel = Cancel::default();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            trigger.trigger();
+        }
+    });
+    cancel
+}
+
+fn report_outcome(outcome: Result<()>, destination: &str) -> bool {
+    match outcome {
+        Ok(()) => false,
+        Err(exc) => {
+            announce_abort(&exc, destination);
+            true
+        }
+    }
+}
+
+fn announce_abort(exc: &anyhow::Error, destination: &str) {
+    say_each(&abort_lines(exc, destination));
+}
+
+/// An abort has to say where the levels it did measure ended up, or the operator
+/// has to guess whether anything survived.
+fn abort_lines(exc: &anyhow::Error, destination: &str) -> Vec<String> {
+    vec![
+        format!("!! sweep aborted: {exc:#}"),
+        format!("!! the levels measured before it are in {destination}"),
+    ]
+}
+
+fn describe(cluster: &Cluster) {
+    say_each(&cluster_lines(cluster));
+}
+
+fn cluster_lines(cluster: &Cluster) -> Vec<String> {
+    vec![
+        format!(
+            "opensearch {} ({}), client {}, http {}, {}",
+            cluster.opensearch_version,
+            cluster.distribution,
+            cluster.client_version,
+            cluster.http_client_version,
+            cluster.runtime
+        ),
+        format!(
+            "index={} shards={} replicas={} refresh_interval={} source={} analyzer={} write_pool={}",
+            cluster.index,
+            cluster.index_shards,
+            cluster.replicas,
+            cluster.refresh_interval,
+            cluster.source_enabled,
+            cluster.body_analyzer,
+            cluster.write_pool
+        ),
+    ]
+}
+
+fn echo_summary(results: &[PointResult]) {
+    say_each(&["".to_string(), summary_table(results)]);
+}
+
+fn say_each(lines: &[String]) {
+    for line in lines {
+        note(line);
+    }
+}
+
+fn exit_code(results: &[PointResult], aborted: bool) -> ExitCode {
+    if aborted || results.iter().any(|result| result.errors > 0) {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
