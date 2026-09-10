@@ -1,4 +1,4 @@
-//! scyllarate --corpus ../data/corpus.jsonl --concurrency 8,16,32,64,128
+//! scyllarate --corpus ../data/corpus.jsonl --concurrency 4,8,16,32,64,128
 //!
 //! Measures how fast this client can submit prepared INSERTs to ScyllaDB, per
 //! concurrency level. That is a submit rate, not an FTS index build rate: a
