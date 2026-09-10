@@ -1,0 +1,36 @@
+[package]
+name = "scyllarate"
+version = "0.1.0"
+edition = "2021"
+description = "Concurrency sweep for ScyllaDB FTS ingest: docs/s and p99 per concurrency level"
+publish = false
+
+[[bin]]
+name = "scyllarate"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+async-channel = "2.5.0"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+scylla = "1.8.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1.18.1", features = ["serde", "v5"] }
+
+[dev-dependencies]
+# Only so a test can assert the protocol version the header claims against the
+# constant the linked driver actually pins; the binary never depends on it.
+scylla-cql = "1.8.0"
+tempfile = "3.24.0"
+
+[features]
+default = ["driver-metrics"]
+# Connection counts for the CSV header, at the cost of the driver recording a
+# latency sample per request. `--no-default-features` buys the purest submit
+# rate and gives up `connections=` in the header.
+driver-metrics = ["scylla/metrics"]
+
+[profile.release]
+debug = false

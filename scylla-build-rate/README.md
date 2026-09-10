@@ -22,13 +22,19 @@ here as *how fast this client could hand work to ScyllaDB*.
 ## Setup
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python3 -m pip install -r requirements.txt
+cargo build --release
 ```
 
-Its own virtualenv on purpose: `bench/.venv` serves the frozen harness
-(`FREEZE.md`, `COMPARABILITY.md`), and upgrading this tester must never move the
-driver underneath a recorded run.
+Rust rather than Python on purpose: the client's own ceiling has to sit far
+enough above the engine that a flat curve is the engine's answer and not the
+tester's. Against the repo's accept-and-discard sink this binary submits over
+200k docs/s on one laptop; the asyncio Python tester it replaces measured
+9,024 docs/s (`ftsbench/load_driver.py`).
+
+Its own crate on purpose, too: `bench/.venv` serves the frozen harness
+(`FREEZE.md`, `COMPARABILITY.md`), and upgrading this tester must never move a
+dependency underneath a recorded run. `Cargo.lock` is committed and the CSV
+header names the exact driver version that produced the numbers.
 
 The table must already exist — apply `bench/scylladb/schema.cql` first. This
 tool never issues DDL.
@@ -36,10 +42,11 @@ tool never issues DDL.
 ## Use
 
 ```bash
-.venv/bin/python3 -m scyllarate \
+./target/release/scyllarate \
     --corpus ../data/corpus.jsonl \
     --concurrency 8,8,16,32,64,128 \
     --port 19042 \
+    --tokio-workers 8 \
     --out sweep.csv
 ```
 
@@ -56,8 +63,9 @@ row before plotting.
 | `--port` | `$SCYLLA_PORT` or `9042` | `19042` reaches the laptop compose binding |
 | `--keyspace` / `--table` | `wiki` / `articles` | |
 | `--consistency` | `LOCAL_ONE` | equivalent to LOCAL_QUORUM at RF=1, but recorded |
-| `--request-timeout` | 10.0 | raise if high levels report `OperationTimedOut` |
-| `--executor-threads` | 2 | driver callback pool; see "Reading the curve" |
+| `--request-timeout` | 10.0 | seconds; raise if high levels report timeouts |
+| `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
+| `--no-write-coalescing` | off | one write syscall per request; see below |
 | `--out` | `-` | CSV destination; `-` is stdout |
 
 Progress goes to stderr once a second, the CSV to `--out`, and a summary table
@@ -76,65 +84,98 @@ written as empty CSV cells (`-` in the summary table) rather than `0.000`.
 Zero would plot as the fastest point on chart 2. `docs_per_s` still reports
 `0.0`, which is a real measurement: nothing was delivered.
 
-## How concurrency is realised
+## Two different knobs
 
-One process, one `asyncio.Queue`, N worker tasks. A producer reads the JSONL and
-puts bound parameters on the queue; each worker takes one, awaits its prepared
-`INSERT`, and takes the next. In-flight is therefore exactly N. The queue holds
-at most `2N` items so the producer cannot pull 456 MB ahead of the workers.
+`--concurrency` and `--tokio-workers` are independent, and confusing them
+misreads the curve.
 
-Threads were not considered: `ftsbench/load_driver.py` records 9,024 docs/s for
-this asyncio shape against 2,594 docs/s for a `ThreadPoolExecutor`.
+- **`--concurrency N`** is how many requests are outstanding at once. It is the
+  X axis of both charts.
+- **`--tokio-workers W`** is how many OS threads the runtime may use to serve
+  those N requests. It is a property of the client, recorded in the header, and
+  held fixed across a ladder.
 
-To scale past one core later, shard the input rather than sharing the queue — an
-`asyncio.Queue` is an in-process object and does not cross a fork.
-`ftsbench/corpus_shard.py` already splits the corpus by byte range.
+One process, one bounded channel, N worker tasks. A producer thread reads the
+JSONL and puts bound parameters on the channel; each task takes one, awaits its
+prepared `INSERT`, and takes the next. In-flight is therefore exactly N. The
+channel holds at most `2N` items so the producer cannot pull 456 MB ahead of the
+workers, and the producer runs on a blocking thread so file reads never stall
+the runtime.
+
+Raise `--tokio-workers` at a flat point to find out whether the client was the
+constraint: if the knee moves, it was. Both numbers land in the CSV header, so a
+chart made at 4 workers cannot be silently compared against one made at 16.
 
 ## What is ScyllaDB-specific here
 
-- **Shard awareness is on, at the driver's defaults.** `scylla-driver` opens one
-  connection per shard and sizes the pool from `SCYLLA_NR_SHARDS`. The
-  Cassandra-era `core_connections_per_host` knobs do not exist in the fork, so
-  there is nothing to tune and no flag to switch it off.
+- **Shard awareness is on, at the driver's defaults.** The Rust driver opens one
+  connection per shard by itself and learns the shard count from the server's
+  `SCYLLA_NR_SHARDS` supported option, so there is nothing here to size by hand.
 - **Token-aware routing is explicit.** A prepared statement carries its routing
-  key, and `TokenAwarePolicy(DCAwareRoundRobinPolicy())` is what turns that into
-  a shard-local write.
-- **Compression is explicitly off**, so whether `lz4` happens to be importable
-  cannot silently shift the measured rate.
+  key, and `DefaultPolicy` with `token_aware(true)` is what turns that into a
+  shard-local write.
+- **Compression is explicitly off**, so whether a codec happens to be compiled
+  in cannot silently shift the measured rate.
+- **Write coalescing is the driver's default and is recorded.** The driver
+  batches requests that become ready together into one write syscall, which
+  flatters a submit-rate measurement at high concurrency. `--no-write-coalescing`
+  turns it off; the header says which was used either way.
 - **The CSV header records the topology** — engine and driver version, protocol,
-  reactor, `shard_aware`, per-endpoint `shards:N,connected:M`, tablets,
-  consistency, timeout and thread pool. A chart without those facts is not
-  interpretable.
+  runtime and worker count, `shard_aware`, per-endpoint `shards:N`, live
+  connection count, tablets, consistency, timeout and write coalescing. A chart
+  without those facts is not interpretable.
 
 ## Reading the curve
 
 `docs_per_s` flattening does not by itself mean ScyllaDB saturated.
 
-- Check `shards` in the header: if `connected` is below `shards_count`, the
-  client never reached every shard. The compose file publishes only
-  `${SCYLLA_HOST_PORT:-9042}:9042`, so Scylla's dedicated shard-aware port
-  (19042 inside the container) is not reachable from the host and the driver
-  falls back to source-port guessing. Note the coincidence: the host binding is
-  also 19042, but it leads to the ordinary port.
-- Re-run the flat point with `--executor-threads 8`. That pool defaults to 2 and
-  handles driver callbacks; if the knee moves, the client was the constraint.
+- Check `shards` and `connections` in the header: too few connections for the
+  shard count means the client never reached every shard. The compose file
+  publishes only `${SCYLLA_HOST_PORT:-9042}:9042`, so Scylla's dedicated
+  shard-aware port (19042 inside the container) is not reachable from the host
+  and the driver falls back to source-port guessing. Note the coincidence: the
+  host binding is also 19042, but it leads to the ordinary port.
+- Re-run the flat point with a higher `--tokio-workers`. If the knee moves, the
+  client was the constraint.
+- Re-run it with `--no-write-coalescing`. If the rate drops sharply, the earlier
+  number was partly a syscall-batching artifact, not delivered work.
 
 Because `article_id` is the corpus's deterministic uuid5, every point overwrites
 the same rows. The table does not grow between points and all levels see the
 same state — good for comparing levels, but past the first run on an empty table
 you are measuring the update path, not a cold load.
 
+`connections` in the header costs a latency sample per request inside the
+driver. `cargo build --release --no-default-features` gives that up — the header
+then reads `connections=unknown` and `driver_metrics=off` — in exchange for the
+purest submit rate.
+
 ## Tests
 
 ```bash
-.venv/bin/python3 -m pytest tests/ -q
+cargo test                              # 114 tests, no endpoint needed
+cargo test -- --include-ignored         # adds the live-endpoint tests below
+cargo clippy --all-targets -- -D warnings
+cargo llvm-cov --summary-only -- --include-ignored
 ```
 
-The queue-and-workers core is covered against a driver-shaped fake that defers
+The channel-and-workers core is covered against a driver-shaped fake that defers
 completions, so the in-flight bound is genuinely asserted rather than assumed.
-Only `__main__._main`/`_measure` need a live endpoint.
 
-For an end-to-end run without ScyllaDB, use the repo's accept-and-discard sink
+The session, the prepared INSERT, the topology read and the driver-backed
+inserter only exist against a real CQL endpoint, so `tests/live_cql.rs` starts
+the repo's accept-and-discard sink and drives them against it. Those tests are
+`#[ignore]`d by default because they shell out to `bench/.venv`:
+
+```bash
+cargo test --test live_cql -- --ignored
+```
+
+Coverage is 91% of lines with them included; what remains uncovered is
+`main.rs`'s process-level wiring (argument parsing to runtime to exit code),
+which is what a real run exercises.
+
+For an end-to-end run of the binary against that same sink, start it yourself
 (from `bench/`):
 
 ```bash
@@ -142,5 +183,5 @@ For an end-to-end run without ScyllaDB, use the repo's accept-and-discard sink
 ```
 
 That sink advertises neither the shard extension nor partition-key indexes, so
-such a run reports `shard_aware=False` and exercises no shard routing. That is
+such a run reports `shard_aware=false` and exercises no shard routing. That is
 correct behaviour, not a fault — what it gives you is the client's own ceiling.
