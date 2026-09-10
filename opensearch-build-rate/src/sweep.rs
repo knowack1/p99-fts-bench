@@ -21,7 +21,7 @@ use crate::corpus::DocumentBatch;
 use crate::notes::Notes;
 use crate::report::{latency_text, percentile, PointResult};
 
-pub const QUEUE_DEPTH_PER_WORKER: usize = 2;
+pub const QUEUE_DEPTH_PER_WORKER: usize = 10;
 
 pub trait Inserter: Send + Sync + 'static {
     /// `impl Future + Send` rather than `async fn`: the workers are spawned onto
