@@ -101,8 +101,9 @@ async def _follow_progress(counters: Counters, concurrency: int) -> None:
         previous = done
 
 
-async def _run_point(session: Session, statement, source: Iterator[InsertParams],
-                    concurrency: int) -> PointResult:
+async def _measure_at_concurrency(session: Session, statement,
+                                  source: Iterator[InsertParams],
+                                  concurrency: int) -> PointResult:
     queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_DEPTH_PER_WORKER * concurrency)
     counters = Counters()
     producer = asyncio.create_task(_fill_queue(queue, source, concurrency))
@@ -145,7 +146,8 @@ async def run_sweep(session: Session, statement, source_factory: SourceFactory,
     results = []
     for position, concurrency in enumerate(levels, start=1):
         note(f"[{position}/{len(levels)}] concurrency={concurrency}")
-        result = await _run_point(session, statement, source_factory(), concurrency)
+        result = await _measure_at_concurrency(
+            session, statement, source_factory(), concurrency)
         _announce(result)
         results.append(result)
     return results

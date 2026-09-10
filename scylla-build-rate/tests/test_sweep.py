@@ -14,62 +14,63 @@ def some_params(count: int) -> list[tuple]:
     return [(uuid.uuid4(), n, f"title {n}", f"text {n}") for n in range(count)]
 
 
-def run_point(session: FakeSession, params: list[tuple],
-              concurrency: int) -> report.PointResult:
-    return asyncio.run(sweep._run_point(session, STATEMENT, iter(params), concurrency))
+def measure_at_concurrency(session: FakeSession, params: list[tuple],
+                           concurrency: int) -> report.PointResult:
+    return asyncio.run(sweep._measure_at_concurrency(
+        session, STATEMENT, iter(params), concurrency))
 
 
 def test_a_point_delivers_every_document_once():
     session = FakeSession()
-    result = run_point(session, some_params(50), concurrency=4)
+    result = measure_at_concurrency(session, some_params(50), concurrency=4)
     assert (result.docs, result.errors, session.sent) == (50, 0, 50)
 
 
 def test_a_point_sends_the_documents_it_was_given():
     params = some_params(10)
     session = FakeSession()
-    run_point(session, params, concurrency=3)
+    measure_at_concurrency(session, params, concurrency=3)
     assert sorted(session.params_seen) == sorted(params)
 
 
 def test_in_flight_never_exceeds_the_concurrency_level():
     session = FakeSession(latency_s=0.002)
-    run_point(session, some_params(40), concurrency=5)
+    measure_at_concurrency(session, some_params(40), concurrency=5)
     assert session.max_in_flight <= 5
 
 
 def test_in_flight_actually_reaches_the_concurrency_level():
     session = FakeSession(latency_s=0.002)
-    run_point(session, some_params(40), concurrency=5)
+    measure_at_concurrency(session, some_params(40), concurrency=5)
     assert session.max_in_flight == 5
 
 
 def test_a_higher_level_puts_more_requests_in_flight():
     low = FakeSession(latency_s=0.002)
     high = FakeSession(latency_s=0.002)
-    run_point(low, some_params(40), concurrency=2)
-    run_point(high, some_params(40), concurrency=8)
+    measure_at_concurrency(low, some_params(40), concurrency=2)
+    measure_at_concurrency(high, some_params(40), concurrency=8)
     assert high.max_in_flight > low.max_in_flight
 
 
 def test_a_failed_insert_is_counted_and_the_rest_still_go():
     session = FakeSession(failing_positions=frozenset({3, 7}))
-    result = run_point(session, some_params(20), concurrency=4)
+    result = measure_at_concurrency(session, some_params(20), concurrency=4)
     assert (result.docs, result.errors, session.sent) == (18, 2, 20)
 
 
 def test_an_empty_corpus_produces_an_empty_point():
-    result = run_point(FakeSession(), [], concurrency=4)
+    result = measure_at_concurrency(FakeSession(), [], concurrency=4)
     assert (result.docs, result.errors, result.p99_ms) == (0, 0, 0.0)
 
 
 def test_a_point_measures_a_positive_wall_and_rate():
-    result = run_point(FakeSession(latency_s=0.001), some_params(20), concurrency=4)
+    result = measure_at_concurrency(FakeSession(latency_s=0.001), some_params(20), concurrency=4)
     assert result.wall_s > 0 and result.docs_per_s > 0
 
 
 def test_latency_reflects_the_time_the_driver_took():
-    result = run_point(FakeSession(latency_s=0.02), some_params(8), concurrency=8)
+    result = measure_at_concurrency(FakeSession(latency_s=0.02), some_params(8), concurrency=8)
     assert result.p50_ms >= 20.0
 
 
@@ -149,14 +150,14 @@ def test_progress_reports_the_delta_since_the_last_tick(monkeypatch):
 def test_a_point_announces_its_first_failure(monkeypatch):
     seen: list[str] = []
     monkeypatch.setattr(sweep, "note", seen.append)
-    run_point(FakeSession(failing_positions=frozenset({1})), some_params(4), 2)
+    measure_at_concurrency(FakeSession(failing_positions=frozenset({1})), some_params(4), 2)
     assert any("wire is busy" in line for line in seen)
 
 
 def test_a_clean_point_announces_no_failure(monkeypatch):
     seen: list[str] = []
     monkeypatch.setattr(sweep, "note", seen.append)
-    run_point(FakeSession(), some_params(4), 2)
+    measure_at_concurrency(FakeSession(), some_params(4), 2)
     assert not any("!!" in line for line in seen)
 
 
