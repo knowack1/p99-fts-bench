@@ -98,7 +98,6 @@ fn a_contact_point_carries_the_requested_port() {
         keyspace: "wiki".to_string(),
         consistency: Consistency::LocalOne,
         request_timeout: Duration::from_secs(10),
-        write_coalescing: true,
     };
     assert_eq!(
         contact_points(&options),
@@ -124,7 +123,6 @@ fn some_options(consistency: Consistency, request_timeout: Duration) -> ConnectO
         keyspace: "wiki".to_string(),
         consistency,
         request_timeout,
-        write_coalescing: true,
     }
 }
 

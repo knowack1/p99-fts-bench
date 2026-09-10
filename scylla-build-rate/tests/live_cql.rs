@@ -71,7 +71,6 @@ impl NullSink {
             keyspace: KEYSPACE.to_string(),
             consistency: session::consistency_from_name("LOCAL_ONE").unwrap(),
             request_timeout: Duration::from_secs(10),
-            write_coalescing: true,
         }
     }
 }
@@ -202,7 +201,6 @@ async fn an_endpoint_that_is_not_listening_is_reported_not_hung_on() {
         keyspace: KEYSPACE.to_string(),
         consistency: session::consistency_from_name("LOCAL_ONE").unwrap(),
         request_timeout: Duration::from_secs(1),
-        write_coalescing: true,
     };
     let failure = format!("{:#}", session::connect(&options).await.unwrap_err());
     assert!(failure.contains("cannot reach"));

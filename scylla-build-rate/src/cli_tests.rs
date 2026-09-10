@@ -152,14 +152,6 @@ fn a_requested_worker_count_overrides_the_core_count() {
 }
 
 #[test]
-fn write_coalescing_is_on_unless_it_is_turned_off() {
-    assert!(parse(&a_minimal_command()).write_coalescing());
-    let mut argv = a_minimal_command();
-    argv.push("--no-write-coalescing");
-    assert!(!parse(&argv).write_coalescing());
-}
-
-#[test]
 fn connect_options_carry_the_request_timeout_as_a_duration() {
     let args = parse(&[
         "--corpus",

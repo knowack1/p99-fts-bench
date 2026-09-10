@@ -81,7 +81,6 @@ pub struct ConnectOptions {
     pub keyspace: String,
     pub consistency: Consistency,
     pub request_timeout: Duration,
-    pub write_coalescing: bool,
 }
 
 pub fn consistency_from_name(name: &str) -> Result<Consistency> {
@@ -108,7 +107,6 @@ pub async fn connect(options: &ConnectOptions) -> Result<Session> {
     let session = SessionBuilder::new()
         .known_nodes(contact_points(options))
         .compression(None)
-        .write_coalescing(options.write_coalescing)
         .default_execution_profile_handle(execution_profile(options).into_handle())
         .build()
         .await

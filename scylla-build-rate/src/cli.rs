@@ -61,11 +61,6 @@ pub struct Args {
     #[arg(long)]
     pub tokio_workers: Option<usize>,
 
-    /// Send each request in its own write syscall instead of letting the driver
-    /// batch requests that are ready together
-    #[arg(long)]
-    pub no_write_coalescing: bool,
-
     /// CSV destination; '-' writes to stdout
     #[arg(long, default_value = STDOUT)]
     pub out: String,
@@ -76,10 +71,6 @@ impl Args {
         self.tokio_workers.unwrap_or_else(available_cores)
     }
 
-    pub fn write_coalescing(&self) -> bool {
-        !self.no_write_coalescing
-    }
-
     pub fn connect_options(&self) -> ConnectOptions {
         ConnectOptions {
             hosts: self.hosts.0.clone(),
@@ -87,7 +78,6 @@ impl Args {
             keyspace: self.keyspace.clone(),
             consistency: self.consistency,
             request_timeout: Duration::from_secs_f64(self.request_timeout),
-            write_coalescing: self.write_coalescing(),
         }
     }
 
@@ -96,7 +86,6 @@ impl Args {
             ("consistency", consistency_name(self.consistency)),
             ("request_timeout_s", self.request_timeout.to_string()),
             ("tokio_workers", self.tokio_workers().to_string()),
-            ("write_coalescing", self.write_coalescing().to_string()),
             ("driver_metrics", driver_metrics_state().to_string()),
             ("corpus", self.corpus.display().to_string()),
             ("max_docs", self.max_docs.to_string()),

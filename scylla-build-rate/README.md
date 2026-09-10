@@ -65,7 +65,6 @@ row before plotting.
 | `--consistency` | `LOCAL_ONE` | equivalent to LOCAL_QUORUM at RF=1, but recorded |
 | `--request-timeout` | 10.0 | seconds; raise if high levels report timeouts |
 | `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
-| `--no-write-coalescing` | off | one write syscall per request; see below |
 | `--out` | `-` | CSV destination; `-` is stdout |
 
 Progress goes to stderr once a second, the CSV to `--out`, and a summary table
@@ -116,14 +115,15 @@ chart made at 4 workers cannot be silently compared against one made at 16.
   shard-local write.
 - **Compression is explicitly off**, so whether a codec happens to be compiled
   in cannot silently shift the measured rate.
-- **Write coalescing is the driver's default and is recorded.** The driver
+- **Write coalescing is left at the driver's default, which is on.** The driver
   batches requests that become ready together into one write syscall, which
-  flatters a submit-rate measurement at high concurrency. `--no-write-coalescing`
-  turns it off; the header says which was used either way.
+  flatters a submit-rate measurement at high concurrency. There is no flag for
+  it: every run here is a coalescing run, so the ladders stay comparable, and
+  `driver=` in the header is what pins the behaviour.
 - **The CSV header records the topology** — engine and driver version, protocol,
   runtime and worker count, `shard_aware`, per-endpoint `shards:N`, live
-  connection count, tablets, consistency, timeout and write coalescing. A chart
-  without those facts is not interpretable.
+  connection count, tablets, consistency and timeout. A chart without those
+  facts is not interpretable.
 
 ## Reading the curve
 
@@ -137,8 +137,6 @@ chart made at 4 workers cannot be silently compared against one made at 16.
   host binding is also 19042, but it leads to the ordinary port.
 - Re-run the flat point with a higher `--tokio-workers`. If the knee moves, the
   client was the constraint.
-- Re-run it with `--no-write-coalescing`. If the rate drops sharply, the earlier
-  number was partly a syscall-batching artifact, not delivered work.
 
 Because `article_id` is the corpus's deterministic uuid5, every point overwrites
 the same rows. The table does not grow between points and all levels see the
@@ -153,7 +151,7 @@ purest submit rate.
 ## Tests
 
 ```bash
-cargo test                              # 114 tests, no endpoint needed
+cargo test                              # 113 tests, no endpoint needed
 cargo test -- --include-ignored         # adds the live-endpoint tests below
 cargo clippy --all-targets -- -D warnings
 cargo llvm-cov --summary-only -- --include-ignored
