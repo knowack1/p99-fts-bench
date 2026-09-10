@@ -12,13 +12,14 @@ from collections.abc import Callable, Iterator
 from cassandra.cluster import Session
 
 from .corpus import InsertParams
-from .report import PointResult, note, percentile
+from .report import PointResult, latency_text, note, percentile
 
 PROGRESS_INTERVAL_S = 1.0
 QUEUE_DEPTH_PER_WORKER = 2
 STOP = object()
 
 SourceFactory = Callable[[], Iterator[InsertParams]]
+OnPoint = Callable[[PointResult], None]
 
 
 class Counters:
@@ -106,16 +107,25 @@ async def _measure_at_concurrency(session: Session, statement,
                                   concurrency: int) -> PointResult:
     queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_DEPTH_PER_WORKER * concurrency)
     counters = Counters()
-    producer = asyncio.create_task(_fill_queue(queue, source, concurrency))
-    workers = [asyncio.create_task(_drain_queue(queue, session, statement, counters))
-               for _ in range(concurrency)]
+    loaders = _start_loaders(queue, source, session, statement, counters, concurrency)
     reporter = asyncio.create_task(_follow_progress(counters, concurrency))
     started = time.perf_counter()
-    await asyncio.gather(producer, *workers)
-    wall_s = time.perf_counter() - started
-    await _cancel(reporter)
+    try:
+        await asyncio.gather(*loaders)
+        wall_s = time.perf_counter() - started
+    finally:
+        await _stop_all(loaders)
+        await _stop_progress(reporter)
     _warn_about_errors(counters)
     return _summarize(concurrency, counters, wall_s)
+
+
+def _start_loaders(queue: asyncio.Queue, source: Iterator[InsertParams],
+                   session: Session, statement, counters: Counters,
+                   concurrency: int) -> list[asyncio.Task]:
+    return [asyncio.create_task(_fill_queue(queue, source, concurrency)),
+            *(asyncio.create_task(_drain_queue(queue, session, statement, counters))
+              for _ in range(concurrency))]
 
 
 def _warn_about_errors(counters: Counters) -> None:
@@ -123,9 +133,21 @@ def _warn_about_errors(counters: Counters) -> None:
         note(f"  !! {counters.errors} failed inserts, first was {counters.first_error}")
 
 
-async def _cancel(task: asyncio.Task) -> None:
+async def _stop_all(tasks: list[asyncio.Task]) -> None:
+    """A producer that raised leaves its workers pending; they are cancelled
+    here rather than left for the loop to reap after the error has unwound."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _stop_progress(task: asyncio.Task) -> None:
+    """The progress printer's own failure must not discard a measured point.
+    Its numbers are already in `Counters`, and a broken stderr — `2>&1 | head`
+    closing the pipe — would otherwise destroy a run that had succeeded.
+    """
     task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
+    with contextlib.suppress(asyncio.CancelledError, Exception):
         await task
 
 
@@ -142,18 +164,18 @@ def _summarize(concurrency: int, counters: Counters, wall_s: float) -> PointResu
 
 
 async def run_sweep(session: Session, statement, source_factory: SourceFactory,
-                    levels: list[int]) -> list[PointResult]:
-    results = []
+                    levels: list[int], on_point: OnPoint) -> None:
+    """`on_point` is handed each result as it lands, so a level that fails
+    cannot take the levels already measured down with it."""
     for position, concurrency in enumerate(levels, start=1):
         note(f"[{position}/{len(levels)}] concurrency={concurrency}")
         result = await _measure_at_concurrency(
             session, statement, source_factory(), concurrency)
         _announce(result)
-        results.append(result)
-    return results
+        on_point(result)
 
 
 def _announce(result: PointResult) -> None:
     note(f"  -> {result.docs} docs in {result.wall_s:.2f}s = "
-         f"{result.docs_per_s:.1f} docs/s, p99 {result.p99_ms:.2f} ms, "
+         f"{result.docs_per_s:.1f} docs/s, p99 {latency_text(result.p99_ms)} ms, "
          f"{result.errors} errors")

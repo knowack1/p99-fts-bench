@@ -7,6 +7,10 @@ latency was. The output is one CSV that feeds two charts:
 - **chart 1** — X `concurrency`, Y `docs_per_s`
 - **chart 2** — X `concurrency`, Y `p99_ms`
 
+Latency percentiles are computed from successful inserts only, so a point with
+a non-zero `errors` count has a p99 that excludes whatever the failures cost —
+read the two columns together.
+
 ## This measures a submit rate, not an index build rate
 
 A completed CQL write says nothing about how many documents reached the
@@ -57,7 +61,20 @@ row before plotting.
 | `--out` | `-` | CSV destination; `-` is stdout |
 
 Progress goes to stderr once a second, the CSV to `--out`, and a summary table
-to stderr at the end. Exit status is 1 if any point had a failed insert.
+to stderr at the end. Exit status is 1 if any point had a failed insert, or if
+the sweep ended early.
+
+**Each point is written as it finishes.** `--out` is opened and its header
+written before the first insert, so an unwritable destination costs a second
+rather than a whole ladder, and a sweep that dies at level 5 — a bad corpus
+line, a lost node, a Ctrl-C — leaves levels 1-4 on disk with a note on stderr
+saying where they are. Only the level that was in flight is lost.
+
+**An unmeasured latency is blank, never `0`.** If every insert at a point
+failed there is no latency distribution to report, so `p50_ms`/`p99_ms` are
+written as empty CSV cells (`-` in the summary table) rather than `0.000`.
+Zero would plot as the fastest point on chart 2. `docs_per_s` still reports
+`0.0`, which is a real measurement: nothing was delivered.
 
 ## How concurrency is realised
 

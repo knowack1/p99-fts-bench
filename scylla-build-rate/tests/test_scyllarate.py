@@ -6,6 +6,8 @@ import pytest
 
 from scyllarate import cli, corpus, report, session, sweep
 
+from .fakes import a_point, a_topology
+
 PAGE_ID = 193002
 PAGE_UUID = str(uuid.uuid5(uuid.NAMESPACE_URL, f"wikipedia-page:{PAGE_ID}"))
 
@@ -21,11 +23,6 @@ def write_corpus(tmp_path, documents: list[dict]) -> str:
     path = tmp_path / "corpus.jsonl"
     path.write_text("".join(json.dumps(doc) + "\n" for doc in documents))
     return str(path)
-
-
-def a_point(concurrency: int = 8, errors: int = 0) -> report.PointResult:
-    return report.PointResult(concurrency=concurrency, docs=100, errors=errors,
-                              wall_s=2.0, docs_per_s=50.0, p50_ms=1.5, p99_ms=9.0)
 
 
 def test_parses_a_list_of_concurrency_levels():
@@ -98,17 +95,8 @@ def test_percentile_of_a_single_sample_is_that_sample():
     assert report.percentile([7.0], 0.99) == 7.0
 
 
-def test_percentile_of_nothing_is_zero():
-    assert report.percentile([], 0.99) == 0.0
-
-
-def a_topology() -> session.Topology:
-    return session.Topology(scylla_version="2026.3.0-rc2", routing="TokenAwarePolicy",
-                            compression="False", driver_version="3.29.11",
-                            protocol_version="5", reactor="LibevConnection",
-                            shard_aware="True",
-                            shards="127.0.0.1:9042=shards:3,connected:3",
-                            tablets="False")
+def test_percentile_of_nothing_is_unmeasured_not_zero():
+    assert report.percentile([], 0.99) is None
 
 
 def test_header_carries_the_topology_as_comment_lines():
@@ -118,9 +106,14 @@ def test_header_carries_the_topology_as_comment_lines():
     assert "# corpus=data/corpus.jsonl" in lines
 
 
-def test_csv_has_a_header_row_and_one_row_per_point():
-    text = report.csv_text(a_topology(), {}, [a_point(8), a_point(16)])
-    rows = [line for line in text.splitlines() if not line.startswith("#")]
+def test_csv_has_a_header_row_and_one_row_per_point(tmp_path):
+    destination = tmp_path / "sweep.csv"
+    with report.open_csv(str(destination)) as handle:
+        report.write_preamble(handle, a_topology(), {})
+        report.append_row(handle, a_point(8))
+        report.append_row(handle, a_point(16))
+    rows = [line for line in destination.read_text().splitlines()
+            if not line.startswith("#")]
     assert rows[0] == "concurrency,docs,errors,wall_s,docs_per_s,p50_ms,p99_ms"
     assert len(rows) == 3
 
@@ -155,9 +148,9 @@ def test_first_failure_is_remembered_for_the_operator():
 
 def test_a_sweep_with_any_failed_insert_exits_non_zero():
     from scyllarate.__main__ import _exit_code
-    assert _exit_code([a_point(8), a_point(16, errors=3)]) == 1
+    assert _exit_code([a_point(8), a_point(16, errors=3)], aborted=False) == 1
 
 
 def test_a_clean_sweep_exits_zero():
     from scyllarate.__main__ import _exit_code
-    assert _exit_code([a_point(8), a_point(16)]) == 0
+    assert _exit_code([a_point(8), a_point(16)], aborted=False) == 0

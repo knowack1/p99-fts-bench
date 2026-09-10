@@ -1,7 +1,6 @@
 import asyncio
 import uuid
 
-import pytest
 
 from scyllarate import report, sweep
 
@@ -12,6 +11,13 @@ STATEMENT = "INSERT INTO articles ..."
 
 def some_params(count: int) -> list[tuple]:
     return [(uuid.uuid4(), n, f"title {n}", f"text {n}") for n in range(count)]
+
+
+def swept(session, source_factory, levels) -> list[report.PointResult]:
+    results: list[report.PointResult] = []
+    asyncio.run(sweep.run_sweep(session, STATEMENT, source_factory, levels,
+                                results.append))
+    return results
 
 
 def measure_at_concurrency(session: FakeSession, params: list[tuple],
@@ -61,7 +67,7 @@ def test_a_failed_insert_is_counted_and_the_rest_still_go():
 
 def test_an_empty_corpus_produces_an_empty_point():
     result = measure_at_concurrency(FakeSession(), [], concurrency=4)
-    assert (result.docs, result.errors, result.p99_ms) == (0, 0, 0.0)
+    assert (result.docs, result.errors, result.p99_ms) == (0, 0, None)
 
 
 def test_a_point_measures_a_positive_wall_and_rate():
@@ -102,29 +108,26 @@ def collect_sentinels(items: list) -> int:
 
 def test_a_sweep_returns_one_result_per_level_in_order():
     session = FakeSession()
-    results = asyncio.run(sweep.run_sweep(
-        session, STATEMENT, lambda: iter(some_params(12)), [2, 4, 8]))
+    results = swept(session, lambda: iter(some_params(12)), [2, 4, 8])
     assert [result.concurrency for result in results] == [2, 4, 8]
 
 
 def test_a_repeated_level_is_measured_twice():
     session = FakeSession()
-    results = asyncio.run(sweep.run_sweep(
-        session, STATEMENT, lambda: iter(some_params(6)), [4, 4]))
+    results = swept(session, lambda: iter(some_params(6)), [4, 4])
     assert len(results) == 2 and session.sent == 12
 
 
 def test_each_level_reads_the_corpus_from_the_start():
     session = FakeSession()
-    asyncio.run(sweep.run_sweep(
-        session, STATEMENT, lambda: iter(some_params(5)), [2, 2, 2]))
+    swept(session, lambda: iter(some_params(5)), [2, 2, 2])
     assert session.sent == 15
 
 
 def test_progress_reporting_can_be_cancelled_cleanly():
     async def start_then_cancel() -> bool:
         task = asyncio.create_task(sweep._follow_progress(sweep.Counters(), 4))
-        await sweep._cancel(task)
+        await sweep._stop_progress(task)
         return task.cancelled()
 
     assert asyncio.run(start_then_cancel())
@@ -141,7 +144,7 @@ def test_progress_reports_the_delta_since_the_last_tick(monkeypatch):
         counters.record_ok(1.0)
         task = asyncio.create_task(sweep._follow_progress(counters, 4))
         await asyncio.sleep(0.03)
-        await sweep._cancel(task)
+        await sweep._stop_progress(task)
 
     asyncio.run(tick_once())
     assert seen and "2 docs/s" in seen[0]

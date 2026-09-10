@@ -7,6 +7,24 @@ real in-flight bound.
 """
 import asyncio
 
+from scyllarate.report import PointResult
+from scyllarate.session import Topology
+
+
+def a_point(concurrency: int = 8, errors: int = 0, p50_ms: float | None = 1.5,
+            p99_ms: float | None = 9.0) -> PointResult:
+    return PointResult(concurrency=concurrency, docs=100, errors=errors,
+                       wall_s=2.0, docs_per_s=50.0, p50_ms=p50_ms, p99_ms=p99_ms)
+
+
+def a_topology() -> Topology:
+    return Topology(scylla_version="2026.3.0-rc2", routing="TokenAwarePolicy",
+                    compression="False", driver_version="3.29.11",
+                    protocol_version="5", reactor="LibevConnection",
+                    shard_aware="True",
+                    shards="127.0.0.1:9042=shards:3,connected:3",
+                    tablets="False")
+
 
 class FakeResponseFuture:
     def __init__(self, session: "FakeSession", should_fail: bool) -> None:

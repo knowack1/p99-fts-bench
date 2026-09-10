@@ -3,14 +3,10 @@ import argparse
 import pytest
 
 from scyllarate import cli, report, session
-from scyllarate.__main__ import _describe, _exit_code, _publish, _settings, _source_factory
+from scyllarate.__main__ import (_collector, _describe, _echo_summary, _exit_code,
+                                 _settings, _source_factory)
 
-from .fakes import FakeCluster, FakeSession, FakeTablets
-
-
-def a_point(concurrency: int = 8) -> report.PointResult:
-    return report.PointResult(concurrency=concurrency, docs=100, errors=0,
-                              wall_s=2.0, docs_per_s=50.0, p50_ms=1.5, p99_ms=9.0)
+from .fakes import FakeCluster, FakeSession, FakeTablets, a_point, a_topology
 
 
 def an_args(**overrides) -> argparse.Namespace:
@@ -75,13 +71,15 @@ def test_the_summary_row_leads_with_the_concurrency_level():
 
 def test_the_csv_can_be_written_to_a_file(tmp_path):
     destination = tmp_path / "sweep.csv"
-    report.write_csv("concurrency\n8\n", str(destination))
-    assert destination.read_text() == "concurrency\n8\n"
+    with report.open_csv(str(destination)) as handle:
+        report.append_row(handle, a_point(8))
+    assert destination.read_text().startswith("8,100,0,")
 
 
 def test_the_csv_goes_to_stdout_when_asked(capsys):
-    report.write_csv("rows\n", report.STDOUT)
-    assert capsys.readouterr().out == "rows\n"
+    with report.open_csv(report.STDOUT) as handle:
+        report.append_row(handle, a_point(8))
+    assert capsys.readouterr().out.startswith("8,100,0,")
 
 
 def test_notes_go_to_stderr_not_stdout(capsys):
@@ -112,24 +110,23 @@ def test_describe_puts_the_topology_on_stderr(capsys):
     assert "shard_aware=True" in capsys.readouterr().err
 
 
-def a_topology() -> session.Topology:
-    return session.Topology(scylla_version="2026.3.0-rc2", routing="TokenAwarePolicy",
-                            compression="False", driver_version="3.29.11",
-                            protocol_version="5", reactor="LibevConnection",
-                            shard_aware="True",
-                            shards="127.0.0.1:9042=shards:3,connected:3",
-                            tablets="False")
-
-
-def test_publish_writes_the_csv_and_echoes_a_summary(tmp_path, capsys):
+def test_a_collected_point_lands_in_the_csv(tmp_path):
     destination = tmp_path / "sweep.csv"
-    _publish(a_topology(), an_args(out=str(destination)), [a_point(8)])
+    results: list[report.PointResult] = []
+    with report.open_csv(str(destination)) as handle:
+        report.write_preamble(handle, a_topology(), {})
+        _collector(results, handle)(a_point(8))
     assert "# shard_aware=True" in destination.read_text()
+    assert results == [a_point(8)]
+
+
+def test_the_summary_is_echoed_to_stderr(capsys):
+    _echo_summary([a_point(8)])
     assert "p99_ms" in capsys.readouterr().err
 
 
 def test_exit_code_is_zero_for_a_clean_sweep():
-    assert _exit_code([a_point(8)]) == 0
+    assert _exit_code([a_point(8)], aborted=False) == 0
 
 
 def test_the_parser_accepts_a_full_command_line():
