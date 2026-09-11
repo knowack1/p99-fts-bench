@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
 
+use crate::build_rate::IndexBuild;
 use crate::corpus::InsertParams;
 use crate::notes::Notes;
 use crate::report::PointResult;
@@ -43,6 +44,25 @@ pub fn a_point_with_latency(
         docs_per_s: 50.0,
         p50_ms,
         p99_ms,
+        index: None,
+    }
+}
+
+pub fn a_point_with_index(concurrency: usize, build: IndexBuild) -> PointResult {
+    PointResult {
+        index: Some(build),
+        ..a_point(concurrency)
+    }
+}
+
+pub fn an_index_build(docs: u64, settled: bool) -> IndexBuild {
+    IndexBuild {
+        docs,
+        docs_per_s: 1234.5,
+        lag_docs: if settled { 0 } else { 42 },
+        settle_s: 3.5,
+        settled,
+        status: "SERVING".to_string(),
     }
 }
 
@@ -203,4 +223,140 @@ impl SpokenNotes {
 
 pub fn quiet_notes() -> Notes {
     SpokenNotes::default().notes(Duration::from_secs(3600))
+}
+
+/// What one poll of the fake vector-store finds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reply {
+    Absent,
+    Serving(u64),
+    Building(u64),
+    Failing(u16),
+}
+
+impl Reply {
+    fn parts(&self) -> (u16, String) {
+        match self {
+            Self::Absent => (404, r#"{"error":"no such index"}"#.to_string()),
+            Self::Serving(count) => (200, format!(r#"{{"count":{count},"status":"SERVING"}}"#)),
+            Self::Building(count) => (200, format!(r#"{{"count":{count},"status":"BUILDING"}}"#)),
+            Self::Failing(code) => (*code, r#"{"error":"unavailable"}"#.to_string()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Script {
+    queued: std::collections::VecDeque<Reply>,
+    standing: Reply,
+}
+
+impl Script {
+    /// Queued replies are consumed one per poll; the last one then stands. A
+    /// gate that polls until a condition holds has to be able to see a
+    /// sequence, not just an end state.
+    fn next(&mut self) -> Reply {
+        match self.queued.pop_front() {
+            Some(reply) => {
+                self.standing = reply.clone();
+                reply
+            }
+            None => self.standing.clone(),
+        }
+    }
+}
+
+/// A vector-store-shaped endpoint whose answers a test writes.
+pub struct FakeVectorStore {
+    base_url: String,
+    script: Arc<Mutex<Script>>,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl FakeVectorStore {
+    pub async fn start(standing: Reply) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let script = Arc::new(Mutex::new(Script {
+            queued: std::collections::VecDeque::new(),
+            standing,
+        }));
+        let server = tokio::spawn(serve_index_status(listener, Arc::clone(&script)));
+        Self {
+            base_url,
+            script,
+            server,
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub fn standing(&self, reply: Reply) {
+        let mut script = self.script.lock().unwrap();
+        script.queued.clear();
+        script.standing = reply;
+    }
+
+    pub fn then(&self, replies: &[Reply]) {
+        self.script
+            .lock()
+            .unwrap()
+            .queued
+            .extend(replies.iter().cloned());
+    }
+}
+
+impl Drop for FakeVectorStore {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+async fn serve_index_status(listener: tokio::net::TcpListener, script: Arc<Mutex<Script>>) {
+    while let Ok((stream, _)) = listener.accept().await {
+        answer_one(stream, &script).await;
+    }
+}
+
+/// One request per connection, answered with `Connection: close`. Keep-alive
+/// would buy nothing here: these polls are one a second at most.
+async fn answer_one(mut stream: tokio::net::TcpStream, script: &Arc<Mutex<Script>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut head = [0_u8; 1024];
+    let read = stream.read(&mut head).await.unwrap_or(0);
+    if read == 0 {
+        return;
+    }
+    let (code, body) = if String::from_utf8_lossy(&head[..read]).contains("/api/v1/info") {
+        (200, r#"{"version":"1.10.0-fake"}"#.to_string())
+    } else {
+        script.lock().unwrap().next().parts()
+    };
+    let response = format!(
+        "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
+}
+
+/// The same inserter at every level, for tests that are not about the reset.
+pub struct OneInserter<I>(pub Arc<I>);
+
+impl<I: Inserter> OneInserter<I> {
+    pub fn new(inserter: I) -> Self {
+        Self(Arc::new(inserter))
+    }
+}
+
+impl<I: Inserter> crate::sweep::InserterSource for OneInserter<I> {
+    type Inserter = I;
+
+    fn open(&self) -> crate::sweep::BoxFuture<'_, Result<Arc<I>>> {
+        Box::pin(std::future::ready(Ok(Arc::clone(&self.0))))
+    }
 }

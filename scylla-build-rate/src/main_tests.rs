@@ -9,6 +9,7 @@ fn a_point(concurrency: usize, errors: u64) -> PointResult {
         docs_per_s: 50.0,
         p50_ms: Some(1.5),
         p99_ms: Some(9.0),
+        index: None,
     }
 }
 

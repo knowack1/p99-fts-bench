@@ -7,6 +7,7 @@
 //! separate knob — they say how many cores serve those N in-flight requests, not
 //! how many requests are outstanding.
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,6 +15,7 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use tokio::task::JoinSet;
 
+use crate::build_rate::{IndexBuild, IndexWatch};
 use crate::corpus::InsertParams;
 use crate::notes::Notes;
 use crate::report::{latency_text, percentile, PointResult};
@@ -29,6 +31,20 @@ pub trait Inserter: Send + Sync + 'static {
 
 pub trait Source: Iterator<Item = Result<InsertParams>> + Send + 'static {}
 impl<T> Source for T where T: Iterator<Item = Result<InsertParams>> + Send + 'static {}
+
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// One inserter per level, opened the way the corpus is reopened per level.
+///
+/// It is a trait rather than a closure because the real implementation resets
+/// the keyspace first, and the prepared statement it returns cannot outlive
+/// that: the table it was prepared against is dropped. Boxing the future costs
+/// one allocation per level, which is not a quantity this tool measures.
+pub trait InserterSource: Send + Sync {
+    type Inserter: Inserter;
+
+    fn open(&self) -> BoxFuture<'_, Result<Arc<Self::Inserter>>>;
+}
 
 pub type OnPoint<'a> = &'a mut dyn FnMut(PointResult) -> Result<()>;
 
@@ -111,16 +127,17 @@ impl Cancel {
 
 /// `on_point` is handed each result as it lands, so a level that fails cannot
 /// take the levels already measured down with it.
-pub async fn run_sweep<I, S, F>(
-    inserter: Arc<I>,
+pub async fn run_sweep<P, S, F>(
+    inserters: &P,
     open_source: F,
     levels: &[usize],
+    index: &IndexWatch,
     notes: &Notes,
     cancel: &Cancel,
     on_point: OnPoint<'_>,
 ) -> Result<()>
 where
-    I: Inserter,
+    P: InserterSource,
     S: Source,
     F: Fn() -> Result<S>,
 {
@@ -130,8 +147,11 @@ where
             position + 1,
             levels.len()
         ));
-        let result =
+        let inserter = inserters.open().await?;
+        let watch = index.begin(notes).await?;
+        let mut result =
             measure_or_cancel(&inserter, open_source()?, concurrency, notes, cancel).await?;
+        result.index = watch.finish(result.docs).await?;
         announce(notes, &result);
         on_point(result)?;
     }
@@ -279,6 +299,7 @@ pub fn summarize(concurrency: usize, counters: &Counters, wall_s: f64) -> PointR
         docs_per_s: rate(counters.ok, wall_s),
         p50_ms: percentile(&latencies, 0.50),
         p99_ms: percentile(&latencies, 0.99),
+        index: None,
     }
 }
 
@@ -299,6 +320,27 @@ fn announce(notes: &Notes, result: &PointResult) {
         latency_text(result.p99_ms),
         result.errors
     ));
+    if let Some(build) = result.index.as_ref() {
+        notes.say(&announce_build(build));
+    }
+}
+
+/// An unsettled build is said out loud rather than left to the CSV: it means
+/// the index never caught up with what was submitted, so the rate beside it is
+/// a floor and not the build rate.
+fn announce_build(build: &IndexBuild) -> String {
+    let caught_up = if build.settled {
+        format!("settled in {:.1}s", build.settle_s)
+    } else {
+        format!(
+            "NOT settled after {:.1}s, {} docs short",
+            build.settle_s, build.lag_docs
+        )
+    };
+    format!(
+        "  -> index {} docs = {:.1} docs/s, {} behind at submit end, {caught_up}",
+        build.docs, build.docs_per_s, build.lag_docs
+    )
 }
 
 #[cfg(test)]

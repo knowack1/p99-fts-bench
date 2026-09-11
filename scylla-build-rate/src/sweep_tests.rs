@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use super::*;
+use crate::build_rate::IndexWatch;
 use crate::fakes::{
-    a_source, a_truncated_source, quiet_notes, some_params, FakeInserter, SpokenNotes,
+    a_source, a_truncated_source, quiet_notes, some_params, FakeInserter, OneInserter, SpokenNotes,
 };
 
 const SLOW: Duration = Duration::from_millis(2);
@@ -30,9 +31,10 @@ async fn sweep_levels(
         Ok(())
     };
     run_sweep(
-        Arc::clone(inserter),
+        &OneInserter(Arc::clone(inserter)),
         || Ok(a_source(documents)),
         levels,
+        &IndexWatch::off(),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -240,9 +242,10 @@ async fn a_cancelled_sweep_keeps_the_levels_it_measured() {
     };
     let mut collect = stop_after_first;
     let outcome = run_sweep(
-        an_inserter(Duration::from_millis(1)),
+        &OneInserter(an_inserter(Duration::from_millis(1))),
         || Ok(a_source(20)),
         &[2, 4],
+        &IndexWatch::off(),
         &quiet_notes(),
         &cancel,
         &mut collect,
@@ -255,9 +258,10 @@ async fn a_cancelled_sweep_keeps_the_levels_it_measured() {
 async fn a_collector_failure_stops_the_sweep() {
     let mut collect = |_: PointResult| anyhow::bail!("the CSV went away");
     let outcome = run_sweep(
-        an_inserter(Duration::ZERO),
+        &OneInserter(an_inserter(Duration::ZERO)),
         || Ok(a_source(4)),
         &[2, 4],
+        &IndexWatch::off(),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -271,9 +275,10 @@ async fn an_unopenable_source_stops_the_sweep_before_any_insert() {
     let inserter = an_inserter(Duration::ZERO);
     let mut collect = |_: PointResult| Ok(());
     let outcome = run_sweep(
-        Arc::clone(&inserter),
+        &OneInserter(Arc::clone(&inserter)),
         || -> Result<std::vec::IntoIter<Result<InsertParams>>> { anyhow::bail!("no such corpus") },
         &[2],
+        &IndexWatch::off(),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,

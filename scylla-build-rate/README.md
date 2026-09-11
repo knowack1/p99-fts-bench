@@ -1,23 +1,75 @@
 # scyllarate — a concurrency sweep for ScyllaDB ingest
 
 Loads a corpus into `wiki.articles` once per concurrency level and reports, for
-each level, how fast the client delivered documents and what the p99 insert
-latency was. The output is one CSV that feeds two charts:
+each level, how fast the client delivered documents, what the p99 insert latency
+was, and how fast those documents reached the full-text index. The output is one
+CSV that feeds three charts:
 
 - **chart 1** — X `concurrency`, Y `docs_per_s`
 - **chart 2** — X `concurrency`, Y `p99_ms`
+- **chart 3** — X `concurrency`, Y `index_docs_per_s`
 
 Latency percentiles are computed from successful inserts only, so a point with
 a non-zero `errors` count has a p99 that excludes whatever the failures cost —
 read the two columns together.
 
-## This measures a submit rate, not an index build rate
+## The submit rate and the build rate are two different numbers
 
-A completed CQL write says nothing about how many documents reached the
-full-text index. The index build is visible only at
-`{VS_URL}/api/v1/indexes/wiki/articles_body_fts/status`, which this tool does
-not poll — `ftsbench.build_monitor` is the thing that does. Read every number
-here as *how fast this client could hand work to ScyllaDB*.
+`docs_per_s` is how fast this client handed prepared INSERTs to ScyllaDB. A
+completed CQL write says nothing about how many documents reached the index:
+rows land in the base table first and the vector-store catches up behind them,
+either by bootstrap-scanning the table or by tailing CDC.
+
+`index_docs_per_s` is the other number, read from
+`{VS_URL}/api/v1/indexes/{keyspace}/{index}/status` — the same two fields
+(`count`, `status`) that `ftsbench.samplers.ScyllaSampler` reads for C1, so a
+ceiling measured here and an engine number measured there come from one reading
+rather than two.
+
+Watching does not stop when the client does. After the last insert the index is
+still catching up, so the watch continues until the count reaches what was
+submitted, stops moving for `--vs-idle-timeout`, or exhausts
+`--vs-settle-timeout`. Only the first of those is a build rate; the other two
+report a **floor**, and say so — `index_settled` is `false` and the summary
+table marks the count with a `*`.
+
+## Every level builds from zero documents
+
+`article_id` is the corpus's deterministic uuid5, so a second pass rewrites the
+first pass's rows: the table does not grow, the index count does not move, and
+the build rate of every rung but the first would be unmeasurable. So **before
+every level this drops the keyspace and rebuilds it**, which is what
+`tools/build_rate_point.sh` does externally by running one point per
+invocation.
+
+> **This is destructive and it is on by default.** `DROP KEYSPACE` takes the
+> table and the index with it. Check `--hosts` before you run. `--no-reset`
+> keeps the keyspace, at the cost of making levels after the first measure no
+> build at all.
+
+The cycle, per level:
+
+1. `DROP KEYSPACE IF EXISTS {keyspace}`
+2. wait until the vector-store no longer reports a SERVING index — phrased that
+   way rather than "404" so it does not depend on which code the vector-store
+   picks for an index it no longer has. Without this gate the next one could
+   match the index that was just dropped.
+3. `CREATE KEYSPACE`, `CREATE TABLE`, `CREATE CUSTOM INDEX` — the index before
+   the load, which is the CDC tail path
+4. re-prepare the INSERT, whose previous statement id died with the table
+5. wait until the index is SERVING **and** holds 0 documents. `CREATE CUSTOM
+   INDEX` returns before the index is queryable, and all three conditions are
+   needed: SERVING alone could be the pre-drop index, and an empty count alone
+   could be one that is not answering yet.
+
+Both waits fail by name and say what they last saw. A reset that quietly did
+not happen produces a complete, plausible, wrong build rate, so the gates hang
+and then complain rather than let the load start.
+
+The DDL is built from `--keyspace`, `--table` and `--vs-index` rather than read
+from `bench/scylladb/*.cql`, which hardcode `wiki` and `articles`. A test holds
+the two to each other, so a schema change on one side alone fails rather than
+quietly loading a different table.
 
 ## Setup
 
@@ -36,8 +88,10 @@ Its own crate on purpose, too: `bench/.venv` serves the frozen harness
 dependency underneath a recorded run. `Cargo.lock` is committed and the CSV
 header names the exact driver version that produced the numbers.
 
-The table must already exist — apply `bench/scylladb/schema.cql` first. This
-tool never issues DDL.
+This tool issues DDL: it creates the keyspace, table and index it needs, and
+drops them again before each level. Nothing has to exist first. Pass
+`--no-reset` and it issues none, in which case the table must already exist —
+apply `bench/scylladb/schema.cql` and `index.cql` first.
 
 ## Use
 
@@ -47,6 +101,7 @@ tool never issues DDL.
     --concurrency 8,8,16,32,64,128 \
     --port 19042 \
     --tokio-workers 8 \
+    --vs-url http://localhost:6080 \
     --out sweep.csv
 ```
 
@@ -66,6 +121,14 @@ row before plotting.
 | `--request-timeout` | 10.0 | seconds; raise if high levels report timeouts |
 | `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
 | `--out` | `-` | CSV destination; `-` is stdout |
+| `--vs-url` | `$VS_URL` or `http://localhost:6080` | vector-store base URL |
+| `--vs-index` | `articles_body_fts` | the index name, on the CQL side and in the endpoint path alike |
+| `--vs-interval` | 1.0 | seconds between index-count polls |
+| `--vs-settle-timeout` | 120.0 | seconds to keep watching after the last insert |
+| `--vs-idle-timeout` | 10.0 | seconds of no index progress that end the wait |
+| `--reset-timeout` | 300.0 | seconds each reset gate may wait |
+| `--no-reset` | off | keep the keyspace; only the first level then measures a build |
+| `--no-index-watch` | off | no vector-store traffic at all; implies `--no-reset` |
 
 Progress goes to stderr once a second, the CSV to `--out`, and a summary table
 to stderr at the end. Exit status is 1 if any point had a failed insert, or if
@@ -83,13 +146,40 @@ written as empty CSV cells (`-` in the summary table) rather than `0.000`.
 Zero would plot as the fastest point on chart 2. `docs_per_s` still reports
 `0.0`, which is a real measurement: nothing was delivered.
 
+The same rule covers the index: under `--no-index-watch` all six index columns
+are blank, because a zero build rate is a finding and an unwatched level is not
+one.
+
+## The CSV columns
+
+The first seven are unchanged and the six index columns are **appended**, never
+inserted: `osrate` promises that its first seven columns are these in this
+order (`../opensearch-build-rate/README.md`), and `tools/plot_harness_grid.py`
+reads both files by position.
+
+| Column | What it is |
+|---|---|
+| `concurrency` | requests outstanding at once |
+| `docs` / `errors` | inserts that succeeded / failed |
+| `wall_s` / `docs_per_s` | how long the submit took, and its rate |
+| `p50_ms` / `p99_ms` | per-insert latency, successful inserts only |
+| `index_docs` | documents **this level** added to the index |
+| `index_docs_per_s` | those documents over the whole build, first insert to settle |
+| `index_lag_docs` | how far behind the index was when the client stopped submitting |
+| `index_settle_s` | seconds spent waiting after the last insert |
+| `index_settled` | `false` means the index never caught up — the rate is a floor |
+| `index_status` | what the vector-store last reported, normally `SERVING` |
+
+`index_docs` counts only what the level added, never the index it inherited, so
+a `--no-reset` ladder still credits each rung with its own work.
+
 ## Two different knobs
 
 `--concurrency` and `--tokio-workers` are independent, and confusing them
 misreads the curve.
 
 - **`--concurrency N`** is how many requests are outstanding at once. It is the
-  X axis of both charts.
+  X axis of every chart.
 - **`--tokio-workers W`** is how many OS threads the runtime may use to serve
   those N requests. It is a property of the client, recorded in the header, and
   held fixed across a ladder.
@@ -138,10 +228,16 @@ chart made at 4 workers cannot be silently compared against one made at 16.
 - Re-run the flat point with a higher `--tokio-workers`. If the knee moves, the
   client was the constraint.
 
-Because `article_id` is the corpus's deterministic uuid5, every point overwrites
-the same rows. The table does not grow between points and all levels see the
-same state — good for comparing levels, but past the first run on an empty table
-you are measuring the update path, not a cold load.
+`index_docs_per_s` flattening is the other half of the reading, and it can
+flatten for a reason `docs_per_s` does not: the client kept up and the index
+did not. Check `index_lag_docs` and `index_settled` — a level that submitted
+fast, fell far behind and never caught up is an index-build ceiling, not a
+client one.
+
+Under `--no-reset` every point overwrites the same rows: the table does not
+grow, `index_docs` is 0 for every level after the first, and what you are
+measuring is the update path rather than a cold load. That is why the reset is
+on by default.
 
 `connections` in the header costs a latency sample per request inside the
 driver. `cargo build --release --no-default-features` gives that up — the header
@@ -151,7 +247,7 @@ purest submit rate.
 ## Tests
 
 ```bash
-cargo test                              # 113 tests, no endpoint needed
+cargo test                              # 150 tests, no endpoint needed
 cargo test -- --include-ignored         # adds the live-endpoint tests below
 cargo clippy --all-targets -- -D warnings
 cargo llvm-cov --summary-only -- --include-ignored
@@ -160,10 +256,15 @@ cargo llvm-cov --summary-only -- --include-ignored
 The channel-and-workers core is covered against a driver-shaped fake that defers
 completions, so the in-flight bound is genuinely asserted rather than assumed.
 
-The session, the prepared INSERT, the topology read and the driver-backed
-inserter only exist against a real CQL endpoint, so `tests/live_cql.rs` starts
-the repo's accept-and-discard sink and drives them against it. Those tests are
-`#[ignore]`d by default because they shell out to `bench/.venv`:
+The gates and the settle logic are covered against a vector-store-shaped fake
+whose answers a test writes, so "the index stopped short" and "the index caught
+up" are distinguished by assertion rather than by hope.
+
+The session, the prepared INSERT, the topology read, the driver-backed inserter
+and the whole reset cycle only exist against a real CQL endpoint, so
+`tests/live_cql.rs` starts the repo's accept-and-discard sink — both halves of
+it — and drives them against it. Those tests are `#[ignore]`d by default
+because they shell out to `bench/.venv`:
 
 ```bash
 cargo test --test live_cql -- --ignored
@@ -177,8 +278,17 @@ For an end-to-end run of the binary against that same sink, start it yourself
 (from `bench/`):
 
 ```bash
-.venv/bin/python3 -m ftsbench.null_sink --mode cql --port 9142 --duration 300
+.venv/bin/python3 -m ftsbench.null_sink --mode cql --port 9142 \
+    --vs-port 6080 --duration 300
 ```
+
+`--vs-port` is what makes the pairing work: the sink's vector-store half reports
+the documents its CQL half accepted, so the build-rate number has a client
+ceiling measured the same way the engine's will be. It models the lifecycle too
+— `DROP KEYSPACE` deregisters the index and zeroes its count, `CREATE CUSTOM
+INDEX` brings it back — so the reset gates are exercised rather than skipped.
+`--vs-serving-delay-ms` holds a new index at `BUILDING` for a while, which is
+the only way to see the SERVING gate actually wait.
 
 That sink advertises neither the shard extension nor partition-key indexes, so
 such a run reports `shard_aware=false` and exercises no shard routing. That is

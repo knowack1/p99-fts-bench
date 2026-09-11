@@ -7,9 +7,14 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
+use crate::build_rate::IndexBuild;
 use crate::session::Topology;
 
-pub const CSV_COLUMNS: [&str; 7] = [
+/// The six index columns are APPENDED, never inserted. `osrate` promises that
+/// its first seven columns are these in this order
+/// (`opensearch-build-rate/README.md`), and `tools/plot_harness_grid.py` reads
+/// both files by position.
+pub const CSV_COLUMNS: [&str; 13] = [
     "concurrency",
     "docs",
     "errors",
@@ -17,7 +22,14 @@ pub const CSV_COLUMNS: [&str; 7] = [
     "docs_per_s",
     "p50_ms",
     "p99_ms",
+    "index_docs",
+    "index_docs_per_s",
+    "index_lag_docs",
+    "index_settle_s",
+    "index_settled",
+    "index_status",
 ];
+pub const INDEX_COLUMNS: usize = 6;
 pub const STDOUT: &str = "-";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +41,9 @@ pub struct PointResult {
     pub docs_per_s: f64,
     pub p50_ms: Option<f64>,
     pub p99_ms: Option<f64>,
+    /// `None` when the vector-store was not watched. Blank cells, never zeros:
+    /// a zero build rate is a finding, and an unwatched level is not one.
+    pub index: Option<IndexBuild>,
 }
 
 /// `None`, never 0.0, when nothing succeeded. A point where every insert failed
@@ -104,14 +119,25 @@ fn open_writer(destination: &str) -> io::Result<Box<dyn Write + Send>> {
 
 fn csv_row(result: &PointResult) -> String {
     format!(
-        "{},{},{},{:.3},{:.1},{},{}",
+        "{},{},{},{:.3},{:.1},{},{},{}",
         result.concurrency,
         result.docs,
         result.errors,
         result.wall_s,
         result.docs_per_s,
         csv_latency(result.p50_ms),
-        csv_latency(result.p99_ms)
+        csv_latency(result.p99_ms),
+        csv_index(result.index.as_ref())
+    )
+}
+
+fn csv_index(build: Option<&IndexBuild>) -> String {
+    let Some(build) = build else {
+        return [""; INDEX_COLUMNS].join(",");
+    };
+    format!(
+        "{},{:.1},{},{:.3},{},{}",
+        build.docs, build.docs_per_s, build.lag_docs, build.settle_s, build.settled, build.status
     )
 }
 
@@ -121,8 +147,8 @@ fn csv_latency(value: Option<f64>) -> String {
 
 pub fn summary_table(results: &[PointResult]) -> String {
     let header = format!(
-        "{:>6} {:>9} {:>6} {:>9} {:>10} {:>9} {:>9}",
-        "conc", "docs", "err", "wall_s", "docs/s", "p50_ms", "p99_ms"
+        "{:>6} {:>9} {:>6} {:>9} {:>10} {:>9} {:>9} {:>11} {:>11}",
+        "conc", "docs", "err", "wall_s", "docs/s", "p50_ms", "p99_ms", "idx_docs", "idx_docs/s"
     );
     std::iter::once(header)
         .chain(results.iter().map(summary_row))
@@ -132,14 +158,35 @@ pub fn summary_table(results: &[PointResult]) -> String {
 
 fn summary_row(result: &PointResult) -> String {
     format!(
-        "{:>6} {:>9} {:>6} {:>9.2} {:>10.1} {:>9} {:>9}",
+        "{:>6} {:>9} {:>6} {:>9.2} {:>10.1} {:>9} {:>9} {:>11} {:>11}",
         result.concurrency,
         result.docs,
         result.errors,
         result.wall_s,
         result.docs_per_s,
         latency_text(result.p50_ms),
-        latency_text(result.p99_ms)
+        latency_text(result.p99_ms),
+        index_docs_text(result.index.as_ref()),
+        index_rate_text(result.index.as_ref())
+    )
+}
+
+/// A level whose index never caught up is marked, because the rate beside it is
+/// a floor. A dash is an unwatched level, the same convention as the latencies.
+fn index_docs_text(build: Option<&IndexBuild>) -> String {
+    build.map_or_else(
+        || "-".to_string(),
+        |build| {
+            let mark = if build.settled { "" } else { "*" };
+            format!("{}{mark}", build.docs)
+        },
+    )
+}
+
+fn index_rate_text(build: Option<&IndexBuild>) -> String {
+    build.map_or_else(
+        || "-".to_string(),
+        |build| format!("{:.1}", build.docs_per_s),
     )
 }
 

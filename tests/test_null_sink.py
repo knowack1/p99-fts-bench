@@ -15,6 +15,7 @@ import pytest
 
 from ftsbench import cql_wire, null_sink_cql, null_sink_http
 from ftsbench.sink_counters import AcceptedWork
+from ftsbench.sink_index import ModelledIndex
 
 
 def bulk_body(index: str, ids: list[int]) -> bytes:
@@ -111,9 +112,35 @@ def wire_request(opcode: int, stream: int, body: bytes) -> bytes:
                                 len(body)) + body
 
 
-def handler(work: AcceptedWork | None = None) -> null_sink_cql.Handler:
+def handler(work: AcceptedWork | None = None,
+            index: ModelledIndex | None = None,
+            prepared: dict[bytes, tuple[bool, str]] | None = None
+            ) -> null_sink_cql.Handler:
     return null_sink_cql.Handler(null_sink_cql.new_identity(), "127.0.0.1",
-                                 work or AcceptedWork())
+                                 work or AcceptedWork(),
+                                 index if index is not None else a_live_index(),
+                                 prepared if prepared is not None
+                                 else a_prepared_insert())
+
+
+AN_INSERT = ("INSERT INTO wiki.articles (article_id, page_id, title, body) "
+             "VALUES (?, ?, ?, ?)")
+A_SELECT = "SELECT * FROM system_schema.scylla_keyspaces"
+
+
+def a_prepared_insert() -> dict[bytes, tuple[bool, str]]:
+    """Registered under the empty statement id, which is what the EXECUTE
+    frames below carry: what those tests are about is the counting and the
+    frame walk, not which id the driver picked."""
+    return {b"": (True, AN_INSERT)}
+
+
+def a_live_index() -> ModelledIndex:
+    """Created, because that is the state a load runs against: `scyllarate`
+    builds the index before it writes a document."""
+    index = ModelledIndex()
+    index.create()
+    return index
 
 
 def parsed(response: bytes) -> tuple[int, int, bytes]:
@@ -333,3 +360,45 @@ def test_the_sink_finds_the_socket_asyncio_actually_hands_back():
         return bool(found) and found[0]
 
     assert asyncio.run(exercise()) is True
+
+
+def test_a_prepared_select_executes_as_rows_not_as_a_document():
+    """The driver re-reads `system_schema` with PREPARE + EXECUTE after a
+    schema change. Answering those with a Void result — and counting them as
+    documents — failed the schema agreement that follows a reset's DDL, and
+    inflated the count while doing it."""
+    work = AcceptedWork()
+    body = cql_wire.short_bytes(b"") + b""
+    responses = handler(work, prepared={b"": (False, A_SELECT)})
+    opcode, _, payload = parsed(
+        responses.answer(cql_wire.take_frame(
+            bytearray(wire_request(cql_wire.OPCODE_EXECUTE, 1, body)), 0)[0]))
+
+    assert opcode == cql_wire.OPCODE_RESULT
+    assert struct.unpack_from(">i", payload)[0] == cql_wire.RESULT_ROWS
+    assert work.docs == 0
+
+
+def test_an_execute_of_an_unknown_statement_asks_for_a_re_prepare():
+    """UNPREPARED rather than a guess: a sink that assumed every unknown id was
+    an INSERT is how a metadata read became a counted document."""
+    work = AcceptedWork()
+    body = cql_wire.short_bytes(b"\x01\x02")
+    opcode, _, payload = parsed(
+        handler(work, prepared={}).answer(cql_wire.take_frame(
+            bytearray(wire_request(cql_wire.OPCODE_EXECUTE, 1, body)), 0)[0]))
+
+    assert opcode == cql_wire.OPCODE_ERROR
+    assert struct.unpack_from(">i", payload)[0] == cql_wire.ERROR_UNPREPARED
+    assert work.docs == 0
+    assert work.unexpected
+
+
+def test_preparing_a_statement_registers_what_it_is():
+    responses = handler(prepared={})
+    for query, mutation in ((AN_INSERT, True), (A_SELECT, False)):
+        responses.answer(cql_wire.take_frame(bytearray(wire_request(
+            cql_wire.OPCODE_PREPARE, 1,
+            struct.pack(">I", len(query)) + query.encode())), 0)[0])
+        registered = responses.prepared[null_sink_cql.query_id(query)]
+        assert registered == (mutation, query)

@@ -1,12 +1,14 @@
 //! What survives a sweep that goes wrong: the points already measured, and the
 //! difference between "no latency was measured" and "the latency was zero".
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::build_rate::IndexWatch;
 use crate::corpus::InsertParams;
-use crate::fakes::{a_source, a_topology, a_truncated_source, quiet_notes, FakeInserter};
+use crate::fakes::{
+    a_source, a_topology, a_truncated_source, quiet_notes, FakeInserter, OneInserter,
+};
 use crate::report::{CsvSink, PointResult};
 use crate::sweep::{run_sweep, Cancel};
 
@@ -38,9 +40,10 @@ async fn sweep_into(
         Ok(())
     };
     run_sweep(
-        Arc::new(FakeInserter::new()),
+        &OneInserter::new(FakeInserter::new()),
         open_source,
         levels,
+        &IndexWatch::off(),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -103,9 +106,10 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
             Ok(())
         };
         run_sweep(
-            Arc::new(FakeInserter::with_latency(Duration::from_millis(1))),
+            &OneInserter::new(FakeInserter::with_latency(Duration::from_millis(1))),
             || Ok(a_source(20)),
             &[2, 4],
+            &IndexWatch::off(),
             &quiet_notes(),
             &cancel,
             &mut collect,

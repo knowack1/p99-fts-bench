@@ -28,19 +28,40 @@ import signal
 import sys
 from typing import Any
 
-from . import (null_sink_cql, null_sink_http, runmeta, sink_counters,
-               sink_tcp)
+from . import (null_sink_cql, null_sink_http, null_sink_vstore, runmeta,
+               sink_counters, sink_tcp)
 from .sink_counters import AcceptedWork
+from .sink_index import ModelledIndex
 
-MODES = {"http": null_sink_http.serve, "cql": null_sink_cql.serve}
+MODES = ("http", "cql")
 DEFAULT_PORTS = {"http": 9200, "cql": 9042}
 DEFAULT_REPORT_INTERVAL_S = 5.0
+# Served by default with the ScyllaDB-shaped sink, because `scyllarate` gates
+# every level on it. NOT with the OpenSearch-shaped one: there is no index to
+# report there, and a fixed default would make the second of N http sinks fail
+# to bind. An explicit --vs-port is obeyed in either mode.
+DEFAULT_VS_PORT = 6080
+DEFAULT_VS_KEYSPACE = "wiki"
+DEFAULT_VS_INDEX = "articles_body_fts"
 MILLISECONDS = 1000.0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=sorted(MODES), required=True)
+    parser.add_argument("--vs-port", type=int, default=None,
+                        help=f"vector-store index-status endpoint; 0 disables. "
+                             f"Defaults to {DEFAULT_VS_PORT} with --mode cql, "
+                             f"where scyllarate gates every level on it, and to "
+                             f"off with --mode http")
+    parser.add_argument("--vs-keyspace", default=DEFAULT_VS_KEYSPACE)
+    parser.add_argument("--vs-index", default=DEFAULT_VS_INDEX,
+                        help="the one index this sink answers a count for; any "
+                             "other is 404 and recorded, so a harness pointed "
+                             "at the wrong index cannot pass its own gate")
+    parser.add_argument("--vs-serving-delay-ms", type=float, default=0.0,
+                        help="hold a freshly created index at BUILDING for this "
+                             "long, to exercise a loader's SERVING gate")
     parser.add_argument("--host", default="0.0.0.0",
                         help="bind address; the fleet runs the sink on fts-sut, "
                              "so a localhost bind would hide the network RTT "
@@ -64,6 +85,25 @@ def port_of(args: argparse.Namespace) -> int:
     return args.port if args.port is not None else DEFAULT_PORTS[args.mode]
 
 
+def vs_port_of(args: argparse.Namespace) -> int:
+    if args.vs_port is not None:
+        return args.vs_port
+    return DEFAULT_VS_PORT if args.mode == "cql" else 0
+
+
+def modelled_index(args: argparse.Namespace) -> ModelledIndex:
+    """Created up front, because that is the state a loader meets.
+
+    The campaign applies `schema.cql` and `index.cql` before anything writes, so
+    a sink that started with no index would answer 404 to a run that never
+    issued DDL — and a `--no-reset` ladder would measure an index that, as far
+    as this sink was concerned, never existed.
+    """
+    index = ModelledIndex(args.vs_serving_delay_ms / MILLISECONDS)
+    index.create()
+    return index
+
+
 def stats_header(args: argparse.Namespace, port: int) -> dict[str, Any]:
     return runmeta.header(
         producer="null_sink", engine=f"null-sink-{args.mode}",
@@ -76,8 +116,16 @@ def stats_header(args: argparse.Namespace, port: int) -> dict[str, Any]:
 
 def announce(args: argparse.Namespace, port: int) -> None:
     delay = f", delay {args.delay_ms} ms" if args.delay_ms else ""
-    print(f"null sink ready: {args.mode} on {args.host}:{port}{delay}",
-          file=sys.stderr, flush=True)
+    print(f"null sink ready: {args.mode} on {args.host}:{port}{delay}"
+          f"{vector_store_note(args)}", file=sys.stderr, flush=True)
+
+
+def vector_store_note(args: argparse.Namespace) -> str:
+    port = vs_port_of(args)
+    if not port:
+        return ""
+    return (f", vector-store {args.vs_keyspace}/{args.vs_index} on "
+            f"{args.host}:{port}")
 
 
 def install_stop_handlers(stop: asyncio.Event) -> None:
@@ -96,11 +144,32 @@ async def await_stop(stop: asyncio.Event, duration_s: float) -> None:
         return
 
 
+async def start_servers(args: argparse.Namespace, work: AcceptedWork,
+                        index: ModelledIndex) -> list[asyncio.Server]:
+    """The engine's own endpoint, and beside it the index that endpoint feeds.
+
+    Both, not one or the other: the CQL half accepts the documents and the DDL,
+    and the vector-store half is where a loader reads back what that did. A
+    loader that gates on the index cannot be measured against half a sink.
+    """
+    delay_s = args.delay_ms / MILLISECONDS
+    if args.mode == "http":
+        engine = await null_sink_http.serve(args.host, port_of(args), work,
+                                            delay_s)
+    else:
+        engine = await null_sink_cql.serve(args.host, port_of(args), work,
+                                           index, delay_s)
+    port = vs_port_of(args)
+    if not port:
+        return [engine]
+    vector_store = await null_sink_vstore.serve(
+        args.host, port, work, index, args.vs_keyspace, args.vs_index, delay_s)
+    return [engine, vector_store]
+
+
 async def run_sink(args: argparse.Namespace, work: AcceptedWork) -> None:
-    port = port_of(args)
-    server = await MODES[args.mode](args.host, port, work,
-                                    args.delay_ms / MILLISECONDS)
-    announce(args, port)
+    servers = await start_servers(args, work, modelled_index(args))
+    announce(args, port_of(args))
     stop = asyncio.Event()
     install_stop_handlers(stop)
     reporter = asyncio.create_task(
@@ -109,8 +178,9 @@ async def run_sink(args: argparse.Namespace, work: AcceptedWork) -> None:
         await await_stop(stop, args.duration)
     finally:
         reporter.cancel()
-        server.close()
-        await server.wait_closed()
+        for server in servers:
+            server.close()
+            await server.wait_closed()
 
 
 def main(argv: list[str] | None = None) -> int:

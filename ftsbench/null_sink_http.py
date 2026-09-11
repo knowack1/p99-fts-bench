@@ -18,27 +18,16 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterator
-from dataclasses import dataclass
 
-from . import sink_tcp
+from . import sink_http_wire
 from .sink_counters import AcceptedWork
+from .sink_http_wire import Request
 
-HEADER_TERMINATOR = b"\r\n\r\n"
-MAX_HEADER_BYTES = 1 << 16
 DELETE_ACTION_PREFIX = b'{"delete"'
 ACTION_PREFIX_BYTES = 16
 VERSION = "2.19.0-null-sink"
 SHARDS_OK = {"total": 1, "successful": 1, "failed": 0}
 WRITE_POOL_SIZE = 3
-
-STATUS_TEXT = {200: "OK", 404: "Not Found"}
-
-
-@dataclass(frozen=True)
-class Request:
-    method: str
-    path: str
-    body: bytes
 
 
 def line_offsets(payload: bytes) -> Iterator[tuple[int, int]]:
@@ -190,77 +179,6 @@ def _json(body: dict) -> bytes:
     return json.dumps(body).encode("utf-8")
 
 
-def http_response(status: int, body: bytes) -> bytes:
-    reason = STATUS_TEXT.get(status, "OK")
-    head = (f"HTTP/1.1 {status} {reason}\r\n"
-            f"Content-Type: application/json; charset=UTF-8\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            f"Connection: keep-alive\r\n\r\n").encode("ascii")
-    return head + body
-
-
-def content_length(head: bytes) -> int:
-    for line in head.split(b"\r\n")[1:]:
-        name, _, value = line.partition(b":")
-        if name.lower() == b"content-length":
-            return int(value.strip())
-    return 0
-
-
-def request_line(head: bytes) -> tuple[str, str]:
-    parts = head.split(b"\r\n", 1)[0].split(b" ")
-    if len(parts) < 2:
-        raise ValueError(f"malformed request line: {parts!r}")
-    return parts[0].decode("ascii"), parts[1].decode("latin-1")
-
-
-async def read_head(reader: asyncio.StreamReader) -> bytes | None:
-    try:
-        return await reader.readuntil(HEADER_TERMINATOR)
-    except (asyncio.IncompleteReadError, ConnectionError):
-        return None
-    except asyncio.LimitOverrunError as overrun:
-        raise ValueError(f"request head over {MAX_HEADER_BYTES} bytes "
-                         f"({overrun.consumed} consumed)") from overrun
-
-
-async def read_request(reader: asyncio.StreamReader) -> Request | None:
-    head = await read_head(reader)
-    if not head:
-        return None
-    method, path = request_line(head)
-    body = await reader.readexactly(content_length(head))
-    return Request(method, path, body)
-
-
-async def serve_connection(reader: asyncio.StreamReader,
-                           writer: asyncio.StreamWriter, routes: Routes,
-                           delay_s: float) -> None:
-    handle = sink_tcp.accepted_socket(writer)
-    try:
-        while True:
-            request = await read_request(reader)
-            if request is None:
-                return
-            sink_tcp.acknowledge_now(handle)
-            status, body = routes.respond(request)
-            if delay_s:
-                await asyncio.sleep(delay_s)
-            writer.write(http_response(status, body))
-            await writer.drain()
-    except (ConnectionError, asyncio.IncompleteReadError):
-        return
-    finally:
-        writer.close()
-
-
 async def serve(host: str, port: int, work: AcceptedWork,
                 delay_s: float = 0.0) -> asyncio.Server:
-    routes = Routes(work)
-
-    async def client_connected(reader: asyncio.StreamReader,
-                               writer: asyncio.StreamWriter) -> None:
-        await serve_connection(reader, writer, routes, delay_s)
-
-    return await asyncio.start_server(client_connected, host, port,
-                                      limit=MAX_HEADER_BYTES)
+    return await sink_http_wire.serve(host, port, Routes(work), delay_s)

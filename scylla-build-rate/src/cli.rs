@@ -7,7 +7,10 @@ use std::time::Duration;
 use clap::Parser;
 use scylla::statement::Consistency;
 
+use crate::build_rate::WatchTiming;
+use crate::reset::{GateTiming, ResetPlan};
 use crate::session::{consistency_from_name, consistency_name, ConnectOptions};
+use crate::vstore::{DEFAULT_VS_INDEX, DEFAULT_VS_URL};
 
 pub const DEFAULT_HOSTS: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "9042";
@@ -15,6 +18,10 @@ pub const DEFAULT_KEYSPACE: &str = "wiki";
 pub const DEFAULT_TABLE: &str = "articles";
 pub const DEFAULT_CONSISTENCY: &str = "LOCAL_ONE";
 pub const DEFAULT_REQUEST_TIMEOUT_S: &str = "10.0";
+pub const DEFAULT_VS_INTERVAL_S: &str = "1.0";
+pub const DEFAULT_VS_SETTLE_TIMEOUT_S: &str = "120.0";
+pub const DEFAULT_VS_IDLE_TIMEOUT_S: &str = "10.0";
+pub const DEFAULT_RESET_TIMEOUT_S: &str = "300.0";
 pub const STDOUT: &str = "-";
 
 #[derive(Debug, Parser)]
@@ -22,8 +29,11 @@ pub const STDOUT: &str = "-";
     name = "scyllarate",
     about = "Concurrency sweep for ScyllaDB ingest: docs/s and p99 per concurrency level",
     long_about = "Measures how fast this client can submit prepared INSERTs to ScyllaDB, per \
-concurrency level. That is a submit rate, not an FTS index build rate: a completed CQL write \
-says nothing about how many documents reached the index."
+concurrency level, and how fast those documents reached the full-text index. The submit rate \
+and the index build rate are two different numbers and both are reported.\n\n\
+DESTRUCTIVE BY DEFAULT: before every concurrency level this DROPS THE KEYSPACE and rebuilds \
+it, so that each level builds an index from zero documents. Pass --no-reset to leave the \
+keyspace alone."
 )]
 pub struct Args {
     /// Corpus JSONL: one {id, uuid, title, text} per line
@@ -64,6 +74,41 @@ pub struct Args {
     /// CSV destination; '-' writes to stdout
     #[arg(long, default_value = STDOUT)]
     pub out: String,
+
+    /// Vector-store base URL, where the index build is visible
+    #[arg(long, env = "VS_URL", default_value = DEFAULT_VS_URL)]
+    pub vs_url: String,
+
+    /// Full-text index name, on the CQL side and in the vector-store path alike
+    #[arg(long, default_value = DEFAULT_VS_INDEX)]
+    pub vs_index: String,
+
+    /// Seconds between index-count polls
+    #[arg(long, default_value = DEFAULT_VS_INTERVAL_S)]
+    pub vs_interval: f64,
+
+    /// Seconds to keep watching after the last insert for the index to catch up
+    #[arg(long, default_value = DEFAULT_VS_SETTLE_TIMEOUT_S)]
+    pub vs_settle_timeout: f64,
+
+    /// Seconds of no index progress that end the wait
+    #[arg(long, default_value = DEFAULT_VS_IDLE_TIMEOUT_S)]
+    pub vs_idle_timeout: f64,
+
+    /// Seconds each reset gate may wait for the vector-store
+    #[arg(long, default_value = DEFAULT_RESET_TIMEOUT_S)]
+    pub reset_timeout: f64,
+
+    /// Keep the keyspace: do not drop and rebuild it before each level. Levels
+    /// after the first then overwrite the same rows and add nothing to the
+    /// index, so only the first level measures a build.
+    #[arg(long)]
+    pub no_reset: bool,
+
+    /// Do not contact the vector-store at all. Implies --no-reset, and leaves
+    /// every index column blank.
+    #[arg(long)]
+    pub no_index_watch: bool,
 }
 
 impl Args {
@@ -81,6 +126,40 @@ impl Args {
         }
     }
 
+    pub fn watches_index(&self) -> bool {
+        !self.no_index_watch
+    }
+
+    /// `--no-index-watch` implies no reset: the gates that make a reset a
+    /// measurement rather than a hope are reads of the vector-store, and a
+    /// reset nobody can confirm is worse than none.
+    pub fn resets(&self) -> bool {
+        self.watches_index() && !self.no_reset
+    }
+
+    pub fn watch_timing(&self) -> WatchTiming {
+        WatchTiming {
+            poll_interval: Duration::from_secs_f64(self.vs_interval),
+            settle_timeout: Duration::from_secs_f64(self.vs_settle_timeout),
+            idle_timeout: Duration::from_secs_f64(self.vs_idle_timeout),
+        }
+    }
+
+    pub fn gate_timing(&self) -> GateTiming {
+        GateTiming {
+            poll_interval: Duration::from_secs_f64(self.vs_interval),
+            timeout: Duration::from_secs_f64(self.reset_timeout),
+        }
+    }
+
+    pub fn reset_plan(&self) -> ResetPlan {
+        ResetPlan {
+            keyspace: self.keyspace.clone(),
+            table: self.table.clone(),
+            index: self.vs_index.clone(),
+        }
+    }
+
     pub fn settings(&self) -> Vec<(String, String)> {
         [
             ("consistency", consistency_name(self.consistency)),
@@ -89,6 +168,12 @@ impl Args {
             ("driver_metrics", driver_metrics_state().to_string()),
             ("corpus", self.corpus.display().to_string()),
             ("max_docs", self.max_docs.to_string()),
+            ("reset_per_level", self.resets().to_string()),
+            ("vs_index", self.vs_index.clone()),
+            ("vs_poll_interval_s", self.vs_interval.to_string()),
+            ("vs_settle_timeout_s", self.vs_settle_timeout.to_string()),
+            ("vs_idle_timeout_s", self.vs_idle_timeout.to_string()),
+            ("reset_timeout_s", self.reset_timeout.to_string()),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))

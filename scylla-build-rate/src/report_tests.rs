@@ -1,7 +1,10 @@
 use std::fs;
 
 use super::*;
-use crate::fakes::{a_point, a_point_with_errors, a_point_with_latency, a_topology};
+use crate::fakes::{
+    a_point, a_point_with_errors, a_point_with_index, a_point_with_latency, a_topology,
+    an_index_build,
+};
 
 fn a_setting(key: &str, value: &str) -> Vec<(String, String)> {
     vec![(key.to_string(), value.to_string())]
@@ -70,7 +73,9 @@ fn csv_has_a_header_row_and_one_row_per_point() {
     let rows: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).collect();
     assert_eq!(
         rows[0],
-        "concurrency,docs,errors,wall_s,docs_per_s,p50_ms,p99_ms"
+        "concurrency,docs,errors,wall_s,docs_per_s,p50_ms,p99_ms,\
+         index_docs,index_docs_per_s,index_lag_docs,index_settle_s,\
+         index_settled,index_status"
     );
     assert_eq!(rows.len(), 3);
 }
@@ -92,8 +97,8 @@ fn an_unmeasured_latency_is_an_empty_csv_cell_not_a_zero() {
 #[test]
 fn an_unmeasured_latency_reads_as_a_dash_in_the_summary() {
     let table = summary_table(&[a_point_with_latency(8, None, None)]);
-    let last_two: Vec<&str> = table.lines().nth(1).unwrap().split_whitespace().collect();
-    assert_eq!(&last_two[last_two.len() - 2..], ["-", "-"]);
+    let fields: Vec<&str> = table.lines().nth(1).unwrap().split_whitespace().collect();
+    assert_eq!(&fields[5..7], ["-", "-"]);
 }
 
 #[test]
@@ -102,7 +107,17 @@ fn the_summary_table_has_a_header_and_one_row_per_point() {
     let lines: Vec<&str> = table.lines().collect();
     assert_eq!(
         lines[0].split_whitespace().collect::<Vec<_>>(),
-        ["conc", "docs", "err", "wall_s", "docs/s", "p50_ms", "p99_ms"]
+        [
+            "conc",
+            "docs",
+            "err",
+            "wall_s",
+            "docs/s",
+            "p50_ms",
+            "p99_ms",
+            "idx_docs",
+            "idx_docs/s"
+        ]
     );
     assert_eq!(lines.len(), 3);
 }
@@ -160,4 +175,46 @@ fn a_failed_insert_count_reaches_both_the_csv_and_the_summary() {
         .unwrap()
         .split_whitespace()
         .any(|field| field == "3"));
+}
+
+/// The same rule the latencies follow: an unwatched level leaves blank cells,
+/// because a zero build rate is a finding and an unwatched level is not one.
+#[test]
+fn an_unwatched_level_leaves_the_index_cells_empty_not_zero() {
+    let row = csv_row(&a_point(8));
+    let fields: Vec<&str> = row.split(',').collect();
+
+    assert_eq!(fields.len(), CSV_COLUMNS.len());
+    assert!(fields[7..].iter().all(|cell| cell.is_empty()), "{fields:?}");
+}
+
+#[test]
+fn a_watched_level_reports_its_build_beside_its_submit_rate() {
+    let row = csv_row(&a_point_with_index(8, an_index_build(270_269, true)));
+    let fields: Vec<&str> = row.split(',').collect();
+
+    assert_eq!(fields.len(), CSV_COLUMNS.len());
+    assert_eq!(fields[7], "270269");
+    assert_eq!(fields[8], "1234.5");
+    assert_eq!(fields[11], "true");
+    assert_eq!(fields[12], "SERVING");
+}
+
+/// A level whose index never caught up reports a floor, not a build rate, and
+/// the summary has to say which it is looking at.
+#[test]
+fn an_unsettled_build_is_marked_in_the_summary() {
+    let settled = summary_table(&[a_point_with_index(8, an_index_build(500, true))]);
+    let short = summary_table(&[a_point_with_index(8, an_index_build(500, false))]);
+
+    assert!(settled.contains(" 500 "));
+    assert!(short.contains("500*"));
+}
+
+#[test]
+fn an_unwatched_level_reads_as_a_dash_in_the_summary() {
+    let table = summary_table(&[a_point(8)]);
+    let fields: Vec<&str> = table.lines().nth(1).unwrap().split_whitespace().collect();
+
+    assert_eq!(&fields[7..9], ["-", "-"]);
 }

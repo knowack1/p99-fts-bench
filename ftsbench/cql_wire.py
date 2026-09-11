@@ -43,8 +43,16 @@ RESULT_VOID = 0x0001
 RESULT_ROWS = 0x0002
 RESULT_SET_KEYSPACE = 0x0003
 RESULT_PREPARED = 0x0004
+RESULT_SCHEMA_CHANGE = 0x0005
 
 ERROR_PROTOCOL = 0x000A
+ERROR_UNPREPARED = 0x2500
+
+SCHEMA_TARGET_KEYSPACE = "KEYSPACE"
+SCHEMA_TARGET_TABLE = "TABLE"
+SCHEMA_CREATED = "CREATED"
+SCHEMA_UPDATED = "UPDATED"
+SCHEMA_DROPPED = "DROPPED"
 
 # The driver keys its version downgrade off this substring, not off the error
 # code, so the wording is load-bearing rather than cosmetic.
@@ -59,6 +67,10 @@ TYPE_BIGINT = struct.pack(">H", 0x0002)
 TYPE_UUID = struct.pack(">H", 0x000C)
 TYPE_INET = struct.pack(">H", 0x0010)
 TYPE_SET_VARCHAR = struct.pack(">H", 0x0022) + TYPE_VARCHAR
+TYPE_INT = struct.pack(">H", 0x0009)
+TYPE_BOOLEAN = struct.pack(">H", 0x0004)
+TYPE_LIST_VARCHAR = struct.pack(">H", 0x0020) + TYPE_VARCHAR
+TYPE_MAP_VARCHAR_VARCHAR = struct.pack(">H", 0x0021) + TYPE_VARCHAR + TYPE_VARCHAR
 
 
 @dataclass(frozen=True)
@@ -122,6 +134,12 @@ def cell(value: bytes | None) -> bytes:
     return struct.pack(">i", len(value)) + value
 
 
+def read_short_bytes(body: bytes, offset: int = 0) -> tuple[bytes, int]:
+    length, = struct.unpack_from(">H", body, offset)
+    start = offset + 2
+    return body[start:start + length], start + length
+
+
 def read_long_string(body: bytes, offset: int = 0) -> tuple[str, int]:
     (length,) = struct.unpack_from(">i", body, offset)
     start = offset + 4
@@ -153,6 +171,17 @@ def error_body(code: int, message: str) -> bytes:
     return struct.pack(">i", code) + short_string(message)
 
 
+def unprepared_body(query_id: bytes) -> bytes:
+    """Ask the driver to prepare again, carrying the id it asked about.
+
+    The id is part of the error body, not decoration: the driver keys its
+    re-prepare on it.
+    """
+    return (struct.pack(">i", ERROR_UNPREPARED)
+            + short_string("unknown prepared statement")
+            + short_bytes(query_id))
+
+
 def unsupported_version_body(version: int) -> bytes:
     return error_body(ERROR_PROTOCOL,
                       UNSUPPORTED_VERSION_MESSAGE.format(version=version))
@@ -164,6 +193,26 @@ def void_result() -> bytes:
 
 def set_keyspace_result(keyspace: str) -> bytes:
     return struct.pack(">i", RESULT_SET_KEYSPACE) + short_string(keyspace)
+
+
+def schema_change_result(change: str, target: str, keyspace: str,
+                         name: str = "") -> bytes:
+    """What DDL answers with: CREATED/UPDATED/DROPPED against a target.
+
+    A KEYSPACE target carries only the keyspace; every other target carries a
+    name after it. Getting that wrong does not fail loudly — the driver reads
+    the next field as a string and blocks waiting for a schema agreement that
+    describes an object nobody named.
+
+    Index DDL reports `UPDATED TABLE`, not a target of its own: v4 has no
+    INDEX target, and Cassandra and ScyllaDB both announce a created index as a
+    change to the table it lives on.
+    """
+    parts = [struct.pack(">i", RESULT_SCHEMA_CHANGE), short_string(change),
+             short_string(target), short_string(keyspace)]
+    if target != SCHEMA_TARGET_KEYSPACE:
+        parts.append(short_string(name))
+    return b"".join(parts)
 
 
 def _metadata(keyspace: str, table: str, columns: list[Column]) -> bytes:

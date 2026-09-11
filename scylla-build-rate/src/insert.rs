@@ -4,6 +4,7 @@
 //! `execute_unpaged` on a prepared statement is what carries the routing key, so
 //! this is also where token- and shard-aware routing actually happens.
 use std::future::Future;
+use std::sync::Arc;
 
 use anyhow::Result;
 use scylla::client::session::Session;
@@ -13,12 +14,16 @@ use crate::corpus::InsertParams;
 use crate::sweep::Inserter;
 
 pub struct CqlInserter {
-    session: Session,
+    session: Arc<Session>,
     statement: PreparedStatement,
 }
 
 impl CqlInserter {
-    pub fn new(session: Session, statement: PreparedStatement) -> Self {
+    /// The session is shared rather than owned: it outlives any one level,
+    /// while the prepared statement does not — a reset drops the table it was
+    /// prepared against, so each level gets a fresh inserter over the same
+    /// connection pool.
+    pub fn new(session: Arc<Session>, statement: PreparedStatement) -> Self {
         Self { session, statement }
     }
 

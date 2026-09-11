@@ -11,11 +11,19 @@ enforced, `system_schema` comes back empty, and there is no token map — an
 EXECUTE is a Void result and 13 bytes on the wire. That is the point: the sink
 must not be the bottleneck, or the ceiling that comes back is the sink's.
 
-**One document per EXECUTE.** `scylla_load` issues one prepared statement per
-row and `--batch-size` is a client-side loop window, so the frame count *is* the
-document count. A BATCH frame is the exception and its statement count is read
-from the frame rather than assumed, because `--unlogged-batch-rows` puts many
-rows in one operation.
+**One document per EXECUTE of a mutation.** The loaders issue one prepared
+INSERT per row and `--batch-size` is a client-side loop window, so their frame
+count *is* the document count. A BATCH frame is one exception, and its statement
+count is read from the frame because `--unlogged-batch-rows` puts many rows in
+one operation.
+
+The other exception is what made this sink answer wrongly for a while: the
+driver re-reads `system_schema` after a schema change, and it does so with
+PREPARE + EXECUTE like anything else. Answering every EXECUTE with a Void result
+told the driver its metadata page was not rows, and the DDL a reset issues
+failed on the following schema agreement. So what was prepared is remembered per
+statement id, and an EXECUTE is answered as the statement it belongs to —
+counted only when it is a mutation.
 """
 from __future__ import annotations
 
@@ -28,6 +36,7 @@ from dataclasses import dataclass
 from . import cql_wire, sink_tcp
 from .cql_wire import Column
 from .sink_counters import AcceptedWork
+from .sink_index import ModelledIndex
 
 READ_CHUNK_BYTES = 1 << 16
 SUPPORTED_OPTIONS = {
@@ -67,10 +76,40 @@ PEERS_COLUMN_TYPES = {
 # rows". Everything the sink does not model — all of `system_schema` — comes
 # back as this one column and no rows.
 PLACEHOLDER_COLUMN = "key"
+# A Rows result declares its column types even when it carries no rows, and the
+# driver type-checks the declaration against what it means to deserialize. A
+# uniformly-varchar answer therefore fails the schema refresh that follows the
+# DDL a reset issues — on the column, not on the absent row. Only the columns
+# the driver reads as something other than text need naming here.
+SYSTEM_COLUMN_TYPES = {
+    "initial_tablets": cql_wire.TYPE_INT,
+    "position": cql_wire.TYPE_INT,
+    "clustering_order": cql_wire.TYPE_VARCHAR,
+    "durable_writes": cql_wire.TYPE_BOOLEAN,
+    "replication": cql_wire.TYPE_MAP_VARCHAR_VARCHAR,
+    "flags": cql_wire.TYPE_SET_VARCHAR,
+    "argument_types": cql_wire.TYPE_LIST_VARCHAR,
+    "field_names": cql_wire.TYPE_LIST_VARCHAR,
+    "field_types": cql_wire.TYPE_LIST_VARCHAR,
+    "options": cql_wire.TYPE_MAP_VARCHAR_VARCHAR,
+}
 INSERT_COLUMNS_RE = re.compile(r"insert\s+into\s+\S+\s*\(([^)]*)\)", re.I)
 PREDICATE_COLUMN_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\?")
 SELECT_LIST_RE = re.compile(r"select\s+(.*?)\s+from\s+", re.I | re.S)
 USE_KEYSPACE_RE = re.compile(r"use\s+\"?([A-Za-z0-9_]+)\"?", re.I)
+# `scyllarate` empties the keyspace before every concurrency level, so DDL is no
+# longer traffic the sink can answer with an empty Rows result: the index the
+# vector-store half reports is created and dropped by these statements.
+DDL_RE = re.compile(
+    r"\s*(?P<verb>create|drop)\s+(?P<object>custom\s+index|index|keyspace|table)"
+    r"\s+(?:if\s+not\s+exists\s+|if\s+exists\s+)?(?P<name>[A-Za-z0-9_.\"]+)",
+    re.I)
+INDEX_ON_RE = re.compile(r"\bon\s+([A-Za-z0-9_.\"]+)\s*\(", re.I)
+KEYSPACE_OBJECT = "keyspace"
+TABLE_OBJECT = "table"
+INDEX_OBJECT = "index"
+DROP_VERB = "drop"
+MUTATION_VERBS = ("insert", "update", "delete")
 
 
 @dataclass(frozen=True)
@@ -195,14 +234,115 @@ def empty_rows_result(query: str) -> bytes:
     names = selected_names(query, [PLACEHOLDER_COLUMN])
     return cql_wire.rows_result(
         SYSTEM_KEYSPACE, "unmodelled",
-        [Column(name, cql_wire.TYPE_VARCHAR) for name in names], [])
+        [Column(name, system_column_type(name)) for name in names], [])
 
 
-def answer_query(query: str, identity: NodeIdentity, address: str) -> bytes:
+def system_column_type(name: str) -> bytes:
+    return SYSTEM_COLUMN_TYPES.get(name, cql_wire.TYPE_VARCHAR)
+
+
+@dataclass(frozen=True)
+class SchemaStatement:
+    """One DDL statement, reduced to what the sink has to do about it."""
+
+    verb: str
+    object: str
+    keyspace: str
+    name: str
+
+    @property
+    def drops(self) -> bool:
+        return self.verb == DROP_VERB
+
+
+def parse_ddl(query: str) -> SchemaStatement | None:
+    match = DDL_RE.match(query.strip())
+    if match is None:
+        return None
+    obj = normalized_object(match.group("object"))
+    verb = match.group("verb").lower()
+    if obj == INDEX_OBJECT:
+        return index_statement(query, verb)
+    keyspace, name = split_qualified(match.group("name"))
+    if obj == KEYSPACE_OBJECT:
+        return SchemaStatement(verb, obj, name, "")
+    return SchemaStatement(verb, obj, keyspace, name)
+
+
+def normalized_object(raw: str) -> str:
+    return INDEX_OBJECT if "index" in raw.lower() else raw.lower()
+
+
+def index_statement(query: str, verb: str) -> SchemaStatement:
+    """An index change is announced against the table it lives on.
+
+    `CREATE CUSTOM INDEX ... ON ks.table(col)` names that table; `DROP INDEX`
+    does not, so a drop is announced against the keyspace instead of inventing
+    a table the driver would then fail to find.
+    """
+    on = INDEX_ON_RE.search(query)
+    if on is None:
+        return SchemaStatement(verb, KEYSPACE_OBJECT, DEFAULT_KEYSPACE, "")
+    keyspace, table = split_qualified(on.group(1))
+    return SchemaStatement(verb, INDEX_OBJECT, keyspace, table)
+
+
+def split_qualified(target: str) -> tuple[str, str]:
+    bare = target.replace('"', "")
+    if "." in bare:
+        keyspace, _, name = bare.partition(".")
+        return keyspace, name
+    return DEFAULT_KEYSPACE, bare
+
+
+def apply_to_index(statement: SchemaStatement, index: ModelledIndex) -> None:
+    """Dropping the keyspace or the table takes the index with it, which is why
+    `scyllarate` resets with `DROP KEYSPACE` alone."""
+    if statement.drops:
+        index.drop()
+        return
+    if statement.object == INDEX_OBJECT:
+        index.create()
+
+
+def schema_change_for(statement: SchemaStatement) -> bytes:
+    if statement.object == KEYSPACE_OBJECT:
+        return cql_wire.schema_change_result(
+            keyspace_change(statement), cql_wire.SCHEMA_TARGET_KEYSPACE,
+            statement.keyspace)
+    return cql_wire.schema_change_result(
+        table_change(statement), cql_wire.SCHEMA_TARGET_TABLE,
+        statement.keyspace, statement.name)
+
+
+def keyspace_change(statement: SchemaStatement) -> str:
+    if statement.verb == DROP_VERB:
+        return cql_wire.SCHEMA_DROPPED
+    return cql_wire.SCHEMA_CREATED
+
+
+def table_change(statement: SchemaStatement) -> str:
+    """An index lives on a table that outlives it, so its creation and removal
+    are both an update to that table rather than its birth or death."""
+    if statement.object == INDEX_OBJECT:
+        return cql_wire.SCHEMA_UPDATED
+    return keyspace_change(statement)
+
+
+def answer_ddl(statement: SchemaStatement, index: ModelledIndex) -> bytes:
+    apply_to_index(statement, index)
+    return schema_change_for(statement)
+
+
+def answer_query(query: str, identity: NodeIdentity, address: str,
+                 index: ModelledIndex) -> bytes:
     lowered = query.strip().lower()
     keyspace = USE_KEYSPACE_RE.match(query.strip())
     if lowered.startswith("use ") and keyspace is not None:
         return cql_wire.set_keyspace_result(keyspace.group(1))
+    statement = parse_ddl(query)
+    if statement is not None:
+        return answer_ddl(statement, index)
     if "system.local" in lowered:
         columns, rows = table_rows(query, local_row_values(identity, address),
                                    present=True)
@@ -222,6 +362,10 @@ def answer_prepare(query: str) -> bytes:
                                     bind_columns(query))
 
 
+def is_mutation(query: str) -> bool:
+    return query.strip().lower().startswith(MUTATION_VERBS)
+
+
 @dataclass(frozen=True)
 class Handler:
     """One connection's answer function, bound to its peer's own address."""
@@ -229,6 +373,8 @@ class Handler:
     identity: NodeIdentity
     address: str
     work: AcceptedWork
+    index: ModelledIndex
+    prepared: dict[bytes, tuple[bool, str]]
 
     def answer(self, frame: cql_wire.Frame) -> bytes:
         if frame.version != cql_wire.REQUEST_VERSION:
@@ -242,13 +388,31 @@ class Handler:
         """Ordered by frequency rather than by opcode: EXECUTE is every
         document of the run, and everything else happens once per connection."""
         if frame.opcode == cql_wire.OPCODE_EXECUTE:
-            return self._accept(1)
+            return self._execute(frame.body)
         if frame.opcode == cql_wire.OPCODE_BATCH:
             return self._accept(cql_wire.batch_statement_count(frame.body))
         return self._handshake_or_metadata(frame)
 
+    def _execute(self, body: bytes) -> tuple[int, bytes]:
+        statement_id, _ = cql_wire.read_short_bytes(body)
+        known = self.prepared.get(statement_id)
+        if known is None:
+            return self._unprepared(statement_id)
+        mutation, query = known
+        if mutation:
+            return self._accept(1)
+        return (cql_wire.OPCODE_RESULT,
+                answer_query(query, self.identity, self.address, self.index))
+
+    def _unprepared(self, statement_id: bytes) -> tuple[int, bytes]:
+        """The driver re-prepares and retries, which is how a real node answers
+        a statement it has never seen."""
+        self.work.note_unexpected(f"execute of unprepared {statement_id.hex()}")
+        return cql_wire.OPCODE_ERROR, cql_wire.unprepared_body(statement_id)
+
     def _accept(self, docs: int) -> tuple[int, bytes]:
         self.work.add(ops=1, docs=docs)
+        self.index.add(docs)
         return cql_wire.OPCODE_RESULT, cql_wire.void_result()
 
     def _handshake_or_metadata(self,
@@ -262,9 +426,11 @@ class Handler:
         if opcode == cql_wire.OPCODE_QUERY:
             query, _ = cql_wire.read_long_string(frame.body)
             return (cql_wire.OPCODE_RESULT,
-                    answer_query(query, self.identity, self.address))
+                    answer_query(query, self.identity, self.address,
+                                 self.index))
         if opcode == cql_wire.OPCODE_PREPARE:
             query, _ = cql_wire.read_long_string(frame.body)
+            self.prepared[query_id(query)] = (is_mutation(query), query)
             return cql_wire.OPCODE_RESULT, answer_prepare(query)
         return self._unanswered(opcode)
 
@@ -304,8 +470,10 @@ def local_address(writer: asyncio.StreamWriter) -> str:
 async def serve_connection(reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter,
                            identity: NodeIdentity, work: AcceptedWork,
+                           index: ModelledIndex,
+                           prepared: dict[bytes, tuple[bool, str]],
                            delay_s: float) -> None:
-    handler = Handler(identity, local_address(writer), work)
+    handler = Handler(identity, local_address(writer), work, index, prepared)
     handle = sink_tcp.accepted_socket(writer)
     buffer = bytearray()
     try:
@@ -329,11 +497,15 @@ async def serve_connection(reader: asyncio.StreamReader,
 
 
 async def serve(host: str, port: int, work: AcceptedWork,
-                delay_s: float = 0.0) -> asyncio.Server:
+                index: ModelledIndex, delay_s: float = 0.0) -> asyncio.Server:
     identity = new_identity()
+    # Shared across connections, because the driver may prepare on one and
+    # execute on another: the id is a hash of the statement, not of the socket.
+    prepared: dict[bytes, tuple[bool, str]] = {}
 
     async def client_connected(reader: asyncio.StreamReader,
                                writer: asyncio.StreamWriter) -> None:
-        await serve_connection(reader, writer, identity, work, delay_s)
+        await serve_connection(reader, writer, identity, work, index, prepared,
+                               delay_s)
 
     return await asyncio.start_server(client_connected, host, port)
