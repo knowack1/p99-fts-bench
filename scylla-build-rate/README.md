@@ -3,11 +3,16 @@
 Loads a corpus into `wiki.articles` once per concurrency level and reports, for
 each level, how fast the client delivered documents, what the p99 insert latency
 was, and how fast those documents reached the full-text index. The output is one
-CSV that feeds three charts:
+CSV per run — one row per level — that feeds three charts:
 
 - **chart 1** — X `concurrency`, Y `docs_per_s`
 - **chart 2** — X `concurrency`, Y `p99_ms`
 - **chart 3** — X `concurrency`, Y `index_docs_per_s`
+
+`--samples-dir` adds a second output beside it: the per-second series each of
+those numbers is the average of, one CSV per level, which is what a fourth
+chart is drawn from — X documents indexed, Y documents indexed per second
+(`../tools/plot_build_growth.py`). See "The per-second series" below.
 
 Latency percentiles are computed from successful inserts only, so a point with
 a non-zero `errors` count has a p99 that excludes whatever the failures cost —
@@ -121,6 +126,7 @@ row before plotting.
 | `--request-timeout` | 10.0 | seconds; raise if high levels report timeouts |
 | `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
 | `--out` | `-` | CSV destination; `-` is stdout |
+| `--samples-dir` | off | directory for the per-second series, one CSV per level |
 | `--vs-url` | `$VS_URL` or `http://localhost:6080` | vector-store base URL |
 | `--vs-index` | `articles_body_fts` | the index name, on the CQL side and in the endpoint path alike |
 | `--vs-interval` | 1.0 | seconds between index-count polls |
@@ -130,7 +136,8 @@ row before plotting.
 | `--no-reset` | off | keep the keyspace; only the first level then measures a build |
 | `--no-index-watch` | off | no vector-store traffic at all; implies `--no-reset` |
 
-Progress goes to stderr once a second, the CSV to `--out`, and a summary table
+Progress goes to stderr once a second, the per-level CSV to `--out`, the
+per-second series to `--samples-dir` when one is given, and a summary table
 to stderr at the end. Exit status is 1 if any point had a failed insert, or if
 the sweep ended early.
 
@@ -172,6 +179,39 @@ reads both files by position.
 
 `index_docs` counts only what the level added, never the index it inherited, so
 a `--no-reset` ladder still credits each rung with its own work.
+
+## The per-second series
+
+`--samples-dir DIR` writes `DIR/c<concurrency>-<repetition>.csv`, one file per
+level, one row per reading. A level is one build, so `--concurrency 8,8,16`
+writes three files and the two `8`s are separate measurements rather than one
+overwritten twice. **Keep the directory out of a `points/` directory:** the
+harness globs `points/*.csv`, and would read a series as a set of points.
+
+Every file repeats the run's `#` preamble, because a series is moved and read
+one file at a time.
+
+| Column | What it is |
+|---|---|
+| `level` / `concurrency` | which rung of the ladder this is, and at what concurrency |
+| `t_s` | seconds since the level started |
+| `docs_submitted` / `submit_docs_per_s` | successful inserts so far, and their rate since the previous reading |
+| `docs_indexed` / `index_docs_per_s` | documents **this level** put in the index, and their rate since the previous index reading |
+| `index_status` | what the vector-store reported at that reading |
+
+Three properties the series is worth having for:
+
+- **A rate is measured over the gap the readings actually left**, not over the
+  interval the ticker asked for, and one instant serves the whole row — so a
+  poll that overran its tick cannot report a rate the run never reached.
+- **Readings continue after the client stops.** The row that closes the submit
+  series carries no index count, and the settle polls that follow it are
+  readings like any other: that tail is the part of the build a per-level
+  average cannot show.
+- **The same blank-not-zero rule as the point CSV.** Under `--no-index-watch`,
+  and for any poll that failed, the three index cells are empty. An index
+  nobody could read is not an index that indexed nothing — and a blank reading
+  leaves the index series where it was rather than restarting it from zero.
 
 ## Two different knobs
 
