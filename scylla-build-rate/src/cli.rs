@@ -75,6 +75,12 @@ pub struct Args {
     #[arg(long, default_value = STDOUT)]
     pub out: String,
 
+    /// Directory for the per-second series, one CSV per level. Off unless
+    /// given. Keep it out of a `points/` directory: the harness globs
+    /// `points/*.csv` and would read a series as a set of points.
+    #[arg(long)]
+    pub samples_dir: Option<PathBuf>,
+
     /// Vector-store base URL, where the index build is visible
     #[arg(long, env = "VS_URL", default_value = DEFAULT_VS_URL)]
     pub vs_url: String,
@@ -130,6 +136,13 @@ impl Args {
         !self.no_index_watch
     }
 
+    /// Named in both preambles, so each file says whether the other exists.
+    pub fn samples_dir_name(&self) -> String {
+        self.samples_dir
+            .as_ref()
+            .map_or_else(|| "off".to_string(), |dir| dir.display().to_string())
+    }
+
     /// `--no-index-watch` implies no reset: the gates that make a reset a
     /// measurement rather than a hope are reads of the vector-store, and a
     /// reset nobody can confirm is worse than none.
@@ -169,6 +182,7 @@ impl Args {
             ("corpus", self.corpus.display().to_string()),
             ("max_docs", self.max_docs.to_string()),
             ("reset_per_level", self.resets().to_string()),
+            ("samples_dir", self.samples_dir_name()),
             ("vs_index", self.vs_index.clone()),
             ("vs_poll_interval_s", self.vs_interval.to_string()),
             ("vs_settle_timeout_s", self.vs_settle_timeout.to_string()),

@@ -26,7 +26,7 @@ use scyllarate::notes::Notes;
 use scyllarate::report::PointResult;
 use scyllarate::reset::{GateTiming, ResetPlan, ResettingInserters};
 use scyllarate::session::{self, ConnectOptions};
-use scyllarate::sweep::{self, Cancel, Inserter};
+use scyllarate::sweep::{self, Cancel, Inserter, Watchers};
 use scyllarate::vstore::{IndexProbe, DEFAULT_VS_INDEX};
 
 const BENCH_ROOT: &str = "..";
@@ -197,12 +197,16 @@ async fn ladder(
             results.push(result);
             Ok(())
         };
+        let (index, notes) = (watching(sink), quiet());
         sweep::run_sweep(
             &inserters,
             || source.open(),
             levels,
-            &watching(sink),
-            &quiet(),
+            &Watchers {
+                index: &index,
+                notes: &notes,
+                samples: None,
+            },
             &Cancel::default(),
             &mut collect,
         )

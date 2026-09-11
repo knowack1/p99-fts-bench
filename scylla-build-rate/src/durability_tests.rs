@@ -10,7 +10,7 @@ use crate::fakes::{
     a_source, a_topology, a_truncated_source, quiet_notes, FakeInserter, OneInserter,
 };
 use crate::report::{CsvSink, PointResult};
-use crate::sweep::{run_sweep, Cancel};
+use crate::sweep::{run_sweep, Cancel, Watchers};
 
 /// Fails once `levels_before_failure` levels have been served, the way a
 /// truncated JSONL line does part way down a ladder.
@@ -39,12 +39,16 @@ async fn sweep_into(
         sink.append_row(&result)?;
         Ok(())
     };
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
     run_sweep(
         &OneInserter::new(FakeInserter::new()),
         open_source,
         levels,
-        &IndexWatch::off(),
-        &quiet_notes(),
+        &Watchers {
+            index: &index,
+            notes: &notes,
+            samples: None,
+        },
         &Cancel::default(),
         &mut collect,
     )
@@ -95,6 +99,7 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
     let tmp = tempfile::tempdir().unwrap();
     let destination = tmp.path().join("sweep.csv");
     let cancel = Cancel::default();
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
     sink.write_preamble(&a_topology(), &[]).unwrap();
@@ -109,8 +114,11 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
             &OneInserter::new(FakeInserter::with_latency(Duration::from_millis(1))),
             || Ok(a_source(20)),
             &[2, 4],
-            &IndexWatch::off(),
-            &quiet_notes(),
+            &Watchers {
+                index: &index,
+                notes: &notes,
+                samples: None,
+            },
             &cancel,
             &mut collect,
         )

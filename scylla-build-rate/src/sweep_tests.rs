@@ -3,8 +3,10 @@ use std::time::Duration;
 use super::*;
 use crate::build_rate::IndexWatch;
 use crate::fakes::{
-    a_source, a_truncated_source, quiet_notes, some_params, FakeInserter, OneInserter, SpokenNotes,
+    a_source, a_truncated_source, no_counter, quiet_notes, some_params, FakeInserter, OneInserter,
+    SpokenNotes,
 };
+use crate::samples::SampleFiles;
 
 const SLOW: Duration = Duration::from_millis(2);
 
@@ -13,7 +15,26 @@ async fn measure(
     documents: usize,
     concurrency: usize,
 ) -> Result<PointResult> {
-    measure_at_concurrency(inserter, a_source(documents), concurrency, &quiet_notes()).await
+    measure_at_concurrency(
+        inserter,
+        a_source(documents),
+        concurrency,
+        &quiet_notes(),
+        &no_counter(),
+    )
+    .await
+}
+
+fn watching_with<'a>(
+    index: &'a IndexWatch,
+    notes: &'a Notes,
+    samples: Option<&'a SampleFiles>,
+) -> Watchers<'a> {
+    Watchers {
+        index,
+        notes,
+        samples,
+    }
 }
 
 fn an_inserter(latency: Duration) -> Arc<FakeInserter> {
@@ -30,12 +51,12 @@ async fn sweep_levels(
         results.push(result);
         Ok(())
     };
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
     run_sweep(
         &OneInserter(Arc::clone(inserter)),
         || Ok(a_source(documents)),
         levels,
-        &IndexWatch::off(),
-        &quiet_notes(),
+        &watching_with(&index, &notes, None),
         &Cancel::default(),
         &mut collect,
     )
@@ -85,7 +106,7 @@ async fn a_higher_level_puts_more_requests_in_flight() {
 #[tokio::test]
 async fn a_failed_insert_is_counted_and_the_rest_still_go() {
     let inserter = Arc::new(FakeInserter::new().failing_at(&[3, 7]));
-    let result = measure_at_concurrency(&inserter, a_source(20), 4, &quiet_notes())
+    let result = measure_at_concurrency(&inserter, a_source(20), 4, &quiet_notes(), &no_counter())
         .await
         .unwrap();
     assert_eq!((result.docs, result.errors, inserter.sent()), (18, 2, 20));
@@ -154,21 +175,6 @@ async fn each_level_reads_the_corpus_from_the_start() {
 }
 
 #[tokio::test]
-async fn progress_reports_the_delta_since_the_last_tick() {
-    let spoken = SpokenNotes::default();
-    let notes = spoken.notes(Duration::from_millis(5));
-    measure_at_concurrency(
-        &an_inserter(Duration::from_millis(1)),
-        a_source(40),
-        4,
-        &notes,
-    )
-    .await
-    .unwrap();
-    assert!(spoken.mentions("docs/s (total"));
-}
-
-#[tokio::test]
 async fn a_point_announces_its_first_failure() {
     let spoken = SpokenNotes::default();
     let inserter = Arc::new(FakeInserter::new().failing_at(&[1]));
@@ -177,6 +183,7 @@ async fn a_point_announces_its_first_failure() {
         a_source(4),
         2,
         &spoken.notes(Duration::from_secs(3600)),
+        &no_counter(),
     )
     .await
     .unwrap();
@@ -191,6 +198,7 @@ async fn a_clean_point_announces_no_failure() {
         a_source(4),
         2,
         &spoken.notes(Duration::from_secs(3600)),
+        &no_counter(),
     )
     .await
     .unwrap();
@@ -204,6 +212,7 @@ async fn a_truncated_corpus_fails_the_point() {
         a_truncated_source(4),
         4,
         &quiet_notes(),
+        &no_counter(),
     )
     .await;
     assert!(format!("{:#}", outcome.unwrap_err()).contains("truncated JSONL"));
@@ -212,7 +221,14 @@ async fn a_truncated_corpus_fails_the_point() {
 #[tokio::test]
 async fn a_failed_producer_leaves_no_insert_running() {
     let inserter = an_inserter(Duration::from_millis(5));
-    let _ = measure_at_concurrency(&inserter, a_truncated_source(4), 4, &quiet_notes()).await;
+    let _ = measure_at_concurrency(
+        &inserter,
+        a_truncated_source(4),
+        4,
+        &quiet_notes(),
+        &no_counter(),
+    )
+    .await;
     let settled = inserter.completed();
     tokio::time::sleep(Duration::from_millis(40)).await;
     assert_eq!(inserter.completed(), settled);
@@ -221,7 +237,7 @@ async fn a_failed_producer_leaves_no_insert_running() {
 #[tokio::test]
 async fn a_point_that_delivered_nothing_reports_no_latency() {
     let inserter = Arc::new(FakeInserter::new().failing_at(&(1..=10).collect::<Vec<_>>()));
-    let result = measure_at_concurrency(&inserter, a_source(10), 4, &quiet_notes())
+    let result = measure_at_concurrency(&inserter, a_source(10), 4, &quiet_notes(), &no_counter())
         .await
         .unwrap();
     assert_eq!((result.docs, result.errors), (0, 10));
@@ -241,12 +257,12 @@ async fn a_cancelled_sweep_keeps_the_levels_it_measured() {
         }
     };
     let mut collect = stop_after_first;
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
     let outcome = run_sweep(
         &OneInserter(an_inserter(Duration::from_millis(1))),
         || Ok(a_source(20)),
         &[2, 4],
-        &IndexWatch::off(),
-        &quiet_notes(),
+        &watching_with(&index, &notes, None),
         &cancel,
         &mut collect,
     )
@@ -257,12 +273,12 @@ async fn a_cancelled_sweep_keeps_the_levels_it_measured() {
 #[tokio::test]
 async fn a_collector_failure_stops_the_sweep() {
     let mut collect = |_: PointResult| anyhow::bail!("the CSV went away");
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
     let outcome = run_sweep(
         &OneInserter(an_inserter(Duration::ZERO)),
         || Ok(a_source(4)),
         &[2, 4],
-        &IndexWatch::off(),
-        &quiet_notes(),
+        &watching_with(&index, &notes, None),
         &Cancel::default(),
         &mut collect,
     )
@@ -274,12 +290,12 @@ async fn a_collector_failure_stops_the_sweep() {
 async fn an_unopenable_source_stops_the_sweep_before_any_insert() {
     let inserter = an_inserter(Duration::ZERO);
     let mut collect = |_: PointResult| Ok(());
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
     let outcome = run_sweep(
         &OneInserter(Arc::clone(&inserter)),
         || -> Result<std::vec::IntoIter<Result<InsertParams>>> { anyhow::bail!("no such corpus") },
         &[2],
-        &IndexWatch::off(),
-        &quiet_notes(),
+        &watching_with(&index, &notes, None),
         &Cancel::default(),
         &mut collect,
     )

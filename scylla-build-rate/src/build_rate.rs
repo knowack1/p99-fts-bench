@@ -18,6 +18,7 @@ use anyhow::{bail, Result};
 use tokio::task::JoinSet;
 
 use crate::notes::Notes;
+use crate::samples::{rate, status_of, IndexSample, Sample, Submitted, Tape};
 use crate::vstore::{IndexProbe, IndexState};
 
 #[derive(Debug, Clone)]
@@ -63,20 +64,33 @@ impl IndexWatch {
         self.watcher.is_some()
     }
 
-    pub async fn begin(&self, notes: &Notes) -> Result<LevelWatch> {
+    /// The sampler runs whether or not the index is watched: the submit series
+    /// does not depend on the vector-store, and `--no-index-watch` must not cost
+    /// the operator the progress they had before this file existed.
+    pub async fn begin(
+        &self,
+        notes: &Notes,
+        tape: &Tape,
+        submitted: &Arc<Submitted>,
+    ) -> Result<LevelWatch> {
         let Some(watcher) = self.watcher.as_ref() else {
-            return Ok(LevelWatch { level: None });
+            let interval = notes.progress_interval();
+            return Ok(LevelWatch {
+                level: None,
+                ticker: follow(None, interval, tape, submitted, notes),
+            });
         };
         let before = watcher.probe.status().await?.count();
+        tape.inherited(before);
         Ok(LevelWatch {
-            level: Some(Level {
-                probe: Arc::clone(&watcher.probe),
-                timing: watcher.timing.clone(),
-                notes: notes.clone(),
-                before,
-                started: Instant::now(),
-                ticker: follow_index(&watcher.probe, &watcher.timing, notes, before),
-            }),
+            ticker: follow(
+                Some(Arc::clone(&watcher.probe)),
+                watcher.timing.poll_interval,
+                tape,
+                submitted,
+                notes,
+            ),
+            level: Some(Level::new(watcher, notes, tape, submitted, before)),
         })
     }
 }
@@ -84,23 +98,53 @@ impl IndexWatch {
 /// One level's watch, from the first insert to the moment the index settles.
 pub struct LevelWatch {
     level: Option<Level>,
+    ticker: JoinSet<()>,
 }
 
 struct Level {
     probe: Arc<IndexProbe>,
     timing: WatchTiming,
     notes: Notes,
+    tape: Tape,
+    submitted: Arc<Submitted>,
     before: u64,
     started: Instant,
-    ticker: JoinSet<()>,
+}
+
+impl Level {
+    fn new(
+        watcher: &Watcher,
+        notes: &Notes,
+        tape: &Tape,
+        submitted: &Arc<Submitted>,
+        before: u64,
+    ) -> Self {
+        Self {
+            probe: Arc::clone(&watcher.probe),
+            timing: watcher.timing.clone(),
+            notes: notes.clone(),
+            tape: tape.clone(),
+            submitted: Arc::clone(submitted),
+            before,
+            started: Instant::now(),
+        }
+    }
 }
 
 impl LevelWatch {
-    pub async fn finish(self, submitted: u64) -> Result<Option<IndexBuild>> {
-        let Some(mut level) = self.level else {
+    /// The last insert has landed. Stopping the ticker here rather than at
+    /// `finish` is what keeps the handover ordered: the row that closes the
+    /// submit series is written next, and a tick landing between the two would
+    /// put the two readings in the file in either order.
+    pub fn client_stopped(&mut self) {
+        self.ticker.abort_all();
+    }
+
+    pub async fn finish(mut self, submitted: u64) -> Result<Option<IndexBuild>> {
+        self.client_stopped();
+        let Some(level) = self.level else {
             return Ok(None);
         };
-        level.ticker.abort_all();
         Ok(Some(level.settle(submitted).await?))
     }
 }
@@ -128,11 +172,20 @@ impl Level {
         Ok(self.summarize(&state, target, seen.first_count, settling_from))
     }
 
+    /// The settle polls are readings like any other: the client has stopped, so
+    /// the submit rate falls to zero while the index rate does not, and that
+    /// tail is the part of the build a per-level average cannot show.
     async fn sample_into(&self, seen: &mut Progress) {
         match self.probe.status().await {
-            Ok(state) => seen.record(state),
+            Ok(state) => self.keep(state, seen),
             Err(exc) => self.notes.say(&format!("  !! index poll failed: {exc:#}")),
         }
+    }
+
+    fn keep(&self, state: IndexState, seen: &mut Progress) {
+        let sample = self.tape.record(self.submitted.ok(), Some(&state));
+        self.notes.say(&level_line(&sample));
+        seen.record(state);
     }
 
     /// Two ways to stop short of the target: the index stopped moving, or the
@@ -211,56 +264,75 @@ impl Progress {
     }
 }
 
-fn status_of(state: &IndexState) -> String {
-    match state {
-        IndexState::Absent => "absent".to_string(),
-        IndexState::Present(status) => status.status.clone(),
-    }
-}
-
-fn rate(docs: u64, wall_s: f64) -> f64 {
-    if wall_s > 0.0 {
-        docs as f64 / wall_s
-    } else {
-        0.0
-    }
-}
-
-/// A line of its own, beside the submit-rate line: the two rates are the whole
-/// point, and a level that is submitting fast while the index crawls has to be
-/// visible while it happens rather than only in the CSV afterwards.
-fn follow_index(
-    probe: &Arc<IndexProbe>,
-    timing: &WatchTiming,
+/// Both rates on one line, from one reading: a level that is submitting fast
+/// while the index crawls has to be visible while it happens rather than only
+/// in the files afterwards, and two lines from two readings invite the reader
+/// to compare numbers that were never taken together.
+fn follow(
+    probe: Option<Arc<IndexProbe>>,
+    interval: Duration,
+    tape: &Tape,
+    submitted: &Arc<Submitted>,
     notes: &Notes,
-    before: u64,
 ) -> JoinSet<()> {
     let mut ticker = JoinSet::new();
-    ticker.spawn(report_index(
-        Arc::clone(probe),
-        timing.poll_interval,
+    ticker.spawn(report_level(
+        probe,
+        interval,
+        tape.clone(),
+        Arc::clone(submitted),
         notes.clone(),
-        before,
     ));
     ticker
 }
 
-async fn report_index(probe: Arc<IndexProbe>, interval: Duration, notes: Notes, before: u64) {
-    let mut previous = before;
+async fn report_level(
+    probe: Option<Arc<IndexProbe>>,
+    interval: Duration,
+    tape: Tape,
+    submitted: Arc<Submitted>,
+    notes: Notes,
+) {
     let mut ticker = tokio::time::interval(interval);
     ticker.tick().await;
     loop {
         ticker.tick().await;
-        if let Ok(state) = probe.status().await {
-            let count = state.count();
-            notes.say(&format!(
-                "  index {} docs ({:.0} docs/s)",
-                count.saturating_sub(before),
-                rate(count.saturating_sub(previous), interval.as_secs_f64())
-            ));
-            previous = count;
+        let state = read_index(probe.as_deref(), &notes).await;
+        notes.say(&level_line(&tape.record(submitted.ok(), state.as_ref())));
+    }
+}
+
+/// A poll that failed leaves the index cells blank rather than zero, the same
+/// distinction the point CSV makes: an index nobody could read is not an index
+/// that indexed nothing.
+async fn read_index(probe: Option<&IndexProbe>, notes: &Notes) -> Option<IndexState> {
+    let probe = probe?;
+    match probe.status().await {
+        Ok(state) => Some(state),
+        Err(exc) => {
+            notes.say(&format!("  !! index poll failed: {exc:#}"));
+            None
         }
     }
+}
+
+fn level_line(sample: &Sample) -> String {
+    format!(
+        "  c={} {:.0} docs/s (total {}){}",
+        sample.concurrency,
+        sample.submit_docs_per_s,
+        sample.docs_submitted,
+        index_phrase(sample.indexed.as_ref())
+    )
+}
+
+fn index_phrase(indexed: Option<&IndexSample>) -> String {
+    indexed.map_or_else(String::new, |indexed| {
+        format!(
+            ", index {} docs ({:.0} docs/s)",
+            indexed.docs, indexed.docs_per_s
+        )
+    })
 }
 
 #[cfg(test)]

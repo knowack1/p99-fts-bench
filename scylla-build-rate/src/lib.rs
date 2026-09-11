@@ -6,6 +6,7 @@ pub mod insert;
 pub mod notes;
 pub mod report;
 pub mod reset;
+pub mod samples;
 pub mod session;
 pub mod sweep;
 pub mod vstore;

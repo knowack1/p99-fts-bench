@@ -8,7 +8,7 @@
 //! how many requests are outstanding.
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,6 +19,7 @@ use crate::build_rate::{IndexBuild, IndexWatch};
 use crate::corpus::InsertParams;
 use crate::notes::Notes;
 use crate::report::{latency_text, percentile, PointResult};
+use crate::samples::{rate, SampleFiles, Submitted, Tape};
 
 pub const QUEUE_DEPTH_PER_WORKER: usize = 10;
 
@@ -47,6 +48,27 @@ pub trait InserterSource: Send + Sync {
 }
 
 pub type OnPoint<'a> = &'a mut dyn FnMut(PointResult) -> Result<()>;
+
+/// What watches a level while it runs. A bundle rather than three more
+/// parameters: `run_sweep` was already at the count clippy refuses to pass.
+pub struct Watchers<'a> {
+    pub index: &'a IndexWatch,
+    pub notes: &'a Notes,
+    pub samples: Option<&'a SampleFiles>,
+}
+
+impl Watchers<'_> {
+    /// A level that cannot open its series file is not a level that should run:
+    /// the operator asked for the samples, and a sweep that silently drops them
+    /// costs the whole ladder to find out.
+    fn tape(&self, level: usize, concurrency: usize) -> Result<Tape> {
+        let sink = match self.samples {
+            Some(files) => Some(files.open_level(concurrency)?),
+            None => None,
+        };
+        Ok(Tape::new(level, concurrency, sink))
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Counters {
@@ -131,8 +153,7 @@ pub async fn run_sweep<P, S, F>(
     inserters: &P,
     open_source: F,
     levels: &[usize],
-    index: &IndexWatch,
-    notes: &Notes,
+    watchers: &Watchers<'_>,
     cancel: &Cancel,
     on_point: OnPoint<'_>,
 ) -> Result<()>
@@ -141,6 +162,7 @@ where
     S: Source,
     F: Fn() -> Result<S>,
 {
+    let notes = watchers.notes;
     for (position, &concurrency) in levels.iter().enumerate() {
         notes.say(&format!(
             "[{}/{}] concurrency={concurrency}",
@@ -148,14 +170,51 @@ where
             levels.len()
         ));
         let inserter = inserters.open().await?;
-        let watch = index.begin(notes).await?;
-        let mut result =
-            measure_or_cancel(&inserter, open_source()?, concurrency, notes, cancel).await?;
-        result.index = watch.finish(result.docs).await?;
+        let result = run_level(
+            &inserter,
+            open_source()?,
+            concurrency,
+            position,
+            watchers,
+            cancel,
+        )
+        .await?;
         announce(notes, &result);
         on_point(result)?;
     }
     Ok(())
+}
+
+/// The tape is opened before the watch begins, so `t_s` zero is the start of
+/// the level rather than the first insert: the index was already moving by
+/// then, and a series that started later would credit that work to nobody.
+async fn run_level<I: Inserter, S: Source>(
+    inserter: &Arc<I>,
+    source: S,
+    concurrency: usize,
+    position: usize,
+    watchers: &Watchers<'_>,
+    cancel: &Cancel,
+) -> Result<PointResult> {
+    let tape = watchers.tape(position + 1, concurrency)?;
+    let submitted = Arc::new(Submitted::default());
+    let mut watch = watchers
+        .index
+        .begin(watchers.notes, &tape, &submitted)
+        .await?;
+    let outcome = measure_or_cancel(
+        inserter,
+        source,
+        concurrency,
+        watchers.notes,
+        &submitted,
+        cancel,
+    )
+    .await;
+    watch.client_stopped();
+    let mut point = close_submit_series(outcome, &tape, &submitted)?;
+    point.index = watch.finish(point.docs).await?;
+    Ok(point)
 }
 
 async fn measure_or_cancel<I: Inserter, S: Source>(
@@ -163,13 +222,26 @@ async fn measure_or_cancel<I: Inserter, S: Source>(
     source: S,
     concurrency: usize,
     notes: &Notes,
+    submitted: &Arc<Submitted>,
     cancel: &Cancel,
 ) -> Result<PointResult> {
+    let measure = measure_at_concurrency(inserter, source, concurrency, notes, submitted);
     tokio::select! {
         biased;
         _ = cancel.wait() => bail!("interrupted at concurrency={concurrency}"),
-        outcome = measure_at_concurrency(inserter, source, concurrency, notes) => outcome,
+        outcome = measure => outcome,
     }
+}
+
+/// The series ends at the count the point reports rather than at the last whole
+/// second, so the last sample and the CSV row agree about what was submitted.
+fn close_submit_series(
+    outcome: Result<PointResult>,
+    tape: &Tape,
+    submitted: &Arc<Submitted>,
+) -> Result<PointResult> {
+    tape.record(submitted.ok(), None);
+    outcome
 }
 
 /// The workers live in a `JoinSet`, so abandoning this future — a Ctrl-C mid
@@ -179,18 +251,16 @@ pub async fn measure_at_concurrency<I: Inserter, S: Source>(
     source: S,
     concurrency: usize,
     notes: &Notes,
+    submitted: &Arc<Submitted>,
 ) -> Result<PointResult> {
     let (sender, receiver) = async_channel::bounded(QUEUE_DEPTH_PER_WORKER * concurrency);
-    let delivered = Arc::new(AtomicU64::new(0));
     let producer = tokio::task::spawn_blocking(move || fill_channel(sender, source));
-    let mut workers = start_workers(inserter, &receiver, &delivered, concurrency);
-    let mut reporter = start_progress(&delivered, concurrency, notes);
+    let mut workers = start_workers(inserter, &receiver, submitted, concurrency);
     drop(receiver);
 
     let started = Instant::now();
     let counters = collect_counters(&mut workers).await?;
     let wall_s = started.elapsed().as_secs_f64();
-    reporter.abort_all();
     producer.await??;
 
     warn_about_errors(notes, &counters);
@@ -211,7 +281,7 @@ fn fill_channel<S: Source>(sender: async_channel::Sender<InsertParams>, source: 
 fn start_workers<I: Inserter>(
     inserter: &Arc<I>,
     receiver: &async_channel::Receiver<InsertParams>,
-    delivered: &Arc<AtomicU64>,
+    submitted: &Arc<Submitted>,
     concurrency: usize,
 ) -> JoinSet<Counters> {
     let mut workers = JoinSet::new();
@@ -219,7 +289,7 @@ fn start_workers<I: Inserter>(
         workers.spawn(drain_channel(
             Arc::clone(inserter),
             receiver.clone(),
-            Arc::clone(delivered),
+            Arc::clone(submitted),
         ));
     }
     workers
@@ -228,21 +298,34 @@ fn start_workers<I: Inserter>(
 async fn drain_channel<I: Inserter>(
     inserter: Arc<I>,
     receiver: async_channel::Receiver<InsertParams>,
-    delivered: Arc<AtomicU64>,
+    submitted: Arc<Submitted>,
 ) -> Counters {
     let mut counters = Counters::default();
     while let Ok(params) = receiver.recv().await {
-        insert_one(inserter.as_ref(), params, &mut counters).await;
-        delivered.fetch_add(1, Ordering::Relaxed);
+        submitted.record(insert_one(inserter.as_ref(), params, &mut counters).await);
     }
     counters
 }
 
-async fn insert_one<I: Inserter>(inserter: &I, params: InsertParams, counters: &mut Counters) {
+/// `true` when ScyllaDB accepted it. The submit series counts accepted inserts
+/// because the curve beside the index build has to be the work the index will
+/// actually have to do: a failed insert never reaches the index, and counting
+/// it would read as lag.
+async fn insert_one<I: Inserter>(
+    inserter: &I,
+    params: InsertParams,
+    counters: &mut Counters,
+) -> bool {
     let started = Instant::now();
     match inserter.insert(params).await {
-        Ok(()) => counters.record_ok(started.elapsed().as_secs_f64() * 1000.0),
-        Err(exc) => counters.record_error(exc),
+        Ok(()) => {
+            counters.record_ok(started.elapsed().as_secs_f64() * 1000.0);
+            true
+        }
+        Err(exc) => {
+            counters.record_error(exc);
+            false
+        }
     }
 }
 
@@ -252,31 +335,6 @@ async fn collect_counters(workers: &mut JoinSet<Counters>) -> Result<Counters> {
         merged.merge(finished?);
     }
     Ok(merged)
-}
-
-fn start_progress(delivered: &Arc<AtomicU64>, concurrency: usize, notes: &Notes) -> JoinSet<()> {
-    let mut reporter = JoinSet::new();
-    reporter.spawn(follow_progress(
-        Arc::clone(delivered),
-        concurrency,
-        notes.clone(),
-    ));
-    reporter
-}
-
-async fn follow_progress(delivered: Arc<AtomicU64>, concurrency: usize, notes: Notes) {
-    let mut previous = 0;
-    let mut ticker = tokio::time::interval(notes.progress_interval());
-    ticker.tick().await;
-    loop {
-        ticker.tick().await;
-        let done = delivered.load(Ordering::Relaxed);
-        notes.say(&format!(
-            "  c={concurrency} {} docs/s (total {done})",
-            done - previous
-        ));
-        previous = done;
-    }
 }
 
 fn warn_about_errors(notes: &Notes, counters: &Counters) {
@@ -300,14 +358,6 @@ pub fn summarize(concurrency: usize, counters: &Counters, wall_s: f64) -> PointR
         p50_ms: percentile(&latencies, 0.50),
         p99_ms: percentile(&latencies, 0.99),
         index: None,
-    }
-}
-
-fn rate(docs: u64, wall_s: f64) -> f64 {
-    if wall_s > 0.0 {
-        docs as f64 / wall_s
-    } else {
-        0.0
     }
 }
 

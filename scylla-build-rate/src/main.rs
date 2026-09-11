@@ -16,8 +16,9 @@ use scyllarate::corpus::CorpusSource;
 use scyllarate::notes::Notes;
 use scyllarate::report::{note, summary_table, CsvSink, PointResult};
 use scyllarate::reset::ResettingInserters;
+use scyllarate::samples::SampleFiles;
 use scyllarate::session::{self, Topology};
-use scyllarate::sweep::{self, Cancel};
+use scyllarate::sweep::{self, Cancel, Watchers};
 use scyllarate::vstore::IndexProbe;
 
 fn main() -> ExitCode {
@@ -53,15 +54,33 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
 
     let probe = open_probe(&args)?;
     announce_reset(&args);
+    let settings = settings_with_index(&args, probe.as_deref()).await;
     let mut sink = CsvSink::open(&args.out)?;
-    sink.write_preamble(
-        &topology,
-        &settings_with_index(&args, probe.as_deref()).await,
-    )?;
-    let (results, aborted) = sweep_levels(&args, session, probe, &mut sink).await;
+    sink.write_preamble(&topology, &settings)?;
+    let samples = open_samples(&args, &topology, &settings)?;
+    let (results, aborted) = sweep_levels(&args, session, probe, &mut sink, samples.as_ref()).await;
 
     echo_summary(&results);
     Ok(exit_code(&results, aborted))
+}
+
+/// Opened before the first insert, so an unwritable directory costs a second
+/// rather than a whole ladder — the rule `CsvSink::open` already follows.
+fn open_samples(
+    args: &Args,
+    topology: &Topology,
+    settings: &[(String, String)],
+) -> Result<Option<SampleFiles>> {
+    let Some(dir) = args.samples_dir.as_ref() else {
+        return Ok(None);
+    };
+    let files = SampleFiles::new(dir)
+        .with_context(|| format!("cannot write per-second samples to {}", dir.display()))?;
+    note(&format!(
+        "per-second samples: {}/c<level>-<n>.csv",
+        dir.display()
+    ));
+    Ok(Some(files.with_preamble(topology, settings)))
 }
 
 fn open_probe(args: &Args) -> Result<Option<Arc<IndexProbe>>> {
@@ -113,6 +132,7 @@ async fn sweep_levels(
     session: Arc<scylla::client::session::Session>,
     probe: Option<Arc<IndexProbe>>,
     sink: &mut CsvSink,
+    samples: Option<&SampleFiles>,
 ) -> (Vec<PointResult>, bool) {
     let source = CorpusSource::new(&args.corpus, args.max_docs);
     let notes = Notes::stderr();
@@ -134,12 +154,16 @@ async fn sweep_levels(
             results.push(result);
             Ok(())
         };
+        let watchers = Watchers {
+            index: &index,
+            notes: &notes,
+            samples,
+        };
         sweep::run_sweep(
             &inserters,
             || source.open(),
             &args.concurrency.0,
-            &index,
-            &notes,
+            &watchers,
             &cancel,
             &mut collect,
         )

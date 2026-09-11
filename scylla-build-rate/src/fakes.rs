@@ -17,6 +17,7 @@ use crate::build_rate::IndexBuild;
 use crate::corpus::InsertParams;
 use crate::notes::Notes;
 use crate::report::PointResult;
+use crate::samples::Submitted;
 use crate::session::Topology;
 use crate::sweep::Inserter;
 
@@ -223,6 +224,12 @@ impl SpokenNotes {
 
 pub fn quiet_notes() -> Notes {
     SpokenNotes::default().notes(Duration::from_secs(3600))
+}
+
+/// For the tests that measure a level without watching the series it feeds: the
+/// workers still count what they submitted, nobody reads it.
+pub fn no_counter() -> Arc<Submitted> {
+    Arc::new(Submitted::default())
 }
 
 /// What one poll of the fake vector-store finds.

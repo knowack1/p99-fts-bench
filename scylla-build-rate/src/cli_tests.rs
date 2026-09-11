@@ -215,6 +215,29 @@ fn settings_record_the_tokio_worker_count() {
         .contains(&("tokio_workers".to_string(), "4".to_string())));
 }
 
+/// Both files name the other's state, so a series found beside a point CSV —
+/// or a point CSV found without one — says whether a series was taken at all.
+#[test]
+fn settings_say_a_run_took_no_per_second_series() {
+    let settings = parse(&a_minimal_command()).settings();
+    assert!(settings.contains(&("samples_dir".to_string(), "off".to_string())));
+}
+
+#[test]
+fn settings_record_where_the_per_second_series_went() {
+    let args = parse(&[
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "8",
+        "--samples-dir",
+        "/tmp/series",
+    ]);
+    assert!(args
+        .settings()
+        .contains(&("samples_dir".to_string(), "/tmp/series".to_string())));
+}
+
 #[test]
 fn a_corpus_is_required() {
     assert!(Args::try_parse_from(["scyllarate", "--concurrency", "8"]).is_err());
