@@ -1,4 +1,4 @@
-//! osrate --corpus ../data/corpus.jsonl --concurrency 24,48,96,192,384
+//! osrate --corpus ../../data/corpus.jsonl --concurrency 24,48,96,192,384
 //!
 //! Measures how fast this client can submit `_bulk` requests to OpenSearch, per
 //! concurrency level. That is a submit rate, not a searchable-index rate: a

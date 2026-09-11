@@ -11,8 +11,8 @@ session, off one corpus:
 
 | Part | Harness | Binary | Sink | Extra axis |
 |---|---|---|---|---|
-| **A** | `bench/scylla-build-rate` | `scyllarate` | `null_sink --mode cql` (+ its vector-store port) | — |
-| **B** | `bench/opensearch-build-rate` | `osrate` | `null_sink --mode http` | **one full run per `--batch-size`** |
+| **A** | `bench/build-rate/scylla` | `scyllarate` | `null_sink --mode cql` (+ its vector-store port) | — |
+| **B** | `bench/build-rate/opensearch` | `osrate` | `null_sink --mode http` | **one full run per `--batch-size`** |
 
 Part B repeats its whole ladder **once per batch size**, because on the
 OpenSearch side one request carries many documents and the point is to see what
@@ -27,7 +27,7 @@ the samplers and the box's CPU baseline that Part B is read against.
 ## What this measures, and what it is not
 
 The subject is **the loader**, not an engine. `scyllarate`
-(`bench/scylla-build-rate`) pushes prepared `INSERT`s at `ftsbench.null_sink
+(`bench/build-rate/scylla`) pushes prepared `INSERT`s at `ftsbench.null_sink
 --mode cql`, which answers the CQL wire and discards every row. What comes back
 is what the *client* can offer on a given box — the ceiling a real build-rate
 point has to stay below to be measuring ScyllaDB rather than the tester.
@@ -274,20 +274,20 @@ belongs on the harness root is `corpus.jsonl.zst` — see Phase 2.
 ### Build the harness, then freeze it
 
 ```bash
-cd <repo>/bench && tar czf - --exclude=target scylla-build-rate \
+cd <repo>/bench && tar czf - --exclude=target build-rate \
   | ssh fts-harness 'mkdir -p /mnt/nvme/work && tar xzf - -C /mnt/nvme/work'
 
-ssh fts-harness 'cd /mnt/nvme/work/scylla-build-rate && . "$HOME/.cargo/env" \
+ssh fts-harness 'cd /mnt/nvme/work/build-rate/scylla && . "$HOME/.cargo/env" \
   && CARGO_TARGET_DIR=/mnt/nvme/work/target cargo build --release --locked'
 ```
 
 Record, into `$R/env/`, **before** measuring:
 
 ```bash
-ssh fts-harness 'cd /mnt/nvme/work/scylla-build-rate && find . -type f \
+ssh fts-harness 'cd /mnt/nvme/work/build-rate && find . -type f \
   \( -name "*.rs" -o -name "Cargo.*" \) | sort | xargs sha256sum | sha256sum'
 git -C <repo>/bench log -1 --format='%H %s'
-git -C <repo>/bench status --short scylla-build-rate
+git -C <repo>/bench status --short build-rate
 ```
 
 **Do not rebuild once an arm has run.** The working tree may move under you
@@ -688,7 +688,7 @@ session.
 
 ## B0 — what is different about this harness
 
-`osrate` (`bench/opensearch-build-rate`) posts hand-built NDJSON to `POST
+`osrate` (`bench/build-rate/opensearch`) posts hand-built NDJSON to `POST
 /_bulk`. Two units, and mixing them is the standing way to misread this half:
 
 | Number | Unit |
@@ -732,11 +732,18 @@ nothing.
 The sink speaks plain HTTP, so build without the default TLS feature: smaller
 binary, and the run cannot depend on the box's OpenSSL.
 
+**`bench/opensearch/` ships too, and the build fails without it.** `osrate`
+`include_str!`s `index-config-ramindex.json` and `index-config.json`, so those
+two files are needed at *compile* time, not at run time — which is what
+guarantees the binary embeds the same bytes the engine campaign applies. Earlier
+revisions of this block tarred only the crate and could not have compiled on a
+fresh box.
+
 ```bash
-cd <repo>/bench && tar czf - --exclude=target opensearch-build-rate \
+cd <repo>/bench && tar czf - --exclude=target build-rate opensearch \
   | ssh fts-harness 'tar xzf - -C /mnt/nvme/work'
 
-ssh fts-harness 'cd /mnt/nvme/work/opensearch-build-rate && . "$HOME/.cargo/env" \
+ssh fts-harness 'cd /mnt/nvme/work/build-rate/opensearch && . "$HOME/.cargo/env" \
   && CARGO_TARGET_DIR=/mnt/nvme/work/target-os \
      cargo build --release --locked --no-default-features'
 ```

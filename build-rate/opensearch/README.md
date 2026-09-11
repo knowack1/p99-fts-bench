@@ -1,6 +1,6 @@
 # osrate — a concurrency sweep for OpenSearch ingest
 
-The OpenSearch half of `scylla-build-rate`. Loads a corpus into
+The OpenSearch half of `build-rate/scylla`. Loads a corpus into
 `wiki-articles` once per concurrency level and reports, for each level, how
 fast the client delivered documents and what the p99 `_bulk` latency was. The
 output is one CSV that feeds two charts:

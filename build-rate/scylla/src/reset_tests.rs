@@ -94,7 +94,7 @@ fn the_flags_reach_every_statement() {
 // --- conformance with the campaign's own schema ---------------------------
 
 fn campaign_cql(name: &str) -> String {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "scylladb", name]
+    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "scylladb", name]
         .iter()
         .collect();
     let text = std::fs::read_to_string(&path)

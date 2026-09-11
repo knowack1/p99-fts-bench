@@ -35,8 +35,8 @@ use crate::sweep::{BeforeLevel, BoxFuture};
 /// tool applies cannot drift from the repo's and a bare run needs no argument.
 /// `include_str!` is what guarantees it: these are the same bytes
 /// `opensearch/create_index.sh` PUTs.
-pub const RAMINDEX_CONFIG: &str = include_str!("../../opensearch/index-config-ramindex.json");
-pub const DISK_CONFIG: &str = include_str!("../../opensearch/index-config.json");
+pub const RAMINDEX_CONFIG: &str = include_str!("../../../opensearch/index-config-ramindex.json");
+pub const DISK_CONFIG: &str = include_str!("../../../opensearch/index-config.json");
 
 /// The RAM/ScyllaDB-parity mapping is the default: same `m1_parity` analyzer,
 /// `_source` disabled so the index carries postings and ids only, the way

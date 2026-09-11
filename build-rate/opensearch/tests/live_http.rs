@@ -37,7 +37,7 @@ use osrate::report::PointResult;
 use osrate::reset::{GateTiming, IndexConfig, IndexReset, DEFAULT_INDEX_CONFIG};
 use osrate::sweep::{self, Cancel, Inserter, Ladder, NothingToPrepare, Shape};
 
-const BENCH_ROOT: &str = "..";
+const BENCH_ROOT: &str = "../..";
 const VENV_PYTHON: &str = ".venv/bin/python3";
 const INDEX: &str = "wiki-articles";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);

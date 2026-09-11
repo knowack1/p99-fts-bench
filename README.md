@@ -141,7 +141,7 @@ What each side reports as "progress":
 | Engine | Source | Note |
 |---|---|---|
 | OpenSearch | `_stats` → `indexing.index_total` | not `_count`, which only sees *refreshed* docs and would flat-line with `refresh_interval` tuned up |
-| ScyllaDB | vector-store `/api/v1/indexes/{ks}/{idx}/status` → `count`, `status` | rows land in the base table first; the index then bootstrap-scans or tails CDC. `time_to_serving_s` is reported once status reaches `SERVING`. `scylla-build-rate/scyllarate` reads the same endpoint, so a harness ceiling and an engine number come from one reading |
+| ScyllaDB | vector-store `/api/v1/indexes/{ks}/{idx}/status` → `count`, `status` | rows land in the base table first; the index then bootstrap-scans or tails CDC. `time_to_serving_s` is reported once status reaches `SERVING`. `build-rate/scylla` (`scyllarate`) reads the same endpoint, so a harness ceiling and an engine number come from one reading |
 
 The OpenSearch series additionally carries segment count, active/total merges,
 cumulative merge time and store size, so the sawtooth can be *attributed* to
@@ -179,7 +179,7 @@ FTS-enabled cluster, which stock images do not provide.
 | `ftsbench/engines.py` | The two query clients — one query text, two engines |
 | `ftsbench/analyzer.py` | M1-parity tokenizer used for query generation |
 | `opensearch/index-config.json` | Analyzer-parity index settings + mappings |
-| `opensearch/create_index.sh` / `verify_analyzer.sh` | Index creation and `_analyze` parity checks. `opensearch-build-rate/osrate` embeds the same index configs and creates the index itself, one probe of the same parity set included |
+| `opensearch/create_index.sh` / `verify_analyzer.sh` | Index creation and `_analyze` parity checks. `build-rate/opensearch` (`osrate`) embeds the same index configs and creates the index itself, one probe of the same parity set included |
 | `scylladb/schema.cql` / `index.cql` | Keyspace/table and the `fulltext_index`, split so ingest ordering is a choice |
 | `docker/docker-compose.opensearch.yml` | Single-node OpenSearch for the local pipeline |
 

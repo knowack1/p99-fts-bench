@@ -56,7 +56,7 @@ measuring.
       Box 3 has 64 GiB and also wants page cache for a 31 GB corpus. Either
       confirm the footprint is affordable or lower `--queue-depth`; the
       read-ahead earns its keep at the bottom of the ladder, not at `c=384`.
-      See `opensearch-build-rate/README.md`, "Memory".
+      See `build-rate/opensearch/README.md`, "Memory".
 - [ ] **Raise `C7_RATE_MAX`.** The ladder tops out at 3200 qps, which the
       laptop generator could not reach against OpenSearch anyway. On a
       dedicated generator box the knee may sit above the ladder's ceiling, and

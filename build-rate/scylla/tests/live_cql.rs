@@ -29,7 +29,7 @@ use scyllarate::session::{self, ConnectOptions};
 use scyllarate::sweep::{self, Cancel, Inserter, Watchers};
 use scyllarate::vstore::{IndexProbe, DEFAULT_VS_INDEX};
 
-const BENCH_ROOT: &str = "..";
+const BENCH_ROOT: &str = "../..";
 const VENV_PYTHON: &str = ".venv/bin/python3";
 const KEYSPACE: &str = "wiki";
 const TABLE: &str = "articles";

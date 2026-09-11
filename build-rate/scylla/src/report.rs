@@ -12,7 +12,7 @@ use crate::session::Topology;
 
 /// The six index columns are APPENDED, never inserted. `osrate` promises that
 /// its first seven columns are these in this order
-/// (`opensearch-build-rate/README.md`), and `tools/plot_harness_grid.py` reads
+/// (`../opensearch/README.md`), and `tools/plot_harness_grid.py` reads
 /// both files by position.
 pub const CSV_COLUMNS: [&str; 13] = [
     "concurrency",

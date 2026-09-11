@@ -161,7 +161,7 @@ one.
 
 The first seven are unchanged and the six index columns are **appended**, never
 inserted: `osrate` promises that its first seven columns are these in this
-order (`../opensearch-build-rate/README.md`), and `tools/plot_harness_grid.py`
+order (`../opensearch/README.md`), and `tools/plot_harness_grid.py`
 reads both files by position.
 
 | Column | What it is |
