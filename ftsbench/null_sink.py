@@ -155,7 +155,7 @@ async def start_servers(args: argparse.Namespace, work: AcceptedWork,
     delay_s = args.delay_ms / MILLISECONDS
     if args.mode == "http":
         engine = await null_sink_http.serve(args.host, port_of(args), work,
-                                            delay_s)
+                                            index, delay_s)
     else:
         engine = await null_sink_cql.serve(args.host, port_of(args), work,
                                            index, delay_s)

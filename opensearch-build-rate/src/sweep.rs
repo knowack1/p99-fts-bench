@@ -9,6 +9,7 @@
 //! are a separate knob — they say how many cores encode and serve those N
 //! in-flight bulks, not how many are outstanding.
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,7 +38,40 @@ pub trait Inserter: Send + Sync + 'static {
 pub trait Source: Iterator<Item = Result<DocumentBatch>> + Send + 'static {}
 impl<T> Source for T where T: Iterator<Item = Result<DocumentBatch>> + Send + 'static {}
 
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Run before each level, the way the corpus is reopened before each level.
+///
+/// The real implementation empties the index, so that every level builds from
+/// zero documents rather than rewriting the last level's. It is a trait rather
+/// than a closure because the work is asynchronous and fallible, and a level
+/// whose reset failed must not be measured. Boxing the future costs one
+/// allocation per level, which is not a quantity this tool measures.
+pub trait BeforeLevel: Send + Sync {
+    fn prepare(&self) -> BoxFuture<'_, Result<()>>;
+}
+
+/// The level does not need anything done to it first — `--no-reset`, and the
+/// tests that are not about the reset.
+pub struct NothingToPrepare;
+
+impl BeforeLevel for NothingToPrepare {
+    fn prepare(&self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
 pub type OnPoint<'a> = &'a mut dyn FnMut(PointResult) -> Result<()>;
+
+/// Everything a ladder holds fixed while `levels` is what moves: the client
+/// that offers the work, what it does to the index first, and the shape of
+/// each offer.
+pub struct Ladder<'a, I: Inserter> {
+    pub inserter: Arc<I>,
+    pub before_level: &'a dyn BeforeLevel,
+    pub levels: &'a [usize],
+    pub shape: Shape,
+}
 
 /// Documents and bulks are counted separately because they answer different
 /// questions: `docs`/`errors` say how much of the corpus landed, `bulks` says
@@ -142,10 +176,8 @@ impl Cancel {
 /// `on_point` is handed each result as it lands, so a level that fails cannot
 /// take the levels already measured down with it.
 pub async fn run_sweep<I, S, F>(
-    inserter: Arc<I>,
+    ladder: Ladder<'_, I>,
     open_source: F,
-    levels: &[usize],
-    shape: Shape,
     notes: &Notes,
     cancel: &Cancel,
     on_point: OnPoint<'_>,
@@ -155,8 +187,15 @@ where
     S: Source,
     F: Fn() -> Result<S>,
 {
+    let Ladder {
+        inserter,
+        before_level,
+        levels,
+        shape,
+    } = ladder;
     for (position, &concurrency) in levels.iter().enumerate() {
         notes.say(&announce_level(position, levels, shape.at(concurrency)));
+        before_level.prepare().await?;
         let result =
             measure_or_cancel(&inserter, open_source()?, concurrency, shape, notes, cancel).await?;
         announce(notes, &result);

@@ -6,7 +6,9 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::corpus::DocumentBatch;
-use crate::fakes::{a_cluster, a_shape, a_source, a_truncated_source, quiet_notes, FakeInserter};
+use crate::fakes::{
+    a_cluster, a_ladder, a_shape, a_source, a_truncated_source, quiet_notes, FakeInserter,
+};
 use crate::report::{CsvSink, PointResult};
 use crate::sweep::{run_sweep, Cancel};
 
@@ -42,10 +44,8 @@ async fn sweep_into(
         Ok(())
     };
     run_sweep(
-        Arc::new(FakeInserter::new()),
+        a_ladder(Arc::new(FakeInserter::new()), levels, a_shape(BATCH)),
         open_source,
-        levels,
-        a_shape(BATCH),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -108,10 +108,12 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
             Ok(())
         };
         run_sweep(
-            Arc::new(FakeInserter::with_latency(Duration::from_millis(1))),
+            a_ladder(
+                Arc::new(FakeInserter::with_latency(Duration::from_millis(1))),
+                &[2, 4],
+                a_shape(BATCH),
+            ),
             || Ok(a_source(100, BATCH)),
-            &[2, 4],
-            a_shape(BATCH),
             &quiet_notes(),
             &cancel,
             &mut collect,

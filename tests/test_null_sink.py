@@ -64,12 +64,64 @@ def test_count_reports_what_the_sink_accepted():
     assert json.loads(body)["count"] == 3
 
 
+def test_a_deleted_index_is_absent_and_holds_nothing():
+    """`osrate` empties the index before every concurrency level.
+
+    The gates it waits on are a `HEAD` that says absent and a `_count` that
+    says zero, so a sink that acknowledged the delete and changed nothing would
+    hang the instrument built to measure it.
+    """
+    work = AcceptedWork()
+    routes = null_sink_http.Routes(work)
+    routes.respond(null_sink_http.Request("POST", "/_bulk",
+                                          bulk_body("i", [1, 2, 3])))
+    routes.respond(null_sink_http.Request("DELETE", "/wiki-articles", b""))
+
+    present, _ = routes.respond(
+        null_sink_http.Request("HEAD", "/wiki-articles", b""))
+    _, counted = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    assert present == 404
+    assert json.loads(counted)["count"] == 0
+    assert work.docs == 3, "the run's own total is not the index's"
+
+
+def test_a_recreated_index_is_present_and_empty():
+    routes = null_sink_http.Routes(AcceptedWork())
+    routes.respond(null_sink_http.Request("DELETE", "/wiki-articles", b""))
+    routes.respond(null_sink_http.Request("PUT", "/wiki-articles", b"{}"))
+
+    present, _ = routes.respond(
+        null_sink_http.Request("HEAD", "/wiki-articles", b""))
+    _, counted = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    assert present == 200
+    assert json.loads(counted)["count"] == 0
+
+
+def test_an_index_is_there_before_anything_created_it():
+    """A `--no-reset` run loads into an index it never created."""
+    routes = null_sink_http.Routes(AcceptedWork())
+    status, _ = routes.respond(
+        null_sink_http.Request("HEAD", "/wiki-articles", b""))
+    assert status == 200
+
+
+def test_a_head_that_does_not_name_an_index_is_still_answered():
+    routes = null_sink_http.Routes(AcceptedWork())
+    routes.respond(null_sink_http.Request("DELETE", "/wiki-articles", b""))
+    status, _ = routes.respond(null_sink_http.Request("HEAD", "/", b""))
+    assert status == 200
+
+
 def test_stats_answers_every_field_the_sampler_indexes_into():
     from ftsbench import samplers
 
     work = AcceptedWork()
-    work.add(ops=1, docs=7)
-    _, body = null_sink_http.Routes(work).respond(
+    routes = null_sink_http.Routes(work)
+    routes.respond(null_sink_http.Request("POST", "/_bulk",
+                                          bulk_body("i", [1, 2, 3, 4, 5, 6, 7])))
+    _, body = routes.respond(
         null_sink_http.Request("GET", "/wiki-articles/_stats", b""))
     total = json.loads(body)["_all"]["total"]
     assert total["indexing"]["index_total"] == 7

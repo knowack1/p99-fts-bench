@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from . import sink_http_wire
 from .sink_counters import AcceptedWork
 from .sink_http_wire import Request
+from .sink_index import ModelledIndex
 
 DELETE_ACTION_PREFIX = b'{"delete"'
 ACTION_PREFIX_BYTES = 16
@@ -119,11 +120,28 @@ def is_suffix(path: str, suffix: str) -> bool:
     return path.split("?")[0].rstrip("/").endswith(suffix)
 
 
+def names_an_index(path: str) -> bool:
+    return path.count("/") == 1 and path != "/"
+
+
+def created_index() -> ModelledIndex:
+    """Present up front, because that is the state a loader meets.
+
+    A `--no-reset` ladder never issues DDL, and a sink that started with no
+    index would answer 404 to a run that was right to expect one.
+    """
+    index = ModelledIndex()
+    index.create()
+    return index
+
+
 class Routes:
     """Path and method to a JSON reply, with `_bulk` counted on the way past."""
 
-    def __init__(self, work: AcceptedWork) -> None:
+    def __init__(self, work: AcceptedWork,
+                 index: ModelledIndex | None = None) -> None:
         self._work = work
+        self._index = created_index() if index is None else index
         self._replies = BulkReplies()
 
     def respond(self, request: Request) -> tuple[int, bytes]:
@@ -134,10 +152,13 @@ class Routes:
     def _bulk(self, payload: bytes) -> tuple[int, bytes]:
         items = bulk_action_count(payload)
         self._work.add(ops=1, docs=items)
+        self._index.add(items)
         return 200, self._replies.body(items)
 
     def _control(self, request: Request) -> tuple[int, bytes]:
         path = request.path.split("?")[0]
+        if request.method == "HEAD":
+            return self._presence(path)
         for route in (self._progress_route, self._admin_route):
             answer = route(request.method, path)
             if answer is not None:
@@ -153,9 +174,9 @@ class Routes:
         if path == "/":
             return _json({"name": "null-sink", "version": {"number": VERSION}})
         if is_suffix(path, "_count"):
-            return _json({"count": self._work.docs, "_shards": SHARDS_OK})
+            return _json({"count": self._index.count, "_shards": SHARDS_OK})
         if is_suffix(path, "_stats"):
-            return _json(index_stats(self._work.docs))
+            return _json(index_stats(self._index.count))
         if path == "/_nodes/stats/thread_pool":
             return _json(node_thread_pool_stats())
         if path == "/_nodes/thread_pool":
@@ -168,11 +189,26 @@ class Routes:
             return _json({"_shards": SHARDS_OK})
         if method == "PUT" and is_suffix(path, "_settings"):
             return _json({"acknowledged": True})
-        if method in ("PUT", "DELETE") and path.count("/") == 1:
-            return _json({"acknowledged": True, "index": path[1:]})
-        if method == "HEAD":
-            return b""
+        if method in ("PUT", "DELETE") and names_an_index(path):
+            return self._lifecycle(method, path)
         return None
+
+    def _lifecycle(self, method: str, path: str) -> bytes:
+        """Create and delete move the index the gates read back."""
+        if method == "DELETE":
+            self._index.drop()
+        else:
+            self._index.create()
+        return _json({"acknowledged": True, "index": path[1:]})
+
+    def _presence(self, path: str) -> tuple[int, bytes]:
+        """What `osrate`'s first reset gate polls: the index it deleted is
+        gone. Only a path that names an index answers for one — a `HEAD /` is a
+        liveness probe and is always yes.
+        """
+        if names_an_index(path) and not self._index.present:
+            return 404, b""
+        return 200, b""
 
 
 def _json(body: dict) -> bytes:
@@ -180,5 +216,6 @@ def _json(body: dict) -> bytes:
 
 
 async def serve(host: str, port: int, work: AcceptedWork,
+                index: ModelledIndex | None = None,
                 delay_s: float = 0.0) -> asyncio.Server:
-    return await sink_http_wire.serve(host, port, Routes(work), delay_s)
+    return await sink_http_wire.serve(host, port, Routes(work, index), delay_s)

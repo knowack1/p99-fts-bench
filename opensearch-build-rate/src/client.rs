@@ -9,10 +9,12 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use opensearch::http::transport::{SingleNodeConnectionPool, TransportBuilder};
-use opensearch::indices::{IndicesExistsParts, IndicesGetMappingParts, IndicesGetSettingsParts};
+use opensearch::indices::{
+    IndicesAnalyzeParts, IndicesExistsParts, IndicesGetMappingParts, IndicesGetSettingsParts,
+};
 use opensearch::nodes::NodesInfoParts;
-use opensearch::OpenSearch;
-use serde_json::Value;
+use opensearch::{CountParts, OpenSearch};
+use serde_json::{json, Value};
 use url::Url;
 
 pub const UNKNOWN: &str = "unknown";
@@ -76,10 +78,13 @@ pub struct ConnectOptions {
 /// The proxy is disabled explicitly, not left to the environment: an ambient
 /// `HTTP_PROXY` would otherwise route every `_bulk` through a third party and
 /// silently change the measured rate.
+///
+/// Whether the index has to be there already is not decided here: a run that
+/// resets creates it, and only `--no-reset` requires one it did not build. The
+/// caller makes that choice with `require_index`.
 pub async fn connect(options: &ConnectOptions) -> Result<OpenSearch> {
     let client = build_client(options)?;
     reach(&client, &options.url).await?;
-    require_index(&client, &options.index).await?;
     Ok(client)
 }
 
@@ -118,19 +123,85 @@ async fn reach(client: &OpenSearch, url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn require_index(client: &OpenSearch, index: &str) -> Result<()> {
+/// Only `--no-reset` needs this: it is the mode that loads into an index this
+/// tool did not build.
+pub async fn require_index(client: &OpenSearch, index: &str) -> Result<()> {
+    if index_exists(client, index).await? {
+        return Ok(());
+    }
+    bail!(
+        "index {index:?} does not exist\ndrop --no-reset to let osrate create it, or apply \
+         bench/opensearch/create_index.sh first"
+    );
+}
+
+/// `HEAD /{index}`. A 404 is an answer, not a failure — the gates poll this
+/// waiting for exactly that.
+pub async fn index_exists(client: &OpenSearch, index: &str) -> Result<bool> {
     let response = client
         .indices()
         .exists(IndicesExistsParts::Index(&[index]))
         .send()
         .await
         .with_context(|| format!("cannot ask whether index {index:?} exists"))?;
-    if response.status_code().is_success() {
-        return Ok(());
-    }
-    bail!(
-        "index {index:?} does not exist\ncreate it with bench/opensearch/create_index.sh first"
-    );
+    Ok(response.status_code().is_success())
+}
+
+/// `GET /{index}/_count`. This doubles as the readiness check: an index whose
+/// primary is not allocated yet answers 503 rather than 0, which is the
+/// keep-polling case rather than a count of nothing.
+pub async fn document_count(client: &OpenSearch, index: &str) -> Result<u64> {
+    let body: Value = json_of(
+        client
+            .count(CountParts::Index(&[index]))
+            .send()
+            .await
+            .with_context(|| format!("cannot count the documents in index {index:?}"))?,
+    )
+    .await?;
+    body.get("count")
+        .and_then(Value::as_u64)
+        .with_context(|| format!("the _count reply for index {index:?} carried no count"))
+}
+
+/// `POST /{index}/_analyze`, rendered as the `position:token` stream
+/// `opensearch/verify_analyzer.sh` compares against.
+pub async fn analyze(
+    client: &OpenSearch,
+    index: &str,
+    analyzer: &str,
+    text: &str,
+) -> Result<String> {
+    let body: Value = json_of(
+        client
+            .indices()
+            .analyze(IndicesAnalyzeParts::Index(index))
+            .body(json!({"analyzer": analyzer, "text": text}))
+            .send()
+            .await
+            .with_context(|| format!("cannot analyze text with {analyzer:?} on index {index:?}"))?,
+    )
+    .await?;
+    Ok(token_stream(&body))
+}
+
+fn token_stream(analyzed: &Value) -> String {
+    analyzed
+        .get("tokens")
+        .and_then(Value::as_array)
+        .map(|tokens| tokens.iter().map(one_token).collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+fn one_token(token: &Value) -> String {
+    let position = token
+        .get("position")
+        .map_or(0, |at| at.as_u64().unwrap_or(0));
+    let text = token
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!("{position}:{text}")
 }
 
 /// Every read falls back to `unknown` rather than failing the run: an endpoint

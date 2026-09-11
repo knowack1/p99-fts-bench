@@ -71,7 +71,12 @@ fn the_batch_size_defaults_to_the_campaigns_os_batch() {
 #[test]
 fn a_requested_batch_size_is_taken() {
     let args = parse(&[
-        "--corpus", "c.jsonl", "--concurrency", "24", "--batch-size", "1000",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "24",
+        "--batch-size",
+        "1000",
     ]);
     assert_eq!(args.batch_size, 1000);
 }
@@ -81,7 +86,12 @@ fn a_requested_batch_size_is_taken() {
 #[test]
 fn a_batch_size_of_one_is_allowed() {
     let args = parse(&[
-        "--corpus", "c.jsonl", "--concurrency", "24", "--batch-size", "1",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "24",
+        "--batch-size",
+        "1",
     ]);
     assert_eq!(args.batch_size, 1);
 }
@@ -175,7 +185,12 @@ fn tokio_workers_default_to_every_core_the_machine_reports() {
 #[test]
 fn a_requested_worker_count_overrides_the_core_count() {
     let args = parse(&[
-        "--corpus", "c.jsonl", "--concurrency", "24", "--tokio-workers", "3",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "24",
+        "--tokio-workers",
+        "3",
     ]);
     assert_eq!(args.tokio_workers(), 3);
 }
@@ -206,7 +221,12 @@ fn the_default_request_timeout_matches_the_python_loaders_bulk_timeout() {
 #[test]
 fn settings_record_the_batch_size_and_what_the_latency_is_per() {
     let args = parse(&[
-        "--corpus", "c.jsonl", "--concurrency", "24", "--batch-size", "256",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "24",
+        "--batch-size",
+        "256",
     ]);
     assert_eq!(setting(&args, "batch_size"), "256");
     assert_eq!(setting(&args, "latency_unit"), "bulk_request");
@@ -229,7 +249,12 @@ fn settings_record_the_corpus_and_the_document_limit() {
 #[test]
 fn settings_record_the_tokio_worker_count() {
     let args = parse(&[
-        "--corpus", "c.jsonl", "--concurrency", "24", "--tokio-workers", "4",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "24",
+        "--tokio-workers",
+        "4",
     ]);
     assert_eq!(setting(&args, "tokio_workers"), "4");
 }
@@ -250,9 +275,17 @@ fn the_default_queue_depth_is_the_documented_constant() {
 #[test]
 fn settings_record_the_queue_depth_that_bounded_the_producer() {
     let args = parse(&[
-        "--corpus", "c.jsonl", "--concurrency", "24", "--queue-depth", "6",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "24",
+        "--queue-depth",
+        "6",
     ]);
-    assert_eq!((args.queue_depth, setting(&args, "queue_depth")), (6, "6".to_string()));
+    assert_eq!(
+        (args.queue_depth, setting(&args, "queue_depth")),
+        (6, "6".to_string())
+    );
 }
 
 /// Whether the binary can even reach an `https://` endpoint is a build-time
@@ -270,4 +303,93 @@ fn a_corpus_is_required() {
 #[test]
 fn a_concurrency_ladder_is_required() {
     assert!(Args::try_parse_from(["osrate", "--corpus", "c.jsonl"]).is_err());
+}
+
+// --- the reset ------------------------------------------------------------
+
+/// Destructive by default, the same contract `scyllarate` makes: a bare
+/// invocation of either half empties the index before every level.
+#[test]
+fn the_reset_is_on_unless_it_is_turned_off() {
+    assert!(parse(&a_minimal_command()).resets());
+    assert!(!parse(&[a_minimal_command(), vec!["--no-reset"]].concat()).resets());
+}
+
+#[test]
+fn the_ram_parity_mapping_is_what_a_bare_run_creates() {
+    let args = parse(&a_minimal_command());
+    assert_eq!(args.index_config, DEFAULT_INDEX_CONFIG);
+    assert_eq!(
+        args.index_config()
+            .unwrap()
+            .body()
+            .pointer("/mappings/_source/enabled"),
+        Some(&serde_json::Value::Bool(false))
+    );
+}
+
+#[test]
+fn the_disk_mapping_is_the_opt_in() {
+    let args = parse(&[a_minimal_command(), vec!["--index-config", "disk"]].concat());
+    assert_eq!(
+        args.index_config()
+            .unwrap()
+            .body()
+            .pointer("/mappings/_source/enabled"),
+        None
+    );
+}
+
+#[test]
+fn an_index_config_that_cannot_be_read_fails_before_anything_is_deleted() {
+    let args = parse(&[a_minimal_command(), vec!["--index-config", "/no/such.json"]].concat());
+    assert!(args.index_config().is_err());
+}
+
+/// The campaign runs OpenSearch at more than one refresh interval, and picking
+/// one silently would be choosing the flattering setting for one engine.
+#[test]
+fn the_requested_refresh_interval_reaches_the_config_and_the_header() {
+    let args = parse(&[a_minimal_command(), vec!["--refresh-interval", "30s"]].concat());
+    assert_eq!(
+        args.index_config()
+            .unwrap()
+            .body()
+            .pointer("/settings/index/refresh_interval"),
+        Some(&serde_json::Value::String("30s".to_string()))
+    );
+    assert_eq!(setting(&args, "refresh_interval_requested"), "30s");
+}
+
+#[test]
+fn an_unrequested_refresh_interval_says_where_it_came_from() {
+    assert_eq!(
+        setting(&parse(&a_minimal_command()), "refresh_interval_requested"),
+        REFRESH_INTERVAL_FROM_CONFIG
+    );
+}
+
+/// An index this run did not create is not one it can vouch for the analyzer
+/// of, so `--no-reset` turns the check off with it.
+#[test]
+fn the_analyzer_check_follows_the_reset() {
+    assert!(parse(&a_minimal_command()).checks_analyzer());
+    assert!(!parse(&[a_minimal_command(), vec!["--no-analyzer-check"]].concat()).checks_analyzer());
+    assert!(!parse(&[a_minimal_command(), vec!["--no-reset"]].concat()).checks_analyzer());
+}
+
+#[test]
+fn the_header_records_what_the_reset_was_told_to_do() {
+    let args = parse(&[a_minimal_command(), vec!["--reset-timeout", "42.0"]].concat());
+
+    assert_eq!(setting(&args, "reset_per_level"), "true");
+    assert_eq!(setting(&args, "index_config"), DEFAULT_INDEX_CONFIG);
+    assert_eq!(setting(&args, "reset_timeout_s"), "42");
+    assert_eq!(setting(&args, "analyzer_check"), "true");
+}
+
+#[test]
+fn the_gate_timing_carries_the_requested_timeout() {
+    let args = parse(&[a_minimal_command(), vec!["--reset-timeout", "42.0"]].concat());
+    assert_eq!(args.gate_timing().timeout, Duration::from_secs_f64(42.0));
 }

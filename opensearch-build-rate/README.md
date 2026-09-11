@@ -60,14 +60,80 @@ Its own crate on purpose, too: `bench/.venv` serves the frozen harness
 dependency underneath a recorded run. `Cargo.lock` is committed and the CSV
 header names the exact client versions that produced the numbers.
 
-The index must already exist — apply `bench/opensearch/create_index.sh` first.
-**This tool never issues DDL and never changes a setting**, including
-`refresh_interval`: it reads the interval and records it, so the operator's
-`OS_REFRESH_INTERVAL` choice at creation is the one the header reports. The
-Python loader's `--no-refresh-during-load` has no counterpart here on purpose.
+The index does not have to exist: this tool creates it. See "Destructive by
+default" below for what that means and how to turn it off.
 
 `cargo build --release --no-default-features` drops rustls for a smaller
 binary that reaches `http://` endpoints only; the header says `tls=off`.
+
+## Destructive by default
+
+**Before every concurrency level this deletes the index and creates it again.**
+`--no-reset` turns that off; nothing else does, and the run says which it is
+doing before it does anything:
+
+```text
+index reset ON: DELETING INDEX wiki-articles before every level at http://localhost:9200, recreated from ramindex
+```
+
+It exists because `_id` is the page id. Without a reset the second level
+rewrites the first level's documents, the index does not grow, and every rung
+but the first measures Lucene's *update* path — a delete plus an insert, plus
+the merge work of the tombstones — rather than a cold build.
+`tools/build_rate_point.sh` solves the same problem externally by running one
+point per invocation; this tool runs the whole ladder in one process, so it
+does that cycle itself. `scyllarate` makes the same trade on the ScyllaDB side.
+
+**Two gates make it a measurement rather than a hope.** After the delete the
+tool polls `HEAD /{index}` until the index is gone, because a create that raced
+a settling delete would hand the level the last level's documents. After the
+create it polls `GET /{index}/_count` until it answers `0`, because an index
+whose primary is not allocated answers 503 rather than 0 — the count is the
+readiness check and the emptiness check at once. Each gate fails by name and
+says what it last saw; `--reset-timeout` is how long either may wait.
+
+A create refused with 403 is almost always `DiskThresholdMonitor` re-applying
+`cluster.blocks.create_index`, so that failure says to run
+`make os-relax-watermarks`. This tool does not change cluster settings itself.
+
+### The mapping it creates
+
+`bench/opensearch/index-config-ramindex.json` and `index-config.json` are
+embedded in the binary with `include_str!`, so what this creates cannot drift
+from what `create_index.sh` PUTs, and a bare run needs no argument.
+
+| `--index-config` | What it is |
+|---|---|
+| `ramindex` (default) | the ScyllaDB-parity mapping: `m1_parity` analyzer, `_source` disabled so the index carries postings and ids only — Tantivy's schema — and `refresh_interval` 3s |
+| `disk` | `index-config.json`: same analyzer, document store on, `refresh_interval` 1s |
+| a path | that file, read at startup; a path that cannot be read **fails the run** rather than falling back to a default-configured index |
+
+`--refresh-interval` (or `OS_REFRESH_INTERVAL`) overrides the interval the
+config carries, applied at creation rather than by a later `_settings` PUT, so
+no document is ever indexed under the other value. The header records both what
+was asked for (`refresh_interval_requested`) and what the index came back
+saying (`refresh_interval`).
+
+**`source_enabled=false` in the header is not evidence that the segments are in
+RAM.** That is the other half of the RAM-parity configuration and it is a
+compose knob — `OS_RAM_INDEX=1`, a tmpfs over the data path — which no client
+can set or read back. `OPENSEARCH-RAM-INDEX.md` describes both halves.
+
+After the first create, one `_analyze` probe checks that `m1_parity` tokenizes
+`The U.S. Army in Washington D.C.` exactly as the vector-store does, positions
+included. An analyzer cannot be changed on a live index, so the only useful
+moment to fail is before the first document. It is one probe, not a
+verification: `bench/opensearch/verify_analyzer.sh` is still the full set of 13,
+and what a failure here points at. `--no-analyzer-check` skips it, and so does a
+`--index-config` that declares no `m1_parity` analyzer.
+
+**The index is created twice at startup** — once in the preflight and once
+before level 1. That is deliberate: the CSV header has to describe an index
+built from the config *this* run applied rather than whatever an earlier run
+left behind, and every level has to start from an index of the same age.
+
+With `--no-reset` the index must already exist (apply
+`bench/opensearch/create_index.sh` first) and no DDL is issued at all.
 
 ## Use
 
@@ -97,6 +163,11 @@ row before plotting.
 | `--queue-depth` | 10 | batches buffered per worker; see "Memory" |
 | `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
 | `--out` | `-` | CSV destination; `-` is stdout |
+| `--index-config` | `ramindex` | mapping the index is created from; `disk` or a path |
+| `--refresh-interval` | `$OS_REFRESH_INTERVAL` or the config's own | applied at creation |
+| `--reset-timeout` | 300.0 | seconds either reset gate may wait |
+| `--no-reset` | off | keep the index; see "Destructive by default" |
+| `--no-analyzer-check` | off | skip the `_analyze` parity probe |
 
 Progress goes to stderr once a second, the CSV to `--out`, and a summary table
 to stderr at the end. Exit status is 1 if any point left a document
@@ -175,7 +246,8 @@ reason the batch size is a column rather than a footnote.
 - **`_id` is the page id as a string**, the same choice the Python loader makes.
   The corpus line's `uuid` is ScyllaDB's partition key and is not read here.
   Both are deterministic functions of the page id, so on both engines a repeated
-  level overwrites rather than growing the store.
+  level overwrites rather than growing the store — which is why both halves
+  empty the index between levels rather than relying on that.
 - **A 2xx is not success.** OpenSearch reports per-item failures inside a 200,
   so every reply's items are read. A batch that came back with any item
   rejected costs exactly the documents it lost, contributes no latency sample,
@@ -191,7 +263,9 @@ reason the batch size is a column rather than a footnote.
   both client versions, runtime and worker count, index, shards, replicas,
   `refresh_interval`, whether `_source` is on, the body field's analyzer, the
   nodes' `write` thread-pool size, batch size, latency unit, timeout and queue
-  depth. A chart without those facts is not interpretable.
+  depth — and what the reset was told to do: `reset_per_level`, `index_config`,
+  `refresh_interval_requested`, `reset_timeout_s`, `analyzer_check`. A chart
+  without those facts is not interpretable. The ten CSV *columns* are unchanged.
 
 ### One deliberate difference from the Python loader
 
@@ -220,16 +294,18 @@ walk of the alternation, which `tests/live_http.rs` asserts.
 - Re-run it with a different `--batch-size`. If the rate moves a lot, the
   earlier number was as much about request framing as about indexing.
 
-Because `_id` is the page id, every point overwrites the same documents. The
-index does not grow between points and all levels see the same state — good for
-comparing levels, but past the first run on an empty index you are measuring the
-update path, which in Lucene means a delete plus an insert and more merge work,
-not a cold load.
+Check `reset_per_level`. With the reset on — the default — every point builds
+from zero documents, which is the comparison the chart claims. With
+`--no-reset`, `_id` being the page id means every point overwrites the same
+documents: the index does not grow between points and all levels see the same
+state, but past the first run on an empty index you are measuring the update
+path, which in Lucene means a delete plus an insert and more merge work, not a
+cold load.
 
 ## Tests
 
 ```bash
-cargo test                              # 168 tests, no endpoint needed
+cargo test                              # 207 tests, no endpoint needed
 cargo test -- --include-ignored         # adds the live-endpoint tests below
 cargo clippy --all-targets -- -D warnings
 cargo llvm-cov --summary-only -- --include-ignored
@@ -239,17 +315,28 @@ The channel-and-workers core is covered against a client-shaped fake that
 defers completions, so the in-flight bound is genuinely asserted rather than
 assumed, and the fake can reject part of a batch the way OpenSearch does.
 
-The client, the index check, the cluster read and the `_bulk`-backed inserter
-only exist against a real HTTP endpoint, so `tests/live_http.rs` starts the
-repo's accept-and-discard sink and drives them against it. Those tests are
+The reset is covered against an index-shaped fake endpoint that can be slow in
+the two places the gates exist for — a delete that takes several polls to land,
+a create whose `_count` answers 503 first — and that can acknowledge a delete
+and then do nothing, which is the failure the gates were written for.
+
+The client, the index check, the cluster read, the reset cycle and the
+`_bulk`-backed inserter only exist against a real HTTP endpoint, so
+`tests/live_http.rs` starts the repo's accept-and-discard sink and drives them
+against it. That sink models the index's presence and its document count
+(`ftsbench/sink_index.py`), so a reset ladder run against it ends holding one
+level's documents rather than the ladder's — which is only true if the deletes
+really happened. Those tests are
 `#[ignore]`d by default because they shell out to `bench/.venv`:
 
 ```bash
 cargo test --test live_http -- --ignored
 ```
 
-That sink answers `/`, `HEAD /{index}`, `_bulk`, `_count` and
-`/_nodes/thread_pool`, and nothing else — so such a run reports
+That sink answers `/`, `HEAD /{index}`, `PUT`/`DELETE /{index}`, `_bulk`,
+`_count` and `/_nodes/thread_pool`, and nothing else — it does not answer
+`_analyze`, so the analyzer probe fails against it rather than being skipped,
+and such a run reports
 `index_shards=unknown`, `replicas=unknown` and `distribution=unknown`, and the
 sink notes two unexpected routes on its own stderr. That is correct behaviour,
 not a fault: the header must not claim a shape nobody read. What the run gives

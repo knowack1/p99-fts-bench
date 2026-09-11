@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use super::*;
 use crate::fakes::{
-    a_shape, a_source, a_truncated_source, quiet_notes, some_documents, FakeInserter, SpokenNotes,
+    a_ladder, a_shape, a_source, a_truncated_source, quiet_notes, some_documents,
+    CountingPreparation, FakeInserter, SpokenNotes,
 };
 
 const SLOW: Duration = Duration::from_millis(2);
@@ -39,10 +40,8 @@ async fn sweep_levels(
         Ok(())
     };
     run_sweep(
-        Arc::clone(inserter),
+        a_ladder(Arc::clone(inserter), levels, a_shape(batch_size)),
         || Ok(a_source(documents, batch_size)),
-        levels,
-        a_shape(batch_size),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -299,10 +298,8 @@ async fn a_level_announces_the_documents_it_puts_in_flight() {
     let spoken = SpokenNotes::default();
     let mut collect = |_: PointResult| Ok(());
     run_sweep(
-        an_inserter(Duration::ZERO),
+        a_ladder(an_inserter(Duration::ZERO), &[8], a_shape(5)),
         || Ok(a_source(20, 5)),
-        &[8],
-        a_shape(5),
         &spoken.notes(Duration::from_secs(3600)),
         &Cancel::default(),
         &mut collect,
@@ -420,10 +417,8 @@ async fn a_cancelled_sweep_keeps_the_levels_it_measured() {
     };
     let mut collect = stop_after_first;
     let outcome = run_sweep(
-        an_inserter(Duration::from_millis(1)),
+        a_ladder(an_inserter(Duration::from_millis(1)), &[2, 4], a_shape(5)),
         || Ok(a_source(100, 5)),
-        &[2, 4],
-        a_shape(5),
         &quiet_notes(),
         &cancel,
         &mut collect,
@@ -436,10 +431,8 @@ async fn a_cancelled_sweep_keeps_the_levels_it_measured() {
 async fn a_collector_failure_stops_the_sweep() {
     let mut collect = |_: PointResult| anyhow::bail!("the CSV went away");
     let outcome = run_sweep(
-        an_inserter(Duration::ZERO),
+        a_ladder(an_inserter(Duration::ZERO), &[2, 4], a_shape(5)),
         || Ok(a_source(20, 5)),
-        &[2, 4],
-        a_shape(5),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -453,12 +446,10 @@ async fn an_unopenable_source_stops_the_sweep_before_any_bulk() {
     let inserter = an_inserter(Duration::ZERO);
     let mut collect = |_: PointResult| Ok(());
     let outcome = run_sweep(
-        Arc::clone(&inserter),
+        a_ladder(Arc::clone(&inserter), &[2], a_shape(5)),
         || -> Result<std::vec::IntoIter<Result<DocumentBatch>>> {
             anyhow::bail!("no such corpus")
         },
-        &[2],
-        a_shape(5),
         &quiet_notes(),
         &Cancel::default(),
         &mut collect,
@@ -603,4 +594,84 @@ async fn a_cancel_triggered_during_the_wait_wakes_the_waiter() {
     });
     cancel.wait().await;
     assert!(cancel.is_set());
+}
+
+/// The reset runs per level, not once per ladder: a level that inherited the
+/// last level's documents measures Lucene's update path instead of a build.
+#[tokio::test]
+async fn every_level_is_prepared_before_it_runs() {
+    let preparation = CountingPreparation::default();
+    let inserter = an_inserter(Duration::ZERO);
+    let mut collect = |_: PointResult| Ok(());
+    run_sweep(
+        Ladder {
+            inserter: Arc::clone(&inserter),
+            before_level: &preparation,
+            levels: &[2, 4, 8],
+            shape: a_shape(5),
+        },
+        || Ok(a_source(20, 5)),
+        &quiet_notes(),
+        &Cancel::default(),
+        &mut collect,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!((preparation.prepared(), inserter.bulks()), (3, 12));
+}
+
+#[tokio::test]
+async fn a_level_that_cannot_be_prepared_is_not_measured() {
+    let preparation = CountingPreparation::failing_at(2);
+    let inserter = an_inserter(Duration::ZERO);
+    let mut measured = Vec::new();
+    let mut collect = |result: PointResult| {
+        measured.push(result.concurrency);
+        Ok(())
+    };
+    let outcome = run_sweep(
+        Ladder {
+            inserter: Arc::clone(&inserter),
+            before_level: &preparation,
+            levels: &[2, 4, 8],
+            shape: a_shape(5),
+        },
+        || Ok(a_source(20, 5)),
+        &quiet_notes(),
+        &Cancel::default(),
+        &mut collect,
+    )
+    .await;
+
+    assert!(format!("{:#}", outcome.unwrap_err()).contains("would not empty"));
+    assert_eq!(
+        measured,
+        [2],
+        "the level after the failed reset was measured"
+    );
+}
+
+/// Preparation comes before the corpus is opened and before any bulk: an index
+/// emptied after the first documents landed would take them with it.
+#[tokio::test]
+async fn nothing_is_offered_before_the_level_is_prepared() {
+    let preparation = CountingPreparation::failing_at(1);
+    let inserter = an_inserter(Duration::ZERO);
+    let mut collect = |_: PointResult| Ok(());
+    let outcome = run_sweep(
+        Ladder {
+            inserter: Arc::clone(&inserter),
+            before_level: &preparation,
+            levels: &[2],
+            shape: a_shape(5),
+        },
+        || Ok(a_source(20, 5)),
+        &quiet_notes(),
+        &Cancel::default(),
+        &mut collect,
+    )
+    .await;
+
+    assert!(outcome.is_err() && inserter.bulks() == 0);
 }

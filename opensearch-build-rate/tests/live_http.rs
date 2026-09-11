@@ -34,7 +34,8 @@ use osrate::corpus::CorpusSource;
 use osrate::insert::BulkInserter;
 use osrate::notes::Notes;
 use osrate::report::PointResult;
-use osrate::sweep::{self, Cancel, Inserter, Shape};
+use osrate::reset::{GateTiming, IndexConfig, IndexReset, DEFAULT_INDEX_CONFIG};
+use osrate::sweep::{self, Cancel, Inserter, Ladder, NothingToPrepare, Shape};
 
 const BENCH_ROOT: &str = "..";
 const VENV_PYTHON: &str = ".venv/bin/python3";
@@ -120,6 +121,17 @@ fn a_shape() -> Shape {
     Shape {
         batch_size: BATCH,
         queue_depth: 2,
+    }
+}
+
+static NOTHING_TO_PREPARE: NothingToPrepare = NothingToPrepare;
+
+fn a_ladder<I: Inserter>(inserter: Arc<I>, levels: &[usize], shape: Shape) -> Ladder<'_, I> {
+    Ladder {
+        inserter,
+        before_level: &NOTHING_TO_PREPARE,
+        levels,
+        shape,
     }
 }
 
@@ -209,10 +221,8 @@ async fn the_endpoint_counts_exactly_the_documents_that_were_offered() {
     let mut collect = |_: PointResult| Ok(());
 
     sweep::run_sweep(
-        Arc::clone(&inserter),
+        a_ladder(Arc::clone(&inserter), &[4], a_shape()),
         || source.open(),
-        &[4],
-        a_shape(),
         &quiet(),
         &Cancel::default(),
         &mut collect,
@@ -237,10 +247,8 @@ async fn a_whole_ladder_runs_against_a_live_endpoint() {
             Ok(())
         };
         sweep::run_sweep(
-            Arc::new(an_inserter(&sink).await),
+            a_ladder(Arc::new(an_inserter(&sink).await), &[4, 16], a_shape()),
             || source.open(),
-            &[4, 16],
-            a_shape(),
             &quiet(),
             &Cancel::default(),
             &mut collect,
@@ -268,4 +276,102 @@ async fn an_endpoint_that_is_not_listening_is_reported_not_hung_on() {
     };
     let failure = format!("{:#}", client::connect(&options).await.unwrap_err());
     assert!(failure.contains("cannot reach"));
+}
+
+fn a_reset(sink: &NullSink, client: OpenSearch) -> IndexReset {
+    IndexReset::new(
+        client,
+        INDEX,
+        sink.url(),
+        IndexConfig::select(DEFAULT_INDEX_CONFIG).unwrap(),
+        GateTiming {
+            poll_interval: Duration::from_millis(10),
+            timeout: Duration::from_secs(10),
+        },
+        quiet(),
+    )
+}
+
+/// The reset cycle over a real socket: a delete the endpoint acknowledges, a
+/// `HEAD` that then says absent, a create, and a `_count` that says zero.
+#[tokio::test]
+#[ignore = "needs bench/.venv to run the null sink"]
+async fn a_reset_empties_the_index_over_a_live_endpoint() {
+    let sink = NullSink::start();
+    let inserter = Arc::new(an_inserter(&sink).await);
+    let (_tmp, path) = a_corpus(100);
+    let source = CorpusSource::new(&path, 0, BATCH);
+    let mut collect = |_: PointResult| Ok(());
+
+    sweep::run_sweep(
+        a_ladder(Arc::clone(&inserter), &[4], a_shape()),
+        || source.open(),
+        &quiet(),
+        &Cancel::default(),
+        &mut collect,
+    )
+    .await
+    .unwrap();
+    assert_eq!(documents_accepted(inserter.client()).await, 100);
+
+    a_reset(&sink, inserter.client().clone())
+        .ensure_fresh()
+        .await
+        .unwrap();
+    assert_eq!(documents_accepted(inserter.client()).await, 0);
+}
+
+/// The whole point: with the reset on, each level builds from zero, so what
+/// the endpoint holds at the end is one level's documents rather than the
+/// ladder's. Without it this count would be the same either way, because `_id`
+/// is the page id and every level overwrites the last.
+#[tokio::test]
+#[ignore = "needs bench/.venv to run the null sink"]
+async fn every_level_of_a_reset_ladder_builds_from_zero() {
+    let sink = NullSink::start();
+    let inserter = Arc::new(an_inserter(&sink).await);
+    let reset = a_reset(&sink, inserter.client().clone());
+    let (_tmp, path) = a_corpus(200);
+    let source = CorpusSource::new(&path, 0, BATCH);
+    let mut results: Vec<PointResult> = Vec::new();
+
+    {
+        let mut collect = |result: PointResult| {
+            results.push(result);
+            Ok(())
+        };
+        sweep::run_sweep(
+            Ladder {
+                inserter: Arc::clone(&inserter),
+                before_level: &reset,
+                levels: &[4, 8, 16],
+                shape: a_shape(),
+            },
+            || source.open(),
+            &quiet(),
+            &Cancel::default(),
+            &mut collect,
+        )
+        .await
+        .unwrap();
+    }
+
+    assert!(results.iter().all(|point| point.docs == 200));
+    assert_eq!(documents_accepted(inserter.client()).await, 200);
+}
+
+/// The analyzer probe is a real `_analyze` request, and the sink does not
+/// answer that route — which is the failure an operator should see rather than
+/// a silently skipped check.
+#[tokio::test]
+#[ignore = "needs bench/.venv to run the null sink"]
+async fn an_endpoint_that_cannot_analyze_fails_the_check_rather_than_skipping_it() {
+    let sink = NullSink::start();
+    let client = client::connect(&sink.options()).await.unwrap();
+    let failure = format!(
+        "{:#}",
+        a_reset(&sink, client).verify_analyzer().await.unwrap_err()
+    );
+
+    assert!(failure.contains("m1_parity"), "{failure}");
 }

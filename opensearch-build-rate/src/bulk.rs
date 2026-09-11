@@ -22,7 +22,9 @@ const ASSUMED_STATUS: u64 = 200;
 const BYTES_PER_DOCUMENT: usize = 2048;
 
 /// `_id` is named on every action, so resending a batch overwrites rather than
-/// duplicating — which is what makes a repeated level measurable at all.
+/// duplicating. That keeps a repeated level's document count honest; what makes
+/// the level a *build* rather than an update is `reset.rs` emptying the index
+/// before it.
 #[derive(Serialize)]
 struct IndexAction<'a> {
     index: IndexTarget<'a>,

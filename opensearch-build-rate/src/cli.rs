@@ -9,6 +9,7 @@ use clap::Parser;
 
 use crate::client::ConnectOptions;
 use crate::report::LATENCY_UNIT;
+use crate::reset::{GateTiming, IndexConfig, DEFAULT_INDEX_CONFIG};
 use crate::sweep::QUEUE_DEPTH_PER_WORKER;
 
 pub const DEFAULT_URL: &str = "http://localhost:9200";
@@ -20,6 +21,11 @@ pub const DEFAULT_BATCH_SIZE: &str = "512";
 /// saturated engine takes a long time to answer, and a shorter timeout would
 /// report the client giving up as the engine failing.
 pub const DEFAULT_REQUEST_TIMEOUT_S: &str = "120.0";
+/// `scyllarate`'s `--reset-timeout`. A gate that waits this long and still has
+/// not seen the index it asked for is describing a broken endpoint, not a slow
+/// one.
+pub const DEFAULT_RESET_TIMEOUT_S: &str = "300.0";
+pub const RESET_POLL_INTERVAL_S: f64 = 0.5;
 pub const STDOUT: &str = "-";
 
 #[derive(Debug, Parser)]
@@ -29,7 +35,10 @@ pub const STDOUT: &str = "-";
     long_about = "Measures how fast this client can submit _bulk requests to OpenSearch, per \
 concurrency level. That is a submit rate, not a searchable-index rate: a bulk OpenSearch has \
 acknowledged is in the translog and the in-memory buffer, and is not visible to search until a \
-refresh."
+refresh.\n\n\
+DESTRUCTIVE BY DEFAULT: before every concurrency level this DELETES THE INDEX and creates it \
+again from the embedded mapping, so that each level builds from zero documents. Pass --no-reset \
+to leave the index alone."
 )]
 pub struct Args {
     /// Corpus JSONL: one {id, title, text} per line
@@ -69,6 +78,29 @@ pub struct Args {
     /// CSV destination; '-' writes to stdout
     #[arg(long, default_value = STDOUT)]
     pub out: String,
+
+    /// Mapping the index is created from: 'ramindex', 'disk', or a path to a
+    /// JSON file
+    #[arg(long, default_value = DEFAULT_INDEX_CONFIG)]
+    pub index_config: String,
+
+    /// refresh_interval to create the index with; unset keeps the config's own
+    #[arg(long, env = "OS_REFRESH_INTERVAL")]
+    pub refresh_interval: Option<String>,
+
+    /// Seconds each reset gate may wait for the endpoint
+    #[arg(long, default_value = DEFAULT_RESET_TIMEOUT_S)]
+    pub reset_timeout: f64,
+
+    /// Keep the index: do not delete and recreate it before each level. Levels
+    /// after the first then overwrite the same documents, so only the first
+    /// measures a build and the rest measure Lucene's update path.
+    #[arg(long)]
+    pub no_reset: bool,
+
+    /// Do not check that the index analyzes text the way the vector-store does.
+    #[arg(long)]
+    pub no_analyzer_check: bool,
 }
 
 impl Args {
@@ -84,6 +116,35 @@ impl Args {
         }
     }
 
+    pub fn resets(&self) -> bool {
+        !self.no_reset
+    }
+
+    /// Only when the index is one this run built: a `--no-reset` run loads into
+    /// whatever was there, and an analyzer it did not choose is the operator's
+    /// to vouch for.
+    pub fn checks_analyzer(&self) -> bool {
+        self.resets() && !self.no_analyzer_check
+    }
+
+    pub fn index_config(&self) -> Result<IndexConfig, anyhow::Error> {
+        IndexConfig::select(&self.index_config)?
+            .with_refresh_interval(self.refresh_interval.as_deref())
+    }
+
+    fn refresh_interval_setting(&self) -> String {
+        self.refresh_interval
+            .clone()
+            .unwrap_or_else(|| REFRESH_INTERVAL_FROM_CONFIG.to_string())
+    }
+
+    pub fn gate_timing(&self) -> GateTiming {
+        GateTiming {
+            poll_interval: Duration::from_secs_f64(RESET_POLL_INTERVAL_S),
+            timeout: Duration::from_secs_f64(self.reset_timeout),
+        }
+    }
+
     pub fn settings(&self) -> Vec<(String, String)> {
         [
             ("batch_size", self.batch_size.to_string()),
@@ -94,12 +155,25 @@ impl Args {
             ("tokio_workers", self.tokio_workers().to_string()),
             ("corpus", self.corpus.display().to_string()),
             ("max_docs", self.max_docs.to_string()),
+            ("reset_per_level", self.resets().to_string()),
+            ("index_config", self.index_config.clone()),
+            (
+                "refresh_interval_requested",
+                self.refresh_interval_setting(),
+            ),
+            ("reset_timeout_s", self.reset_timeout.to_string()),
+            ("analyzer_check", self.checks_analyzer().to_string()),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect()
     }
 }
+
+/// What was *asked* for, not what the index ended up with: the cluster read
+/// reports the interval the endpoint confirms, and the two disagreeing is
+/// something the header should be able to show.
+pub const REFRESH_INTERVAL_FROM_CONFIG: &str = "from-index-config";
 
 pub fn available_cores() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get())

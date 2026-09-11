@@ -6,6 +6,7 @@ pub mod corpus;
 pub mod insert;
 pub mod notes;
 pub mod report;
+pub mod reset;
 pub mod sweep;
 
 #[cfg(test)]

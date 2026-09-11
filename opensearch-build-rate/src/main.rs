@@ -4,6 +4,10 @@
 //! concurrency level. That is a submit rate, not a searchable-index rate: a
 //! bulk OpenSearch has acknowledged is in the translog and the in-memory
 //! buffer, and is not visible to search until a refresh.
+//!
+//! **Destructive by default**: the index is deleted and recreated before every
+//! level, so that each level builds from zero documents rather than rewriting
+//! the last level's.
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -18,7 +22,8 @@ use osrate::corpus::CorpusSource;
 use osrate::insert::BulkInserter;
 use osrate::notes::Notes;
 use osrate::report::{note, summary_table, CsvSink, PointResult};
-use osrate::sweep::{self, Cancel, Shape};
+use osrate::reset::IndexReset;
+use osrate::sweep::{self, BeforeLevel, Cancel, Ladder, NothingToPrepare, Shape};
 
 fn main() -> ExitCode {
     match run(Args::parse()) {
@@ -48,25 +53,90 @@ fn build_runtime(workers: usize) -> Result<Runtime> {
 
 async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
     let client = client::connect(&args.connect_options()).await?;
+    let notes = Notes::stderr();
+    announce_reset(&args);
+    let reset = open_reset(&args, &client, &notes)?;
+    prepare_the_index(&args, &client, reset.as_deref()).await?;
+
     let cluster = client::read_cluster(&client, &args.index, workers).await?;
     describe(&cluster);
 
     let mut sink = CsvSink::open(&args.out)?;
     sink.write_preamble(&cluster, &args.settings())?;
-    let (results, aborted) = sweep_levels(&args, client, &mut sink).await;
+    let (results, aborted) = sweep_levels(&args, client, reset.as_deref(), &notes, &mut sink).await;
 
     echo_summary(&results);
     Ok(exit_code(&results, aborted))
 }
 
+fn open_reset(args: &Args, client: &OpenSearch, notes: &Notes) -> Result<Option<Box<IndexReset>>> {
+    if !args.resets() {
+        return Ok(None);
+    }
+    Ok(Some(Box::new(IndexReset::new(
+        client.clone(),
+        &args.index,
+        &args.connect_options().url,
+        args.index_config()?,
+        args.gate_timing(),
+        notes.clone(),
+    ))))
+}
+
+/// The index is built once here and again before level 1. That is deliberate:
+/// the header has to describe an index created from the config this run
+/// applied — not whatever an earlier run left behind — and the analyzer cannot
+/// be checked before there is an index to check it on.
+async fn prepare_the_index(
+    args: &Args,
+    client: &OpenSearch,
+    reset: Option<&IndexReset>,
+) -> Result<()> {
+    let Some(reset) = reset else {
+        return client::require_index(client, &args.index).await;
+    };
+    reset.ensure_fresh().await?;
+    if args.checks_analyzer() {
+        reset.verify_analyzer().await?;
+    }
+    Ok(())
+}
+
+/// A run that deletes an index says so before it does it, naming the index and
+/// the endpoint. The reset defaults to on, so this one line is the only thing
+/// standing between a mistyped `--url` and someone's data.
+fn announce_reset(args: &Args) {
+    note(&reset_line(args));
+}
+
+fn reset_line(args: &Args) -> String {
+    if !args.resets() {
+        return "index reset OFF (--no-reset): levels after the first rewrite the same \
+                documents, so only the first measures a build"
+            .to_string();
+    }
+    format!(
+        "index reset ON: DELETING INDEX {} before every level at {}, recreated from {}",
+        args.index,
+        args.connect_options().url,
+        args.index_config
+    )
+}
+
 async fn sweep_levels(
     args: &Args,
     client: OpenSearch,
+    reset: Option<&IndexReset>,
+    notes: &Notes,
     sink: &mut CsvSink,
 ) -> (Vec<PointResult>, bool) {
     let inserter = Arc::new(BulkInserter::new(client, &args.index));
     let source = CorpusSource::new(&args.corpus, args.max_docs, args.batch_size);
-    let notes = Notes::stderr();
+    let nothing = NothingToPrepare;
+    let before_level: &dyn BeforeLevel = match reset {
+        Some(reset) => reset,
+        None => &nothing,
+    };
     let cancel = watch_for_interrupt();
     let mut results: Vec<PointResult> = Vec::new();
 
@@ -77,11 +147,14 @@ async fn sweep_levels(
             Ok(())
         };
         sweep::run_sweep(
-            inserter,
+            Ladder {
+                inserter,
+                before_level,
+                levels: &args.concurrency.0,
+                shape: shape(args),
+            },
             || source.open(),
-            &args.concurrency.0,
-            shape(args),
-            &notes,
+            notes,
             &cancel,
             &mut collect,
         )

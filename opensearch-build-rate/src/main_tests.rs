@@ -135,3 +135,36 @@ fn the_shape_carries_both_knobs_from_the_command_line() {
     let shape = shape(&args);
     assert_eq!((shape.batch_size, shape.queue_depth), (256, 3));
 }
+
+fn args_from(argv: &[&str]) -> Args {
+    Args::try_parse_from(
+        ["osrate", "--corpus", "c.jsonl", "--concurrency", "24"]
+            .into_iter()
+            .chain(argv.iter().copied()),
+    )
+    .unwrap()
+}
+
+/// The one line between a mistyped `--url` and someone's data, so it has to
+/// name both the index and the endpoint.
+#[test]
+fn a_destructive_run_says_what_it_is_about_to_delete_and_where() {
+    let said = reset_line(&args_from(&[
+        "--url",
+        "http://os-1:9200",
+        "--index",
+        "wiki-articles",
+    ]));
+
+    assert!(said.contains("DELETING INDEX wiki-articles"), "{said}");
+    assert!(said.contains("http://os-1:9200"), "{said}");
+    assert!(said.contains("ramindex"), "{said}");
+}
+
+#[test]
+fn a_run_that_keeps_the_index_says_what_that_costs() {
+    let said = reset_line(&args_from(&["--no-reset"]));
+
+    assert!(said.contains("--no-reset"), "{said}");
+    assert!(said.contains("only the first measures a build"), "{said}");
+}

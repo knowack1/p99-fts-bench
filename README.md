@@ -179,7 +179,7 @@ FTS-enabled cluster, which stock images do not provide.
 | `ftsbench/engines.py` | The two query clients — one query text, two engines |
 | `ftsbench/analyzer.py` | M1-parity tokenizer used for query generation |
 | `opensearch/index-config.json` | Analyzer-parity index settings + mappings |
-| `opensearch/create_index.sh` / `verify_analyzer.sh` | Index creation and `_analyze` parity checks |
+| `opensearch/create_index.sh` / `verify_analyzer.sh` | Index creation and `_analyze` parity checks. `opensearch-build-rate/osrate` embeds the same index configs and creates the index itself, one probe of the same parity set included |
 | `scylladb/schema.cql` / `index.cql` | Keyspace/table and the `fulltext_index`, split so ingest ordering is a choice |
 | `docker/docker-compose.opensearch.yml` | Single-node OpenSearch for the local pipeline |
 
