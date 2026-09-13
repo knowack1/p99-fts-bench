@@ -21,7 +21,7 @@ use osrate::client::{self, Cluster};
 use osrate::corpus::CorpusSource;
 use osrate::insert::BulkInserter;
 use osrate::notes::{note, Notes};
-use osrate::report::{summary_table, CsvSink, PointResult};
+use osrate::report::{self, summary_table, CsvSink, PointResult};
 use osrate::reset::IndexReset;
 use osrate::sweep::{self, BeforeLevel, Cancel, Ladder, NothingToPrepare, Shape};
 
@@ -62,7 +62,7 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
     describe(&cluster);
 
     let mut sink = CsvSink::open(&args.out)?;
-    sink.write_preamble(&cluster, &args.settings())?;
+    sink.write_preamble(&report::header_lines(&cluster, &args.settings()))?;
     let (results, aborted) = sweep_levels(&args, client, reset.as_deref(), &notes, &mut sink).await;
 
     echo_summary(&results);

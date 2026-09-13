@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use tokio::task::JoinSet;
 
+pub use crate::report::IndexBuild;
+
 use crate::notes::Notes;
 use crate::samples::{rate, status_of, IndexSample, Sample, Submitted, Tape};
 use crate::vstore::{IndexProbe, IndexState};
@@ -26,17 +28,6 @@ pub struct WatchTiming {
     pub poll_interval: Duration,
     pub settle_timeout: Duration,
     pub idle_timeout: Duration,
-}
-
-/// What the index did during one level.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexBuild {
-    pub docs: u64,
-    pub docs_per_s: f64,
-    pub lag_docs: u64,
-    pub settle_s: f64,
-    pub settled: bool,
-    pub status: String,
 }
 
 /// The vector-store, or nothing at all when `--no-index-watch` was given.

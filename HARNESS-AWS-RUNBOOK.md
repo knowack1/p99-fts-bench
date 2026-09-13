@@ -706,21 +706,38 @@ cannot silently mix two batch sizes — but a *reader* still can.
 At `--batch-size 1` the two units coincide, which is the shape Part A measures.
 That level is what makes the batch curve answerable rather than merely drawn.
 
-The CSV columns, in order — the first seven are shared, and then the two halves
-diverge: `osrate` has ten columns where `scyllarate` has thirteen, so an `awk`
-field index written past column 7 for one half is wrong on the other:
+The CSV columns, in order. **Both halves write all seventeen**, so an `awk`
+field index means the same field on either — which it did not before, where the
+two diverged after column 7 and any index written past it for one half was
+wrong on the other:
 
 ```
-both     1 concurrency  2 docs  3 errors  4 wall_s  5 docs_per_s  6 p50_ms  7 p99_ms
-osrate   8 batch_size  9 bulks  10 failed_bulks
-scyllarate  8 index_docs  9 index_docs_per_s  10 index_lag_docs
-            11 index_settle_s  12 index_settled  13 index_status
+1 concurrency  2 docs  3 errors  4 wall_s  5 docs_per_s  6 p50_ms  7 p99_ms
+8 batch_size  9 requests  10 failed_requests
+11 index_docs  12 index_docs_per_s  13 index_lag_docs
+14 index_settle_s  15 index_settled  16 index_status
+17 engine
 ```
+
+`requests` and `failed_requests` were `bulks` and `failed_bulks`: at one
+document per request they equal `docs` and `errors`, which is what makes
+`docs / requests` the effective batch size a reader can check column 8 against.
+
+A column an engine cannot fill is **blank, never zero** — the rule the latency
+columns already followed, because a zero plots as the best point on the curve
+while a blank plots as nothing. `scyllarate` writes `batch_size=1` always; a
+row with no index watch leaves columns 11-16 empty.
+
+**Column 17 is what tells the halves apart.** `tools/plot_harness_grid.py` used
+to decide by whether a `batch_size` column existed, which both halves now pass —
+so without `engine` every ScyllaDB point would be relabelled `osrate batch=1`,
+and with both globs given the two lines would merge and be averaged. It still
+falls back to the old test for CSVs recorded before the column existed.
 
 `scyllarate`'s index columns come from the sink's vector-store half, which
 reports the documents its CQL half accepted. They give the **build-rate**
 figure its own client ceiling, measured with the reading the engine campaign
-uses (`ftsbench.samplers.ScyllaSampler`). `osrate` has no counterpart today.
+uses (`ftsbench.samplers.ScyllaSampler`).
 
 **The corpus is the same file.** `osrate` does not read the line's `uuid` — it
 is ScyllaDB's partition key — so the corpus built in Phase 4 serves both parts
@@ -962,10 +979,13 @@ for f in $R/opensearch/points/*.csv; do
                        || echo "  BLAD $(basename $f) name=$want column=$got"
 done
 
-# no failed inserts (col 3) and no rejected bulks (col 10) anywhere.
+# no failed inserts (col 3) and no rejected requests (col 10) anywhere.
 # A 429 in the first failure is queue rejection, not saturation.
+# Columns 3, 4, 8 and 10 kept their positions through the schema merge, so these
+# three gates read the same fields they always did -- and now also run unchanged
+# against Part A's CSVs.
 awk -F, '!/^#/ && $1!="concurrency" && ($3+0>0 || $10+0>0) \
-         {print FILENAME": errors="$3" failed_bulks="$10}' $R/opensearch/points/*.csv
+         {print FILENAME": errors="$3" failed_requests="$10}' $R/opensearch/points/*.csv
 
 # every point ran long enough to be a measurement (wall_s is col 4)
 awk -F, '!/^#/ && $1!="concurrency" && $4+0<3 \

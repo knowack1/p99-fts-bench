@@ -64,7 +64,7 @@ async fn a_point_delivers_every_document_once() {
 async fn a_point_sends_one_bulk_per_batch() {
     let inserter = an_inserter(Duration::ZERO);
     let result = measure(&inserter, 50, 4, 10).await.unwrap();
-    assert_eq!((result.bulks, inserter.bulks()), (5, 5));
+    assert_eq!((result.requests, inserter.bulks()), (5, 5));
 }
 
 #[tokio::test]
@@ -146,7 +146,7 @@ async fn a_bulk_that_failed_whole_costs_every_document_it_carried() {
     .await
     .unwrap();
     assert_eq!(
-        (result.docs, result.errors, result.bulks, result.failed_bulks),
+        (result.docs, result.errors, result.requests, result.failed_requests),
         (15, 5, 3, 1)
     );
 }
@@ -182,14 +182,14 @@ async fn only_a_clean_bulk_contributes_a_latency_sample() {
     )
     .await
     .unwrap();
-    assert_eq!((result.bulks, result.failed_bulks), (3, 1));
+    assert_eq!((result.requests, result.failed_requests), (3, 1));
 }
 
 #[tokio::test]
 async fn an_empty_corpus_produces_an_empty_point() {
     let result = measure(&an_inserter(Duration::ZERO), 0, 4, 5).await.unwrap();
     assert_eq!(
-        (result.docs, result.errors, result.bulks, result.p99_ms),
+        (result.docs, result.errors, result.requests, result.p99_ms),
         (0, 0, 0, None)
     );
 }
@@ -481,7 +481,7 @@ fn summarize_divides_delivered_documents_by_the_wall() {
     let counters = some_clean_bulks(&[1.0, 2.0, 3.0, 4.0], 10);
     let result = summarize(a_test_point(4), &counters, 2.0);
     assert_eq!(
-        (result.docs, result.bulks, result.docs_per_s, result.p99_ms),
+        (result.docs, result.requests, result.docs_per_s, result.p99_ms),
         (40, 4, 20.0, Some(4.0))
     );
 }
@@ -492,7 +492,7 @@ fn summarize_keeps_failures_out_of_the_rate_and_the_percentiles() {
     counters.record_failed_bulk(10, anyhow::anyhow!("connection reset"));
     let result = summarize(a_test_point(2), &counters, 1.0);
     assert_eq!(
-        (result.docs, result.errors, result.docs_per_s, result.bulks),
+        (result.docs, result.errors, result.docs_per_s, result.requests),
         (10, 10, 10.0, 1)
     );
 }

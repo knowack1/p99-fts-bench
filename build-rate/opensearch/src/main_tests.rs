@@ -2,16 +2,18 @@ use super::*;
 
 fn a_point(concurrency: usize, errors: u64) -> PointResult {
     PointResult {
+        engine: report::ENGINE,
         concurrency,
         batch_size: 512,
         docs: 100,
         errors,
-        bulks: 10,
-        failed_bulks: if errors > 0 { 1 } else { 0 },
+        requests: 10,
+        failed_requests: if errors > 0 { 1 } else { 0 },
         wall_s: 2.0,
         docs_per_s: 50.0,
         p50_ms: Some(1.5),
         p99_ms: Some(9.0),
+        index: None,
     }
 }
 

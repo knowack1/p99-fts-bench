@@ -13,59 +13,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
 
-use crate::build_rate::IndexBuild;
 use crate::corpus::InsertParams;
 use crate::notes::Notes;
-use crate::report::PointResult;
 use crate::samples::Submitted;
 use crate::session::Topology;
 use crate::sweep::Inserter;
-
-pub fn a_point(concurrency: usize) -> PointResult {
-    a_point_with_latency(concurrency, Some(1.5), Some(9.0))
-}
-
-pub fn a_point_with_errors(concurrency: usize, errors: u64) -> PointResult {
-    PointResult {
-        errors,
-        ..a_point(concurrency)
-    }
-}
-
-pub fn a_point_with_latency(
-    concurrency: usize,
-    p50_ms: Option<f64>,
-    p99_ms: Option<f64>,
-) -> PointResult {
-    PointResult {
-        concurrency,
-        docs: 100,
-        errors: 0,
-        wall_s: 2.0,
-        docs_per_s: 50.0,
-        p50_ms,
-        p99_ms,
-        index: None,
-    }
-}
-
-pub fn a_point_with_index(concurrency: usize, build: IndexBuild) -> PointResult {
-    PointResult {
-        index: Some(build),
-        ..a_point(concurrency)
-    }
-}
-
-pub fn an_index_build(docs: u64, settled: bool) -> IndexBuild {
-    IndexBuild {
-        docs,
-        docs_per_s: 1234.5,
-        lag_docs: if settled { 0 } else { 42 },
-        settle_s: 3.5,
-        settled,
-        status: "SERVING".to_string(),
-    }
-}
 
 pub fn a_topology() -> Topology {
     Topology {

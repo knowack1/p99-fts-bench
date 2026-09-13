@@ -16,44 +16,12 @@ use crate::bulk::BulkOutcome;
 use crate::client::Cluster;
 use crate::corpus::{BulkDoc, DocumentBatch};
 use crate::notes::Notes;
-use crate::report::PointResult;
 use crate::sweep::{Inserter, Ladder, NothingToPrepare, Shape};
 
 pub fn a_shape(batch_size: usize) -> Shape {
     Shape {
         batch_size,
         queue_depth: 2,
-    }
-}
-
-pub fn a_point(concurrency: usize) -> PointResult {
-    a_point_with_latency(concurrency, Some(1.5), Some(9.0))
-}
-
-pub fn a_point_with_errors(concurrency: usize, errors: u64) -> PointResult {
-    PointResult {
-        errors,
-        failed_bulks: 1,
-        ..a_point(concurrency)
-    }
-}
-
-pub fn a_point_with_latency(
-    concurrency: usize,
-    p50_ms: Option<f64>,
-    p99_ms: Option<f64>,
-) -> PointResult {
-    PointResult {
-        concurrency,
-        batch_size: 10,
-        docs: 100,
-        errors: 0,
-        bulks: 10,
-        failed_bulks: 0,
-        wall_s: 2.0,
-        docs_per_s: 50.0,
-        p50_ms,
-        p99_ms,
     }
 }
 

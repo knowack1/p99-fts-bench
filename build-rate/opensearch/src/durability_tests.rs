@@ -68,7 +68,7 @@ async fn points_measured_before_a_mid_sweep_failure_are_still_on_disk() {
     let destination = tmp.path().join("sweep.csv");
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
-    sink.write_preamble(&a_cluster(), &[]).unwrap();
+    sink.write_preamble(&crate::report::header_lines(&a_cluster(), &[])).unwrap();
     let outcome = sweep_into(&mut sink, a_source_that_breaks_after(20, 2), &[2, 4, 8]).await;
     drop(sink);
 
@@ -83,7 +83,7 @@ async fn a_clean_ladder_writes_every_level_it_was_asked_for() {
     let destination = tmp.path().join("sweep.csv");
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
-    sink.write_preamble(&a_cluster(), &[]).unwrap();
+    sink.write_preamble(&crate::report::header_lines(&a_cluster(), &[])).unwrap();
     let outcome = sweep_into(&mut sink, a_source_that_breaks_after(20, 99), &[2, 4]).await;
     drop(sink);
 
@@ -99,7 +99,7 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
     let cancel = Cancel::default();
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
-    sink.write_preamble(&a_cluster(), &[]).unwrap();
+    sink.write_preamble(&crate::report::header_lines(&a_cluster(), &[])).unwrap();
     let outcome = {
         let stop = cancel.clone();
         let mut collect = move |result: PointResult| -> Result<()> {

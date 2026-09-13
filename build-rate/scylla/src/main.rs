@@ -14,7 +14,7 @@ use scyllarate::build_rate::IndexWatch;
 use scyllarate::cli::Args;
 use scyllarate::corpus::CorpusSource;
 use scyllarate::notes::{note, Notes};
-use scyllarate::report::{summary_table, CsvSink, PointResult};
+use scyllarate::report::{self, summary_table, CsvSink, PointResult};
 use scyllarate::reset::ResettingInserters;
 use scyllarate::samples::SampleFiles;
 use scyllarate::session::{self, Topology};
@@ -56,7 +56,7 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
     announce_reset(&args);
     let settings = settings_with_index(&args, probe.as_deref()).await;
     let mut sink = CsvSink::open(&args.out)?;
-    sink.write_preamble(&topology, &settings)?;
+    sink.write_preamble(&report::header_lines(&topology, &settings))?;
     let samples = open_samples(&args, &topology, &settings)?;
     let (results, aborted) = sweep_levels(&args, session, probe, &mut sink, samples.as_ref()).await;
 

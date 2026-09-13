@@ -360,16 +360,18 @@ pub fn summarize(point: Point, counters: &Counters, wall_s: f64) -> PointResult 
     let mut latencies = counters.latencies_ms.clone();
     latencies.sort_by(f64::total_cmp);
     PointResult {
+        engine: crate::report::ENGINE,
         concurrency: point.concurrency,
         batch_size: point.batch_size,
         docs: counters.docs,
         errors: counters.doc_errors,
-        bulks: counters.bulks,
-        failed_bulks: counters.failed_bulks,
+        requests: counters.bulks,
+        failed_requests: counters.failed_bulks,
         wall_s,
         docs_per_s: rate(counters.docs, wall_s),
         p50_ms: percentile(&latencies, 0.50),
         p99_ms: percentile(&latencies, 0.99),
+        index: None,
     }
 }
 
@@ -385,7 +387,7 @@ fn announce(notes: &Notes, result: &PointResult) {
     notes.say(&format!(
         "  -> {} docs in {} bulks in {:.2}s = {:.1} docs/s, p99 {} ms/bulk, {} undelivered docs",
         result.docs,
-        result.bulks,
+        result.requests,
         result.wall_s,
         result.docs_per_s,
         latency_text(result.p99_ms),

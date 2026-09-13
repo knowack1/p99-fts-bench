@@ -319,9 +319,13 @@ pub fn summarize(concurrency: usize, counters: &Counters, wall_s: f64) -> PointR
     let mut latencies = counters.latencies_ms.clone();
     latencies.sort_by(f64::total_cmp);
     PointResult {
+        engine: crate::report::ENGINE,
         concurrency,
+        batch_size: crate::report::BATCH_SIZE,
         docs: counters.ok,
         errors: counters.errors,
+        requests: counters.ok,
+        failed_requests: counters.errors,
         wall_s,
         docs_per_s: rate(counters.ok, wall_s),
         p50_ms: percentile(&latencies, 0.50),

@@ -41,6 +41,11 @@ from harness_charts import (MARKERS, colours, draw_footer,  # noqa: E402
                             label_right_edge, read_csv_rows, write_table)
 
 SCYLLA_SERIES = "scyllarate CQL 1 doc/op"
+# The `engine` column both harnesses now write, and the value of the flag
+# each glob arrived under. `batch_size=1` on a scyllarate row is not the same
+# offer as `--batch-size 1` on osrate, so the column can never name the line.
+SCYLLA_ENGINE = "scylladb"
+OPENSEARCH_ENGINE = "opensearch"
 SCYLLA_COLOR = "#2b6cb0"
 TABLE_COLUMNS = ["series", "concurrency", "reps", "docs_per_s_median",
                  "docs_per_s_min", "docs_per_s_max", "shortest_wall_s"]
@@ -69,16 +74,29 @@ def read_points(path: Path, keep_warmup: bool) -> list[dict]:
     return rows if keep_warmup else rows[1:]
 
 
-def series_of(row: dict) -> str:
+def series_of(row: dict, engine: str) -> str:
+    """Which line this row belongs on.
+
+    `engine` is the flag the row arrived under, and the row's own `engine`
+    column overrides it where there is one. Neither existed when the halves
+    wrote different columns, so a row with neither falls back to the old test —
+    a `batch_size` column means `osrate` — which is still right for every CSV
+    recorded before both halves gained that column, and wrong for every one
+    recorded after. Hence the order.
+    """
+    engine = row.get("engine") or engine
+    if engine == SCYLLA_ENGINE:
+        return SCYLLA_SERIES
     batch = row.get("batch_size")
     return f"osrate batch={int(batch)}" if batch else SCYLLA_SERIES
 
 
-def collect(pattern: str, keep_warmup: bool) -> list[tuple[str, int, float, float]]:
+def collect(pattern: str, keep_warmup: bool,
+            engine: str) -> list[tuple[str, int, float, float]]:
     out = []
     for name in sorted(glob.glob(pattern)):
         for row in read_points(Path(name), keep_warmup):
-            out.append((series_of(row), int(row["concurrency"]),
+            out.append((series_of(row, engine), int(row["concurrency"]),
                         float(row["docs_per_s"]), float(row["wall_s"])))
     return out
 
@@ -174,9 +192,9 @@ def main() -> int:
 
     points = []
     if args.scylla:
-        points += collect(args.scylla, args.keep_warmup)
+        points += collect(args.scylla, args.keep_warmup, SCYLLA_ENGINE)
     if args.opensearch:
-        points += collect(args.opensearch, args.keep_warmup)
+        points += collect(args.opensearch, args.keep_warmup, OPENSEARCH_ENGINE)
     if not points:
         print("no points matched --scylla / --opensearch")
         return 1

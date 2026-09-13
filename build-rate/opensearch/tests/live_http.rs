@@ -262,7 +262,7 @@ async fn a_whole_ladder_runs_against_a_live_endpoint() {
     assert!(results
         .iter()
         .all(|point| point.docs == 500 && point.errors == 0));
-    assert!(results.iter().all(|point| point.bulks == 20));
+    assert!(results.iter().all(|point| point.requests == 20));
     assert!(results.iter().all(|point| point.p99_ms.is_some()));
 }
 
