@@ -10,6 +10,7 @@ name = "scyllarate"
 path = "src/main.rs"
 
 [dependencies]
+build-rate-core = { path = "../core" }
 anyhow = "1.0.100"
 async-channel = "2.5.0"
 clap = { version = "4.6.6", features = ["derive", "env"] }

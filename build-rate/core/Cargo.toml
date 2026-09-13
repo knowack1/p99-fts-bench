@@ -1,0 +1,21 @@
+[package]
+name = "build-rate-core"
+version = "0.1.0"
+edition = "2021"
+description = "The ingestion and measurement both build-rate harnesses share"
+publish = false
+
+[lib]
+name = "build_rate_core"
+path = "src/lib.rs"
+
+# Caret requirements only, never `=`. Each binary crate resolves these in its
+# own lock, and pinning here would drag one engine's tree when the other was
+# upgraded — the thing `../scylla/README.md` says must never happen to a
+# recorded run.
+[dependencies]
+
+[dev-dependencies]
+
+[profile.release]
+debug = false
