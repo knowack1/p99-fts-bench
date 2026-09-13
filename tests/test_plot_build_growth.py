@@ -132,3 +132,65 @@ def test_repetitions_of_one_level_are_one_series(tmp_path):
     order = growth.series_order(grouped)
     assert order == ["c=8", "c=32"]
     assert [len(grouped[name]) for name in order] == [2, 1]
+
+
+# --- a searchable count that only advances at a refresh --------------------
+
+def a_level(timeline):
+    """A Level built straight from its timeline, without going through a file."""
+    level = growth.Level.__new__(growth.Level)
+    level.concurrency, level.batch_size, level.repetition = 8, 0, 1
+    level.timeline = timeline
+    level.handover_docs = None
+    return level
+
+
+SMOOTH = [(0.0, 0.0), (1.0, 100.0), (2.0, 200.0), (3.0, 300.0)]
+STAIRCASE = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 900.0),
+             (4.0, 900.0), (5.0, 900.0), (6.0, 1800.0)]
+
+
+def test_a_continuously_climbing_series_sets_no_floor():
+    """An index that publishes as it indexes needs no protection, and a floor
+    would only coarsen a chart that was already honest."""
+    assert growth.riser_floor([a_level(SMOOTH)]) == 0
+    assert growth.chosen_step([a_level(SMOOTH)], 10) == 10
+
+
+def test_a_stepped_series_widens_the_bucket_to_one_riser():
+    """A bucket inside a jump is divided by the poll gap rather than the refresh
+    gap, so the rate reads high by the ratio between them and the flats vanish.
+    """
+    assert growth.riser_floor([a_level(STAIRCASE)]) == 900
+    assert growth.chosen_step([a_level(STAIRCASE)], 10) == 900
+
+
+def test_one_slow_poll_does_not_set_the_grid_for_everything():
+    """The typical riser, not the largest."""
+    hiccup = [(0.0, 0.0), (1.0, 100.0), (2.0, 100.0), (3.0, 200.0),
+              (4.0, 200.0), (5.0, 900.0), (6.0, 900.0), (7.0, 1000.0)]
+    assert growth.riser_floor([a_level(hiccup)]) == 100
+
+
+def test_a_stepped_series_protects_a_smooth_one_sharing_the_chart():
+    """Both engines on one axis is opt-in, but when it happens the grid has to
+    clear the coarser of the two."""
+    assert growth.chosen_step([a_level(SMOOTH), a_level(STAIRCASE)], 10) == 900
+
+
+def test_a_batching_harness_level_is_its_own_series():
+    """`c=8` with one document per request and `c=8` with 512 are not the same
+    offer and must not share a line."""
+    assert growth.name_parts(Path("c8-b512-3.csv")) == (8, 512, 3)
+    assert growth.name_parts(Path("c8-2.csv")) == (8, 0, 2)
+
+
+def test_a_level_where_nothing_became_searchable_is_skipped_by_name():
+    """Real zeros, not blanks: an index at `refresh_interval: -1` with no final
+    refresh took everything and published none of it. Drawn, it is a flat line
+    at zero that reads as an engine finding."""
+    rows = [{"t_s": "0.0", "docs_submitted": "10", "docs_indexed": "0"},
+            {"t_s": "1.0", "docs_submitted": "10", "docs_indexed": "0"}]
+    assert growth.published_nothing(rows)
+    assert not growth.published_nothing(
+        [{"t_s": "1.0", "docs_submitted": "10", "docs_indexed": "5"}])

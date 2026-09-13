@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
 import re
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -42,7 +44,7 @@ from ftsbench.plot_growth import (docs_grid, interpolate,  # noqa: E402
 from harness_charts import (MARKERS, colours, draw_footer,  # noqa: E402
                             label_right_edge, read_csv_rows, write_table)
 
-LEVEL_RE = re.compile(r"c(\d+)-(\d+)\.csv$")
+LEVEL_RE = re.compile(r"c(\d+)(?:-b(\d+))?-(\d+)\.csv$")
 MIN_READINGS = 3
 THIN = {"linewidth": 1.0, "alpha": 0.40}
 BOLD = {"linewidth": 2.4, "alpha": 1.0}
@@ -70,7 +72,7 @@ class Level:
     """One level's series: its index build, and where its client stopped."""
 
     def __init__(self, path: Path, rows: Sequence[dict]) -> None:
-        self.concurrency, self.repetition = name_parts(path)
+        self.concurrency, self.batch_size, self.repetition = name_parts(path)
         self.timeline = index_timeline(rows)
         self.handover_docs = handover_docs(rows)
 
@@ -82,20 +84,33 @@ class Level:
 
     @property
     def series(self) -> str:
+        """A level on a batching harness is `c` and `batch` together: `c=8` with
+        one document per request and `c=8` with 512 are not the same offer and
+        must not share a line."""
+        if self.batch_size:
+            return f"c={self.concurrency} batch={self.batch_size}"
         return f"c={self.concurrency}"
 
     @property
     def indexed(self) -> float:
         return self.timeline[-1][1]
 
+    def risers(self) -> list[float]:
+        """Documents each reading published since the one before it."""
+        return [after[1] - before[1]
+                for before, after in zip(self.timeline, self.timeline[1:])]
 
-def name_parts(path: Path) -> tuple[int, int]:
-    """`c8-2.csv` is concurrency 8, second repetition. A file named anything
-    else is still plottable; it just becomes its own series."""
+
+def name_parts(path: Path) -> tuple[int, int, int]:
+    """`c8-2.csv` is concurrency 8, second repetition. `c8-b512-3.csv` is the
+    same level on a harness whose requests carry 512 documents, third
+    repetition — a different offer, and so a different series. A file named
+    anything else is still plottable; it just becomes its own series."""
     match = LEVEL_RE.search(path.name)
     if match is None:
-        return (0, 1)
-    return (int(match.group(1)), int(match.group(2)))
+        return (0, 0, 1)
+    batch = int(match.group(2)) if match.group(2) else 0
+    return (int(match.group(1)), batch, int(match.group(3)))
 
 
 def monotone(readings: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -151,6 +166,20 @@ def unwatched(rows: Sequence[dict]) -> bool:
     return not any(row.get("docs_indexed") for row in rows)
 
 
+def published_nothing(rows: Sequence[dict]) -> bool:
+    """Every reading found zero documents searchable.
+
+    Blank cells are `unwatched`; these are real zeros, which a level at
+    `refresh_interval: -1` with no final refresh produces — the engine took
+    everything and published none of it. Plotted, it is a flat line at zero that
+    reads as an engine finding rather than as a refresh policy, so it is named
+    and skipped like the others.
+    """
+    readings = [row.get("docs_indexed") for row in rows]
+    return any(readings) is False or all(
+        float(docs) == 0.0 for docs in readings if docs)
+
+
 def load(pattern: str) -> tuple[list[Level], list[str]]:
     levels, skipped = [], []
     for name in sorted(glob.glob(pattern)):
@@ -158,6 +187,9 @@ def load(pattern: str) -> tuple[list[Level], list[str]]:
         rows = read_csv_rows(path)
         if unwatched(rows):
             skipped.append(f"{path.name} (no index readings)")
+            continue
+        if published_nothing(rows):
+            skipped.append(f"{path.name} (nothing became searchable)")
             continue
         level = Level(path, rows)
         if level.readings < MIN_READINGS:
@@ -185,7 +217,50 @@ def grid_for(levels: Sequence[Level], step: int) -> list[float]:
 
 
 def chosen_step(levels: Sequence[Level], asked: int) -> int:
-    return docs_grid(asked, [level.indexed for level in levels])[1]
+    """The grid the rate is recomputed on, never finer than one riser.
+
+    A searchable count that only advances at a refresh climbs in steps: flat,
+    flat, then a jump carrying the whole interval's work. A bucket that fits
+    *inside* one of those jumps is divided by the poll gap rather than by the
+    refresh gap, so the rate reads high by exactly the ratio between them — 3x
+    at a 3s refresh polled every second — and the flats vanish from the chart
+    entirely. A bucket that spans riser to riser divides the same documents by
+    the time they actually took, which is the true rate.
+
+    The floor comes from the data rather than from a flag: the biggest jump any
+    reading published *is* one refresh's worth. On a series that climbs smoothly
+    it is one poll's worth and changes nothing.
+    """
+    step = docs_grid(asked, [level.indexed for level in levels])[1]
+    return max(step, riser_floor(levels))
+
+
+def riser_floor(levels: Sequence[Level]) -> int:
+    """One riser's worth of documents, on the series that climb in steps.
+
+    Zero where nothing steps: a series whose every reading published something
+    is not refresh-gated, its buckets never fall inside a jump, and a floor
+    would only coarsen a chart that was already honest. That is what keeps this
+    from changing any ScyllaDB chart.
+
+    The typical riser rather than the largest, so one slow poll in an otherwise
+    smooth series cannot set the grid for everything.
+    """
+    risers = [published
+              for level in levels if steps(level)
+              for published in level.risers() if published > 0]
+    if not risers:
+        return 0
+    return int(math.ceil(statistics.median(risers)))
+
+
+def steps(level: Level) -> bool:
+    """Some reading found exactly what the one before it did.
+
+    On an index that publishes continuously that does not happen once the build
+    is under way; on one that publishes at a refresh it is most of the readings.
+    """
+    return any(published == 0 for published in level.risers())
 
 
 def mark_handover(axes, xs: Sequence[float], ys: Sequence[float],
@@ -218,12 +293,22 @@ def draw_series(axes, levels: Sequence[Level], step: int, colour, marker) -> tup
     return (xs[-1], ys[-1], name, colour) if xs else None
 
 
-def footer_lines(step: int, order: Sequence[str], skipped: Sequence[str]) -> list[str]:
+def footer_lines(step: int, order: Sequence[str], skipped: Sequence[str],
+                 floored: bool = False) -> list[str]:
     lines = [
         "x is the documents THIS level put in the index, y is how fast they went "
         f"in. Rate is recomputed on a shared grid of {step:,} documents per "
         "bucket, not read from the series' own index_docs_per_s column, so every "
         "line means the same thing whatever cadence it was polled at.",
+    ]
+    if floored:
+        lines.append(
+            f"The bucket is one riser wide ({step:,} documents) because a series "
+            "here climbs in steps rather than continuously: an index whose "
+            "searchable count only advances at a refresh. A finer bucket would "
+            "land inside a jump and read the rate high by the ratio between the "
+            "refresh and the poll, and the flats between jumps would disappear.")
+    lines += [
         "A tick on a line is where the client stopped submitting: everything "
         "right of it was built after the last insert landed.",
         "Thin lines are repetitions of one concurrency, bold is their pointwise "
@@ -260,6 +345,7 @@ def main() -> int:
     grouped = by_series(levels)
     order = series_order(grouped)
     step = chosen_step(levels, args.grid_step)
+    floored = riser_floor(levels) >= step > 0
     palette = colours(len(order))
 
     figure, axes = plt.subplots(figsize=(args.width, args.height), dpi=args.dpi)
@@ -278,7 +364,7 @@ def main() -> int:
     axes.legend(fontsize=8, loc="upper right", framealpha=0.9)
     label_right_edge(axes, ends)
     figure.subplots_adjust(right=0.82, bottom=0.28)
-    draw_footer(figure, footer_lines(step, order, skipped))
+    draw_footer(figure, footer_lines(step, order, skipped, floored))
     figure.savefig(args.output)
     print(f"wrote {args.output}")
     if args.table:
