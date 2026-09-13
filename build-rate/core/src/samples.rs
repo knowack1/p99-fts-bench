@@ -196,6 +196,7 @@ fn blank_or<T>(value: Option<T>, render: impl Fn(T) -> String) -> String {
 pub struct SampleFiles {
     dir: PathBuf,
     preamble: Vec<String>,
+    batch_size: usize,
     taken: Mutex<HashMap<usize, usize>>,
 }
 
@@ -205,6 +206,7 @@ impl SampleFiles {
         Ok(Self {
             dir: dir.to_path_buf(),
             preamble: Vec::new(),
+            batch_size: 1,
             taken: Mutex::new(HashMap::new()),
         })
     }
@@ -215,6 +217,10 @@ impl SampleFiles {
         Self { preamble, ..self }
     }
 
+    pub fn with_batch_size(self, batch_size: usize) -> Self {
+        Self { batch_size, ..self }
+    }
+
     pub fn open_level(&self, concurrency: usize) -> io::Result<SampleSink> {
         let mut sink = SampleSink::create(&self.dir.join(self.name_for(concurrency)))?;
         sink.write_preamble(&self.preamble)?;
@@ -223,11 +229,19 @@ impl SampleFiles {
 
     /// `--concurrency 8,8,16` is the documented warm-up idiom, so a repeated
     /// level must not overwrite the series of the rung before it.
+    ///
+    /// The batch size is part of the name wherever a request carries more than
+    /// one document, because there a level is `c` *and* `batch` — and because
+    /// two engines' series sharing a directory would otherwise collide on
+    /// `c8-1.csv` and be charted as one line.
     fn name_for(&self, concurrency: usize) -> String {
         let mut taken = self.taken.lock().unwrap();
         let repetition = taken.entry(concurrency).or_insert(0);
         *repetition += 1;
-        format!("c{concurrency}-{repetition}.csv")
+        match self.batch_size {
+            1 => format!("c{concurrency}-{repetition}.csv"),
+            batch => format!("c{concurrency}-b{batch}-{repetition}.csv"),
+        }
     }
 }
 

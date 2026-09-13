@@ -8,6 +8,7 @@ pub use build_rate_core::cli::{available_cores, split_fields, Levels};
 use clap::Parser;
 
 use crate::client::ConnectOptions;
+use crate::build_rate::WatchTiming;
 use crate::report::LATENCY_UNIT;
 use crate::reset::{GateTiming, IndexConfig, DEFAULT_INDEX_CONFIG};
 use crate::sweep::QUEUE_DEPTH_PER_WORKER;
@@ -26,6 +27,18 @@ pub const DEFAULT_REQUEST_TIMEOUT_S: &str = "120.0";
 /// one.
 pub const DEFAULT_RESET_TIMEOUT_S: &str = "300.0";
 pub const RESET_POLL_INTERVAL_S: f64 = 0.5;
+/// The same cadence the ScyllaDB half polls at, on purpose: the growth chart
+/// puts both engines on one grid and the grids only line up if the readings do.
+pub const DEFAULT_INDEX_INTERVAL_S: &str = "1.0";
+/// Longer than the ScyllaDB half's 120s, because this tail can carry a refresh
+/// and a merge burst, and at `refresh_interval: 30s` a level can legitimately
+/// spend half a minute with nothing to show.
+pub const DEFAULT_INDEX_SETTLE_TIMEOUT_S: &str = "180.0";
+/// Longer than the ScyllaDB half's 10s, for a bulk still sitting in the write
+/// queue plus a poll of jitter. It does not need to scale with
+/// `refresh_interval`, because idleness is measured on what the engine has
+/// accepted rather than on what is searchable.
+pub const DEFAULT_INDEX_IDLE_TIMEOUT_S: &str = "15.0";
 pub const STDOUT: &str = "-";
 
 #[derive(Debug, Parser)]
@@ -101,6 +114,40 @@ pub struct Args {
     /// Do not check that the index analyzes text the way the vector-store does.
     #[arg(long)]
     pub no_analyzer_check: bool,
+
+    /// Also measure how fast documents become searchable, not just how fast
+    /// this client delivered them. Off by default: it adds a `_stats` poll per
+    /// second and a settle wait per level, and the recorded submit-rate arms
+    /// must keep measuring what they measured.
+    #[arg(long)]
+    pub index_watch: bool,
+
+    /// Per-second series, one CSV per level. Keep it out of the directory the
+    /// point CSVs go in.
+    #[arg(long)]
+    pub samples_dir: Option<PathBuf>,
+
+    /// Seconds between index polls while a level runs
+    #[arg(long, default_value = DEFAULT_INDEX_INTERVAL_S)]
+    pub index_interval: f64,
+
+    /// Seconds to keep waiting for the index after the last document is sent
+    #[arg(long, default_value = DEFAULT_INDEX_SETTLE_TIMEOUT_S)]
+    pub index_settle_timeout: f64,
+
+    /// Seconds of no indexing progress that end the wait. Measured on what the
+    /// engine has accepted, not on what is searchable: a searchable count sits
+    /// still between refreshes, and ending a build there would call an ordinary
+    /// pause a finished one.
+    #[arg(long, default_value = DEFAULT_INDEX_IDLE_TIMEOUT_S)]
+    pub index_idle_timeout: f64,
+
+    /// Do not ask the index to publish what it is holding when it has accepted
+    /// everything and stopped. The level then reports what the configured
+    /// refresh policy actually delivered — which at `refresh_interval: -1` is
+    /// nothing.
+    #[arg(long)]
+    pub no_index_final_refresh: bool,
 }
 
 impl Args {
@@ -118,6 +165,22 @@ impl Args {
 
     pub fn resets(&self) -> bool {
         !self.no_reset
+    }
+
+    pub fn watches_index(&self) -> bool {
+        self.index_watch
+    }
+
+    pub fn asks_for_a_final_refresh(&self) -> bool {
+        !self.no_index_final_refresh
+    }
+
+    pub fn watch_timing(&self) -> WatchTiming {
+        WatchTiming {
+            poll_interval: Duration::from_secs_f64(self.index_interval),
+            settle_timeout: Duration::from_secs_f64(self.index_settle_timeout),
+            idle_timeout: Duration::from_secs_f64(self.index_idle_timeout),
+        }
     }
 
     /// Only when the index is one this run built: a `--no-reset` run loads into

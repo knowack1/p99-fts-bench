@@ -326,3 +326,30 @@ fn an_engine_with_two_counters_reports_both_series() {
     assert_eq!(cells[5], "0", "nothing is searchable yet");
     assert_eq!(cells[8], "900", "but the engine has taken it all in");
 }
+
+/// Two engines' series can share a directory, and a level on the batching half
+/// is `c` and `batch` together. Without the batch in the name they collide on
+/// `c8-1.csv` and the growth chart draws them as one line.
+#[test]
+fn a_batching_level_carries_its_batch_size_in_the_file_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = SampleFiles::new(dir.path()).unwrap().with_batch_size(512);
+
+    drop(files.open_level(8).unwrap());
+    drop(files.open_level(8).unwrap());
+
+    assert!(dir.path().join("c8-b512-1.csv").exists());
+    assert!(dir.path().join("c8-b512-2.csv").exists());
+}
+
+/// The ScyllaDB half keeps the name it has always written, so globs and
+/// recorded runs still match.
+#[test]
+fn a_one_document_level_keeps_the_name_it_always_had() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = SampleFiles::new(dir.path()).unwrap();
+
+    drop(files.open_level(8).unwrap());
+
+    assert!(dir.path().join("c8-1.csv").exists());
+}

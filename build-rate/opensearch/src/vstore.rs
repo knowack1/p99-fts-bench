@@ -33,6 +33,7 @@ pub struct StatsProbe {
     client: OpenSearch,
     index: String,
     endpoint: String,
+    may_ask_for_a_refresh: bool,
 }
 
 impl StatsProbe {
@@ -41,7 +42,14 @@ impl StatsProbe {
             client,
             index: index.to_string(),
             endpoint: format!("{}/{index}/_stats", url.trim_end_matches('/')),
+            may_ask_for_a_refresh: true,
         }
+    }
+
+    /// Report what the configured refresh policy delivered, and nothing more.
+    pub fn without_a_final_refresh(mut self) -> Self {
+        self.may_ask_for_a_refresh = false;
+        self
     }
 
     async fn poll(&self) -> Result<IndexState> {
@@ -131,9 +139,12 @@ impl IndexProbe for StatsProbe {
         &self.endpoint
     }
 
-    fn settle_hint(&self) -> BoxFuture<'_, ()> {
+    fn settle_hint(&self) -> BoxFuture<'_, bool> {
         Box::pin(async move {
-            let _ = self.ask_for_a_refresh().await;
+            if !self.may_ask_for_a_refresh {
+                return false;
+            }
+            self.ask_for_a_refresh().await.is_ok()
         })
     }
 }

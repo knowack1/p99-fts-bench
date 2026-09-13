@@ -127,12 +127,14 @@ impl IndexProbe for ScriptedProbe {
         &self.endpoint
     }
 
-    fn settle_hint(&self) -> BoxFuture<'_, ()> {
+    fn settle_hint(&self) -> BoxFuture<'_, bool> {
         *self.refreshes.lock().unwrap() += 1;
-        if let Some(published) = self.publishes.clone() {
+        let published = self.publishes.clone();
+        let asked = published.is_some();
+        if let Some(published) = published {
             *self.script.lock().unwrap() = vec![published];
         }
-        Box::pin(std::future::ready(()))
+        Box::pin(std::future::ready(asked))
     }
 }
 

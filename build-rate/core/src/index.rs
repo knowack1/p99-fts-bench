@@ -114,15 +114,21 @@ pub trait IndexProbe: Send + Sync + 'static {
     /// the harness was looking.
     fn endpoint(&self) -> &str;
 
-    /// Publish whatever has been indexed but is not yet searchable.
+    /// Publish whatever has been indexed but is not yet searchable, and say
+    /// whether anything was actually asked of the engine.
     ///
-    /// A no-op wherever a searchable count does not lag behind — there is
-    /// nothing to ask for. Where it does, this is the last resort after the
-    /// engine has stopped making progress, never something done mid-build: a
-    /// harness that forced the engine's hand while measuring it would be
-    /// changing what it was measuring.
-    fn settle_hint(&self) -> BoxFuture<'_, ()> {
-        Box::pin(std::future::ready(()))
+    /// `false` wherever a searchable count does not lag behind — there is
+    /// nothing to ask for — and wherever the operator turned the asking off.
+    /// The answer reaches the level's `index_status`, so it has to be what
+    /// happened rather than what was attempted: a level that reports
+    /// `refreshed` without anyone having refreshed it is a lie about which
+    /// refresh policy produced the number.
+    ///
+    /// Where it does ask, this is the last resort after the engine has stopped
+    /// making progress, never something done mid-build: a harness that forced
+    /// the engine's hand while measuring it would be changing what it measured.
+    fn settle_hint(&self) -> BoxFuture<'_, bool> {
+        Box::pin(std::future::ready(false))
     }
 }
 

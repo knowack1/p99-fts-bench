@@ -294,3 +294,25 @@ async fn a_reading_is_recorded_with_both_counts_where_the_engine_reports_them() 
     assert_eq!((state.docs(), state.accepted()), (120, Some(900)));
     assert!(matches!(state, IndexState::Present(IndexReading { .. })));
 }
+
+/// A probe that was asked and did nothing must not colour the level
+/// `refreshed`: that word says which refresh policy produced the number, and a
+/// level nobody refreshed was produced by the engine's.
+#[tokio::test]
+async fn a_hint_that_publishes_nothing_does_not_claim_the_level_was_refreshed() {
+    let probe = Arc::new(ScriptedProbe::new(vec![accepted_but_not_yet_searchable(
+        0, 500,
+    )]));
+    let watch = watching(
+        Arc::clone(&probe),
+        brisk(Duration::from_secs(5), Duration::from_millis(20)),
+    );
+    let level = begin(&watch, &quiet_notes()).await.unwrap();
+
+    let build = level.finish(500).await.unwrap().unwrap();
+
+    assert_eq!(probe.refreshes(), 1, "it should still have asked once");
+    assert_ne!(build.status, REFRESHED);
+    assert!(!build.settled);
+    assert_eq!(build.docs, 0);
+}

@@ -11,11 +11,12 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use opensearch::OpenSearch;
 use tokio::runtime::Runtime;
 
+use osrate::build_rate::IndexWatch;
 use osrate::cli::Args;
 use osrate::client::{self, Cluster};
 use osrate::corpus::CorpusSource;
@@ -23,8 +24,9 @@ use osrate::insert::BulkInserter;
 use osrate::notes::{note, Notes};
 use osrate::report::{self, summary_table, CsvSink, PointResult};
 use osrate::reset::{IndexReset, ResettingInserter};
-use osrate::build_rate::IndexWatch;
+use osrate::samples::SampleFiles;
 use osrate::sweep::{self, Cancel, Watchers};
+use osrate::vstore::StatsProbe;
 
 fn main() -> ExitCode {
     match run(Args::parse()) {
@@ -61,13 +63,64 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
 
     let cluster = client::read_cluster(&client, &args.index, workers).await?;
     describe(&cluster);
+    check_the_refresh_policy(&args, &cluster)?;
 
     let mut sink = CsvSink::open(&args.out)?;
-    sink.write_preamble(&report::header_lines(&cluster, &args.settings()))?;
-    let (results, aborted) = sweep_levels(&args, client, reset, &notes, &mut sink).await;
+    let preamble = report::header_lines(&cluster, &args.settings());
+    sink.write_preamble(&preamble)?;
+    let samples = open_samples(&args, &preamble)?;
+    let (results, aborted) =
+        sweep_levels(&args, client, reset, &notes, &mut sink, samples.as_ref()).await;
 
     echo_summary(&results);
     Ok(exit_code(&results, aborted))
+}
+
+/// A searchable count that never advances on a timer is a build this tool
+/// cannot see the end of. It can still measure one — by asking the index to
+/// publish once the engine has stopped — but not if that was turned off too.
+fn check_the_refresh_policy(args: &Args, cluster: &client::Cluster) -> Result<()> {
+    if !args.watches_index() {
+        return Ok(());
+    }
+    let interval = cluster.refresh_interval.as_str();
+    if !interval.starts_with("-1") {
+        note(&format!("index watch ON: polling _stats, refresh_interval={interval}"));
+        return Ok(());
+    }
+    if args.asks_for_a_final_refresh() {
+        note(
+            "index watch ON: refresh_interval=-1, so nothing becomes searchable \
+             until this asks. Every level's index_status will read `refreshed` \
+             and its settle time is the harness's refresh, not the engine's.",
+        );
+        return Ok(());
+    }
+    bail!(
+        "--index-watch with refresh_interval=-1 and --no-index-final-refresh: \
+         nothing would ever become searchable, so every level would report a \
+         build of zero documents that never settled. Drop one of the three."
+    )
+}
+
+/// Opened before the first document, so an unwritable directory costs a second
+/// rather than a whole ladder — the rule `CsvSink::open` already follows.
+fn open_samples(args: &Args, preamble: &[String]) -> Result<Option<SampleFiles>> {
+    let Some(dir) = args.samples_dir.as_ref() else {
+        return Ok(None);
+    };
+    let files = SampleFiles::new(dir)
+        .with_context(|| format!("cannot write per-second samples to {}", dir.display()))?;
+    note(&format!(
+        "per-second samples: {}/c<level>-b{}-<n>.csv",
+        dir.display(),
+        args.batch_size
+    ));
+    Ok(Some(
+        files
+            .with_preamble(preamble.to_vec())
+            .with_batch_size(args.batch_size),
+    ))
 }
 
 fn open_reset(args: &Args, client: &OpenSearch, notes: &Notes) -> Result<Option<Box<IndexReset>>> {
@@ -130,7 +183,9 @@ async fn sweep_levels(
     reset: Option<Box<IndexReset>>,
     notes: &Notes,
     sink: &mut CsvSink,
+    samples: Option<&SampleFiles>,
 ) -> (Vec<PointResult>, bool) {
+    let index = index_watch(args, &client);
     let inserter = Arc::new(BulkInserter::new(client, &args.index));
     let source = CorpusSource::new(&args.corpus, args.max_docs, args.batch_size);
     let inserters = ResettingInserter::new(inserter, reset.map(|reset| *reset));
@@ -149,9 +204,9 @@ async fn sweep_levels(
             &args.concurrency.0,
             sweep::loader(args.batch_size, args.queue_depth),
             &Watchers {
-                index: &IndexWatch::off(),
+                index: &index,
                 notes,
-                samples: None,
+                samples,
             },
             &cancel,
             &mut collect,
@@ -159,6 +214,20 @@ async fn sweep_levels(
         .await
     };
     (results, report_outcome(outcome, sink.destination()))
+}
+
+/// `_stats` on the index this run loads, or nothing at all.
+fn index_watch(args: &Args, client: &OpenSearch) -> IndexWatch {
+    if !args.watches_index() {
+        return IndexWatch::off();
+    }
+    let probe = StatsProbe::new(client.clone(), &args.url, &args.index);
+    let probe = if args.asks_for_a_final_refresh() {
+        probe
+    } else {
+        probe.without_a_final_refresh()
+    };
+    IndexWatch::on(Arc::new(probe), args.watch_timing())
 }
 
 /// Ctrl-C is the ordinary way a long ladder ends early, and the levels already

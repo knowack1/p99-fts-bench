@@ -145,7 +145,7 @@ def test_a_refresh_request_publishes_what_the_sink_accepted():
 
     _, never = routes.respond(
         null_sink_http.Request("GET", "/wiki-articles/_count", b""))
-    routes.respond(null_sink_http.Request("POST", "/wiki-articles/_refresh",
+    routes.respond(null_sink_http.Request("GET", "/wiki-articles/_refresh",
                                           b""))
     _, asked = routes.respond(
         null_sink_http.Request("GET", "/wiki-articles/_count", b""))
@@ -551,3 +551,20 @@ def test_a_negative_refresh_interval_stays_negative():
     assert refresh_interval_of(
         parse_args(["--mode", "http", "--os-refresh-interval-ms", "-1"])) == -1.0
     assert refresh_interval_of(parse_args(["--mode", "http"])) == 0.0
+
+
+def test_a_refresh_is_answered_on_either_verb():
+    """Real OpenSearch answers `_refresh` on both, and the Rust client sends
+    `GET`. Requiring `POST` made the forced refresh a silent no-op: 404, no
+    change, and a level reporting a build of zero documents it had accepted."""
+    for method in ("GET", "POST"):
+        index = ModelledIndex(clock=lambda: 0.0, refresh_interval_s=-1)
+        index.create()
+        routes = null_sink_http.Routes(AcceptedWork(), index)
+        routes.respond(null_sink_http.Request("POST", "/_bulk",
+                                              bulk_body("i", [1, 2, 3])))
+        routes.respond(null_sink_http.Request(method,
+                                              "/wiki-articles/_refresh", b""))
+        _, body = routes.respond(
+            null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+        assert json.loads(body)["count"] == 3, method

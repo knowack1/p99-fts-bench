@@ -231,7 +231,7 @@ class Routes:
     def _admin_route(self, method: str,
                      path: str) -> tuple[int, bytes] | None:
         """What a loader does around a load: create, tune, refresh, probe."""
-        if method == "POST" and is_suffix(path, "_refresh"):
+        if is_suffix(path, "_refresh"):
             return 200, self._refresh()
         if method == "PUT" and is_suffix(path, "_settings"):
             return 200, _json({"acknowledged": True})
@@ -240,10 +240,15 @@ class Routes:
         return None
 
     def _refresh(self) -> bytes:
-        """A real `POST _refresh` publishes what has been indexed, and a
-        build-rate watch that gave up waiting for a scheduled refresh asks for
-        one. A sink that acknowledged it and published nothing would make that
-        last resort look like an index that had genuinely stopped.
+        """A real `_refresh` publishes what has been indexed, and a build-rate
+        watch that gave up waiting for a scheduled refresh asks for one. A sink
+        that acknowledged it and published nothing would make that last resort
+        look like an index that had genuinely stopped.
+
+        Either verb, because real OpenSearch answers both and the Rust client
+        sends `GET`. Requiring `POST` made the whole path a silent no-op: the
+        request 404ed, the watch saw no change, and the level reported a build
+        of zero documents that had in fact been accepted.
         """
         self._index.refresh()
         return _json({"_shards": SHARDS_OK})

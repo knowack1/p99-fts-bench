@@ -173,6 +173,7 @@ impl Level {
         let settling_from = Instant::now();
         let mut seen = Progress::new(settling_from);
 
+        let mut asked = false;
         let mut published = false;
 
         loop {
@@ -181,11 +182,14 @@ impl Level {
                 break;
             }
             if self.done_waiting(&seen) {
-                if published || !self.worth_a_refresh(&seen, target) {
+                if asked || !self.worth_a_refresh(&seen, target) {
                     break;
                 }
-                self.probe.settle_hint().await;
-                published = true;
+                asked = true;
+                published = self.probe.settle_hint().await;
+                if !published {
+                    break;
+                }
                 seen.given_another_chance();
             }
             tokio::time::sleep(self.timing.poll_interval).await;
