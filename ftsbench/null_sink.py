@@ -59,9 +59,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="the one index this sink answers a count for; any "
                              "other is 404 and recorded, so a harness pointed "
                              "at the wrong index cannot pass its own gate")
-    parser.add_argument("--vs-serving-delay-ms", type=float, default=0.0,
-                        help="hold a freshly created index at BUILDING for this "
-                             "long, to exercise a loader's SERVING gate")
+    parser.add_argument("--vs-serving-delay-ms", "--index-ready-delay-ms",
+                        dest="index_ready_delay_ms", type=float, default=0.0,
+                        help="hold a freshly created index unready for this "
+                             "long, to exercise a loader's readiness gate. "
+                             "BUILDING on the vector-store endpoint, 503 from "
+                             "_count and _stats on the OpenSearch one — the "
+                             "two engines' name for the same state")
+    parser.add_argument("--os-refresh-interval-ms", type=float, default=0.0,
+                        help="publish accepted documents to _count and _stats "
+                             "only this often, the way an OpenSearch "
+                             "refresh_interval does; negative never publishes "
+                             "except on an explicit _refresh. 0 (the default) "
+                             "publishes immediately, which is what every run "
+                             "recorded before this flag existed measured")
     parser.add_argument("--host", default="0.0.0.0",
                         help="bind address; the fleet runs the sink on fts-sut, "
                              "so a localhost bind would hide the network RTT "
@@ -99,9 +110,22 @@ def modelled_index(args: argparse.Namespace) -> ModelledIndex:
     issued DDL — and a `--no-reset` ladder would measure an index that, as far
     as this sink was concerned, never existed.
     """
-    index = ModelledIndex(args.vs_serving_delay_ms / MILLISECONDS)
+    index = ModelledIndex(
+        serving_delay_s=args.index_ready_delay_ms / MILLISECONDS,
+        refresh_interval_s=refresh_interval_of(args))
     index.create()
     return index
+
+
+def refresh_interval_of(args: argparse.Namespace) -> float:
+    """Negative stays negative rather than becoming a small delay: that is
+    OpenSearch's `refresh_interval: -1`, and a sink that turned it into a
+    3-millisecond refresh could not produce the state a build-rate watch has to
+    survive."""
+    milliseconds = args.os_refresh_interval_ms
+    if milliseconds < 0:
+        return -1.0
+    return milliseconds / MILLISECONDS
 
 
 def stats_header(args: argparse.Namespace, port: int) -> dict[str, Any]:

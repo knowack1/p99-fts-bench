@@ -22,7 +22,7 @@ from collections.abc import Iterator
 from . import sink_http_wire
 from .sink_counters import AcceptedWork
 from .sink_http_wire import Request
-from .sink_index import ModelledIndex
+from .sink_index import SERVING, ModelledIndex
 
 DELETE_ACTION_PREFIX = b'{"delete"'
 ACTION_PREFIX_BYTES = 16
@@ -79,24 +79,43 @@ class BulkReplies:
         return cached
 
 
-def index_stats(docs: int) -> dict:
+def index_stats(searchable: int, accepted: int, refreshes: int) -> dict:
     """The `_all.total` subtree `samplers.OpenSearchSampler.sample()` reads.
+
+    `docs.count` is what a search would find and `indexing.index_total` is what
+    the sink took, which are the sampler's `docs_searchable` and `docs_indexed`
+    respectively. They differ by whatever has not refreshed yet, and telling
+    them apart is the whole reason a build-rate watch can distinguish an index
+    that has stalled from one that has simply not refreshed.
 
     Every counter that is genuinely unknowable here is 0 rather than absent: the
     sampler indexes into these keys, and a missing one would fail the monitor
-    rather than record a sink that does not merge or refresh.
+    rather than record a sink that does not merge.
     """
     return {
         "_all": {"total": {
-            "docs": {"count": docs, "deleted": 0},
-            "indexing": {"index_total": docs, "index_current": 0},
+            "docs": {"count": searchable, "deleted": 0},
+            "indexing": {"index_total": accepted, "index_current": 0},
             "segments": {"count": 0, "memory_in_bytes": 0},
             "merges": {"current": 0, "current_docs": 0, "total": 0,
                        "total_docs": 0, "total_time_in_millis": 0},
-            "refresh": {"total": 0, "total_time_in_millis": 0},
+            "refresh": {"total": refreshes, "total_time_in_millis": 0},
             "store": {"size_in_bytes": 0},
         }},
     }
+
+
+def index_not_found(path: str) -> dict:
+    index = path.split("/")[1] if "/" in path.strip("/") + "/" else path
+    return {"error": {"type": "index_not_found_exception",
+                      "reason": f"no such index [{index}]",
+                      "index": index}, "status": 404}
+
+
+def no_shard_available(path: str) -> dict:
+    return {"error": {"type": "no_shard_available_action_exception",
+                      "reason": f"no shard available for [{path}]"},
+            "status": 503}
 
 
 def node_thread_pool_stats() -> dict:
@@ -162,36 +181,72 @@ class Routes:
         for route in (self._progress_route, self._admin_route):
             answer = route(request.method, path)
             if answer is not None:
-                return 200, answer
+                return answer
         self._work.note_unexpected(f"{request.method} {path}")
         return 404, _json({"error": "null sink does not answer this route",
                            "method": request.method, "path": path})
 
-    def _progress_route(self, method: str, path: str) -> bytes | None:
+    def _progress_route(self, method: str,
+                        path: str) -> tuple[int, bytes] | None:
         """What a sampler reads: version, counts, index stats, write pool."""
         if method != "GET":
             return None
         if path == "/":
-            return _json({"name": "null-sink", "version": {"number": VERSION}})
+            return 200, _json({"name": "null-sink",
+                               "version": {"number": VERSION}})
         if is_suffix(path, "_count"):
-            return _json({"count": self._index.count, "_shards": SHARDS_OK})
+            return self._about_the_index(path, self._count_body)
         if is_suffix(path, "_stats"):
-            return _json(index_stats(self._index.count))
+            return self._about_the_index(path, self._stats_body)
         if path == "/_nodes/stats/thread_pool":
-            return _json(node_thread_pool_stats())
+            return 200, _json(node_thread_pool_stats())
         if path == "/_nodes/thread_pool":
-            return _json(node_thread_pool_info())
+            return 200, _json(node_thread_pool_info())
         return None
 
-    def _admin_route(self, method: str, path: str) -> bytes | None:
+    def _about_the_index(self, path, body) -> tuple[int, bytes]:
+        """`_count` and `_stats` answer *for an index*, so they have to answer
+        404 when there is none and 503 while its primary is unallocated.
+
+        Those are the two states `osrate`'s reset gates exist to tell apart, and
+        a sink that reported zero documents for an index it had just deleted
+        would let the gate for "the delete landed" pass on the index that was
+        still there. It is also what lets one endpoint serve both gates: a
+        `_stats` that 404s is the same answer `HEAD` gives.
+        """
+        status = self._index.status()
+        if status is None:
+            return 404, _json(index_not_found(path))
+        if status.status != SERVING:
+            return 503, _json(no_shard_available(path))
+        return 200, body()
+
+    def _count_body(self) -> bytes:
+        return _json({"count": self._index.searchable, "_shards": SHARDS_OK})
+
+    def _stats_body(self) -> bytes:
+        return _json(index_stats(self._index.searchable, self._index.count,
+                                 self._index.refresh_total))
+
+    def _admin_route(self, method: str,
+                     path: str) -> tuple[int, bytes] | None:
         """What a loader does around a load: create, tune, refresh, probe."""
         if method == "POST" and is_suffix(path, "_refresh"):
-            return _json({"_shards": SHARDS_OK})
+            return 200, self._refresh()
         if method == "PUT" and is_suffix(path, "_settings"):
-            return _json({"acknowledged": True})
+            return 200, _json({"acknowledged": True})
         if method in ("PUT", "DELETE") and names_an_index(path):
-            return self._lifecycle(method, path)
+            return 200, self._lifecycle(method, path)
         return None
+
+    def _refresh(self) -> bytes:
+        """A real `POST _refresh` publishes what has been indexed, and a
+        build-rate watch that gave up waiting for a scheduled refresh asks for
+        one. A sink that acknowledged it and published nothing would make that
+        last resort look like an index that had genuinely stopped.
+        """
+        self._index.refresh()
+        return _json({"_shards": SHARDS_OK})
 
     def _lifecycle(self, method: str, path: str) -> bytes:
         """Create and delete move the index the gates read back."""

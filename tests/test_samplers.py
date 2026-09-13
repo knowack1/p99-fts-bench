@@ -55,7 +55,7 @@ class FakeSession:
         if path in self._dead:
             raise requests.exceptions.ReadTimeout("read timed out")
         if path == INDEX_STATS:
-            return FakeResponse(null_sink_http.index_stats(7))
+            return FakeResponse(null_sink_http.index_stats(7, 7, 1))
         if path == POOL_STATS:
             return FakeResponse(null_sink_http.node_thread_pool_stats())
         if path == POOL_SIZE:

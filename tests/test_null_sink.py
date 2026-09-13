@@ -64,12 +64,13 @@ def test_count_reports_what_the_sink_accepted():
     assert json.loads(body)["count"] == 3
 
 
-def test_a_deleted_index_is_absent_and_holds_nothing():
+def test_a_deleted_index_answers_absent_everywhere_it_is_asked():
     """`osrate` empties the index before every concurrency level.
 
-    The gates it waits on are a `HEAD` that says absent and a `_count` that
-    says zero, so a sink that acknowledged the delete and changed nothing would
-    hang the instrument built to measure it.
+    Every route that answers *for an index* has to say it is gone, not just
+    `HEAD`: a `_count` or `_stats` reporting zero documents for an index that
+    does not exist would let the gate waiting for the delete to land pass on
+    the index that is still there.
     """
     work = AcceptedWork()
     routes = null_sink_http.Routes(work)
@@ -79,11 +80,89 @@ def test_a_deleted_index_is_absent_and_holds_nothing():
 
     present, _ = routes.respond(
         null_sink_http.Request("HEAD", "/wiki-articles", b""))
-    _, counted = routes.respond(
+    counted, body = routes.respond(
         null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    stats, _ = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_stats", b""))
     assert present == 404
-    assert json.loads(counted)["count"] == 0
+    assert counted == 404
+    assert stats == 404
+    assert json.loads(body)["error"]["type"] == "index_not_found_exception"
     assert work.docs == 3, "the run's own total is not the index's"
+
+
+def test_an_index_that_is_not_serving_yet_is_503_not_empty():
+    """A created index answers before its primary is allocated, and `osrate`'s
+    second gate waits for that. 200 with zero documents would let the gate pass
+    on an index nothing could be loaded into yet."""
+    clock = [0.0]
+    index = ModelledIndex(serving_delay_s=5.0, clock=lambda: clock[0])
+    index.create()
+    routes = null_sink_http.Routes(AcceptedWork(), index)
+
+    unready, body = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    clock[0] = 6.0
+    ready, _ = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    assert unready == 503
+    assert json.loads(body)["error"]["type"] == (
+        "no_shard_available_action_exception")
+    assert ready == 200
+
+
+def test_documents_are_searchable_only_after_a_refresh():
+    """The shape a build-rate watch has to be able to measure: `_count` steps
+    at the refresh interval while `index_total` climbs continuously."""
+    clock = [0.0]
+    index = ModelledIndex(clock=lambda: clock[0], refresh_interval_s=3.0)
+    index.create()
+    routes = null_sink_http.Routes(AcceptedWork(), index)
+    routes.respond(null_sink_http.Request("POST", "/_bulk",
+                                          bulk_body("i", [1, 2, 3])))
+
+    clock[0] = 1.0
+    _, before = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_stats", b""))
+    clock[0] = 4.0
+    _, after = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_stats", b""))
+
+    assert json.loads(before)["_all"]["total"]["docs"]["count"] == 0
+    assert json.loads(before)["_all"]["total"]["indexing"]["index_total"] == 3
+    assert json.loads(after)["_all"]["total"]["docs"]["count"] == 3
+
+
+def test_a_refresh_request_publishes_what_the_sink_accepted():
+    """`refresh_interval: -1` publishes nothing on a timer, so a watch that
+    gave up waiting asks for a refresh. A sink that acknowledged it without
+    publishing would make that last resort look like a stalled index."""
+    index = ModelledIndex(clock=lambda: 0.0, refresh_interval_s=-1)
+    index.create()
+    routes = null_sink_http.Routes(AcceptedWork(), index)
+    routes.respond(null_sink_http.Request("POST", "/_bulk",
+                                          bulk_body("i", [1, 2, 3])))
+
+    _, never = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    routes.respond(null_sink_http.Request("POST", "/wiki-articles/_refresh",
+                                          b""))
+    _, asked = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    assert json.loads(never)["count"] == 0
+    assert json.loads(asked)["count"] == 3
+
+
+def test_by_default_nothing_waits_for_a_refresh():
+    """Every run recorded before the refresh model existed measured a sink
+    where accepted and searchable were the same number, and the default has to
+    keep meaning that."""
+    routes = null_sink_http.Routes(AcceptedWork())
+    routes.respond(null_sink_http.Request("POST", "/_bulk",
+                                          bulk_body("i", [1, 2, 3])))
+    _, body = routes.respond(
+        null_sink_http.Request("GET", "/wiki-articles/_count", b""))
+    assert json.loads(body)["count"] == 3
 
 
 def test_a_recreated_index_is_present_and_empty():
@@ -454,3 +533,21 @@ def test_preparing_a_statement_registers_what_it_is():
             struct.pack(">I", len(query)) + query.encode())), 0)[0])
         registered = responses.prepared[null_sink_cql.query_id(query)]
         assert registered == (mutation, query)
+
+
+def test_the_serving_delay_flag_keeps_its_old_name():
+    """The runbook's CQL sink command lines pass `--vs-serving-delay-ms`, and
+    they must keep working now that the state has a mode-neutral name."""
+    from ftsbench.null_sink import parse_args
+    old = parse_args(["--mode", "cql", "--vs-serving-delay-ms", "500"])
+    new = parse_args(["--mode", "http", "--index-ready-delay-ms", "500"])
+    assert old.index_ready_delay_ms == new.index_ready_delay_ms == 500.0
+
+
+def test_a_negative_refresh_interval_stays_negative():
+    """`refresh_interval: -1` is a state a build-rate watch has to survive, so
+    it must not become a sub-millisecond delay on the way through the flag."""
+    from ftsbench.null_sink import parse_args, refresh_interval_of
+    assert refresh_interval_of(
+        parse_args(["--mode", "http", "--os-refresh-interval-ms", "-1"])) == -1.0
+    assert refresh_interval_of(parse_args(["--mode", "http"])) == 0.0
