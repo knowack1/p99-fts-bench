@@ -19,16 +19,20 @@
 //! name and says what it last saw, because a reset that quietly did not happen
 //! produces a complete, plausible, wrong build rate.
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+
+use anyhow::Result;
 use scylla::client::session::Session;
 
 use crate::insert::CqlInserter;
 use crate::notes::Notes;
 use crate::session;
 use crate::sweep::{BoxFuture, InserterSource};
-use crate::vstore::{IndexProbe, IndexState};
+pub use build_rate_core::gate::GateTiming;
+
+use build_rate_core::gate::Gate;
+
+use crate::vstore::IndexProbe;
 
 /// Written out here rather than read from `scylladb/schema.cql`, which hardcodes
 /// `wiki` and `articles`: only a statement built from the flags can honour
@@ -71,75 +75,43 @@ impl ResetPlan {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct GateTiming {
-    pub poll_interval: Duration,
-    pub timeout: Duration,
-}
-
-/// Polls the vector-store until the index reaches a named state.
-pub struct Gate<'a> {
-    probe: &'a IndexProbe,
-    timing: &'a GateTiming,
+/// Two gates, in this order. Without the first the second could match the index
+/// that was just dropped; without the second the load would start against an
+/// index that is not answering yet.
+pub struct ResetGates<'a> {
+    gate: Gate<'a>,
     notes: &'a Notes,
 }
 
-impl<'a> Gate<'a> {
-    pub fn new(probe: &'a IndexProbe, timing: &'a GateTiming, notes: &'a Notes) -> Self {
+impl<'a> ResetGates<'a> {
+    pub fn new(probe: &'a dyn IndexProbe, timing: &'a GateTiming, notes: &'a Notes) -> Self {
         Self {
-            probe,
-            timing,
+            gate: Gate::new(probe, timing),
             notes,
         }
     }
 
     /// The drop has reached the vector-store. Phrased as "no longer serving"
     /// rather than "404" so it does not depend on which code the vector-store
-    /// picks for an index it no longer has.
+    /// picks for an index it no longer has — and so it accepts an index that is
+    /// present but still BUILDING.
     pub async fn await_dropped(&self) -> Result<()> {
-        self.await_state("the dropped index to disappear", |state| {
-            state.serving().is_none()
-        })
-        .await
+        self.gate
+            .await_state("the dropped index to disappear", |state| {
+                state.ready().is_none()
+            })
+            .await
     }
 
     /// The new index exists, is queryable, and holds nothing. All three:
     /// SERVING alone could still be the pre-drop index, and a count of zero
     /// alone could be an index that is not yet answering queries.
     pub async fn await_empty_and_serving(&self) -> Result<()> {
-        self.await_state("the new index to reach SERVING at 0 documents", |state| {
-            state.serving().is_some_and(|status| status.count == 0)
-        })
-        .await
-    }
-
-    async fn await_state(&self, what: &str, reached: impl Fn(&IndexState) -> bool) -> Result<()> {
-        let deadline = Instant::now() + self.timing.timeout;
-        let mut last = "not polled yet".to_string();
-        while Instant::now() < deadline {
-            last = self.look(&reached).await?;
-            if last.is_empty() {
-                return Ok(());
-            }
-            tokio::time::sleep(self.timing.poll_interval).await;
-        }
-        bail!(
-            "timed out after {:.0}s waiting for {what}; the index was last {last} at {}",
-            self.timing.timeout.as_secs_f64(),
-            self.probe.status_url()
-        )
-    }
-
-    /// An empty description means the state was reached. A failed poll is
-    /// described rather than raised: the vector-store is legitimately
-    /// unavailable for a moment while a keyspace drop propagates, and the
-    /// deadline is what decides that the moment has lasted too long.
-    async fn look(&self, reached: &impl Fn(&IndexState) -> bool) -> Result<String> {
-        match self.probe.status().await {
-            Ok(state) if reached(&state) => Ok(String::new()),
-            Ok(state) => Ok(state.describe()),
-            Err(exc) => Ok(format!("unreadable ({exc:#})")),
-        }
+        self.gate
+            .await_state("the new index to reach SERVING at 0 documents", |state| {
+                state.ready().is_some_and(|reading| reading.docs == 0)
+            })
+            .await
     }
 
     fn say(&self, message: &str) {
@@ -151,7 +123,7 @@ impl<'a> Gate<'a> {
 pub struct ResettingInserters {
     session: Arc<Session>,
     plan: ResetPlan,
-    probe: Option<Arc<IndexProbe>>,
+    probe: Option<Arc<dyn IndexProbe>>,
     timing: GateTiming,
     notes: Notes,
     reset: bool,
@@ -161,7 +133,7 @@ impl ResettingInserters {
     pub fn new(
         session: Arc<Session>,
         plan: ResetPlan,
-        probe: Option<Arc<IndexProbe>>,
+        probe: Option<Arc<dyn IndexProbe>>,
         timing: GateTiming,
         notes: Notes,
         reset: bool,
@@ -180,7 +152,7 @@ impl ResettingInserters {
         let Some(probe) = self.probe.as_deref() else {
             return Ok(());
         };
-        let gate = Gate::new(probe, &self.timing, &self.notes);
+        let gate = ResetGates::new(probe, &self.timing, &self.notes);
         gate.say(&format!("  resetting {}", self.plan.keyspace));
         self.execute(&self.plan.drop_statement()).await?;
         gate.await_dropped().await?;

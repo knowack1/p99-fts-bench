@@ -13,7 +13,7 @@ use opensearch::indices::{
     IndicesAnalyzeParts, IndicesExistsParts, IndicesGetMappingParts, IndicesGetSettingsParts,
 };
 use opensearch::nodes::NodesInfoParts;
-use opensearch::{CountParts, OpenSearch};
+use opensearch::OpenSearch;
 use serde_json::{json, Value};
 use url::Url;
 
@@ -145,23 +145,6 @@ pub async fn index_exists(client: &OpenSearch, index: &str) -> Result<bool> {
         .await
         .with_context(|| format!("cannot ask whether index {index:?} exists"))?;
     Ok(response.status_code().is_success())
-}
-
-/// `GET /{index}/_count`. This doubles as the readiness check: an index whose
-/// primary is not allocated yet answers 503 rather than 0, which is the
-/// keep-polling case rather than a count of nothing.
-pub async fn document_count(client: &OpenSearch, index: &str) -> Result<u64> {
-    let body: Value = json_of(
-        client
-            .count(CountParts::Index(&[index]))
-            .send()
-            .await
-            .with_context(|| format!("cannot count the documents in index {index:?}"))?,
-    )
-    .await?;
-    body.get("count")
-        .and_then(Value::as_u64)
-        .with_context(|| format!("the _count reply for index {index:?} carried no count"))
 }
 
 /// `POST /{index}/_analyze`, rendered as the `position:token` stream

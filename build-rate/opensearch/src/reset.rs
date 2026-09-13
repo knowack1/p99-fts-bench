@@ -20,14 +20,19 @@
 //! fails by name and says what it last saw, because a reset that quietly did
 //! not happen produces a complete, plausible, wrong build rate.
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use opensearch::indices::{IndicesCreateParts, IndicesDeleteParts};
 use opensearch::OpenSearch;
 use serde_json::Value;
 
+pub use build_rate_core::gate::GateTiming;
+
+use build_rate_core::gate::Gate;
+use build_rate_core::index::{IndexProbe, IndexState};
+
 use crate::client;
+use crate::vstore::StatsProbe;
 use crate::notes::Notes;
 use crate::sweep::{BeforeLevel, BoxFuture};
 
@@ -138,61 +143,19 @@ impl IndexConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct GateTiming {
-    pub poll_interval: Duration,
-    pub timeout: Duration,
+/// Two gates, in this order. A `DELETE` can still be settling when the `PUT` is
+/// sent, so without the first the create could lose the race and hand this
+/// level the last level's documents; and a created index answers before its
+/// primary is allocated, so without the second the load would start against an
+/// index that is not serving yet.
+pub struct ResetGates<'a> {
+    gate: Gate<'a>,
 }
 
-/// What one poll saw. `Unreadable` is a state rather than an error: the engine
-/// is legitimately unable to answer for a moment while a delete settles or a
-/// primary is allocated, and the deadline is what decides that the moment has
-/// lasted too long.
-#[derive(Debug, Clone, PartialEq)]
-pub enum IndexState {
-    Absent,
-    Present { docs: u64 },
-    Unreadable(String),
-}
-
-impl IndexState {
-    pub fn describe(&self) -> String {
-        match self {
-            Self::Absent => "absent".to_string(),
-            Self::Present { docs } => format!("present with {docs} document(s)"),
-            Self::Unreadable(why) => format!("unreadable ({why})"),
-        }
-    }
-
-    pub fn is_absent(&self) -> bool {
-        matches!(self, Self::Absent)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Self::Present { docs: 0 })
-    }
-}
-
-/// Polls the endpoint until the index reaches a named state.
-pub struct Gate<'a> {
-    client: &'a OpenSearch,
-    index: &'a str,
-    url: &'a str,
-    timing: &'a GateTiming,
-}
-
-impl<'a> Gate<'a> {
-    pub fn new(
-        client: &'a OpenSearch,
-        index: &'a str,
-        url: &'a str,
-        timing: &'a GateTiming,
-    ) -> Self {
+impl<'a> ResetGates<'a> {
+    pub fn new(probe: &'a dyn IndexProbe, timing: &'a GateTiming) -> Self {
         Self {
-            client,
-            index,
-            url,
-            timing,
+            gate: Gate::new(probe, timing),
         }
     }
 
@@ -200,53 +163,20 @@ impl<'a> Gate<'a> {
     /// not depend on which code the endpoint picks for an index it no longer
     /// has.
     pub async fn await_absent(&self) -> Result<()> {
-        self.await_state("the deleted index to disappear", IndexState::is_absent)
+        self.gate
+            .await_state("the deleted index to disappear", IndexState::is_absent)
             .await
     }
 
-    /// The new index answers queries and holds nothing. Both: a `HEAD` that
+    /// The new index answers queries and holds nothing. Both: a reading that
     /// says present could still be the pre-delete index, and a count of zero
     /// cannot be read from an index whose primary is not allocated.
     pub async fn await_empty(&self) -> Result<()> {
-        self.await_state(
-            "the new index to answer at 0 documents",
-            IndexState::is_empty,
-        )
-        .await
-    }
-
-    async fn await_state(&self, what: &str, reached: impl Fn(&IndexState) -> bool) -> Result<()> {
-        let deadline = Instant::now() + self.timing.timeout;
-        let mut last = "not polled yet".to_string();
-        while Instant::now() < deadline {
-            let state = self.look().await;
-            if reached(&state) {
-                return Ok(());
-            }
-            last = state.describe();
-            tokio::time::sleep(self.timing.poll_interval).await;
-        }
-        bail!(
-            "timed out after {:.0}s waiting for {what}; index {:?} at {} was last {last}",
-            self.timing.timeout.as_secs_f64(),
-            self.index,
-            self.url
-        )
-    }
-
-    async fn look(&self) -> IndexState {
-        match client::index_exists(self.client, self.index).await {
-            Err(exc) => IndexState::Unreadable(format!("{exc:#}")),
-            Ok(false) => IndexState::Absent,
-            Ok(true) => self.count().await,
-        }
-    }
-
-    async fn count(&self) -> IndexState {
-        match client::document_count(self.client, self.index).await {
-            Ok(docs) => IndexState::Present { docs },
-            Err(exc) => IndexState::Unreadable(format!("{exc:#}")),
-        }
+        self.gate
+            .await_state("the new index to answer at 0 documents", |state| {
+                state.ready().is_some_and(|reading| reading.docs == 0)
+            })
+            .await
     }
 }
 
@@ -258,6 +188,9 @@ pub struct IndexReset {
     config: IndexConfig,
     timing: GateTiming,
     notes: Notes,
+    /// The same `_stats` reading the watch takes, so both gates and the build
+    /// rate come from one endpoint rather than three.
+    probe: StatsProbe,
 }
 
 impl IndexReset {
@@ -269,10 +202,13 @@ impl IndexReset {
         timing: GateTiming,
         notes: Notes,
     ) -> Self {
+        let index = index.into();
+        let url = url.into();
         Self {
+            probe: StatsProbe::new(client.clone(), &url, &index),
             client,
-            index: index.into(),
-            url: url.into(),
+            index,
+            url,
             config,
             timing,
             notes,
@@ -338,8 +274,8 @@ impl IndexReset {
         )
     }
 
-    fn gate(&self) -> Gate<'_> {
-        Gate::new(&self.client, &self.index, &self.url, &self.timing)
+    fn gate(&self) -> ResetGates<'_> {
+        ResetGates::new(&self.probe, &self.timing)
     }
 
     /// Run once, after the first create and before any document: an analyzer

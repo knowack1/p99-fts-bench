@@ -7,14 +7,16 @@ use std::time::Duration;
 
 use super::*;
 use crate::fakes::a_topology;
-use crate::vstore::IndexStatus;
+use build_rate_core::index::IndexReading;
 
 const NO_SETTINGS: [(String, String); 0] = [];
 
 fn serving(count: u64) -> IndexState {
-    IndexState::Present(IndexStatus {
-        count,
+    IndexState::Present(IndexReading {
+        docs: count,
+        accepted: None,
         status: "SERVING".to_string(),
+        ready: true,
     })
 }
 

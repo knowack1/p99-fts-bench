@@ -11,7 +11,7 @@ use std::time::Duration;
 use super::*;
 use crate::fakes::{no_counter, quiet_notes, FakeVectorStore, Reply, SpokenNotes};
 use crate::samples::{SampleFiles, Submitted, Tape};
-use crate::vstore::{IndexProbe, DEFAULT_VS_INDEX};
+use crate::vstore::{VectorStoreProbe, DEFAULT_VS_INDEX};
 
 const A_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -25,7 +25,7 @@ fn brisk(settle: Duration, idle: Duration) -> WatchTiming {
 
 async fn watching(store: &FakeVectorStore, timing: WatchTiming) -> IndexWatch {
     IndexWatch::on(
-        Arc::new(IndexProbe::new(store.url(), "wiki", DEFAULT_VS_INDEX, A_TIMEOUT).unwrap()),
+        Arc::new(VectorStoreProbe::new(store.url(), "wiki", DEFAULT_VS_INDEX, A_TIMEOUT).unwrap()),
         timing,
     )
 }
@@ -212,7 +212,7 @@ async fn an_index_that_is_never_readable_fails_rather_than_reporting_zero() {
 async fn beginning_a_level_against_an_unreachable_store_fails_the_level() {
     let watch = IndexWatch::on(
         Arc::new(
-            IndexProbe::new(
+            VectorStoreProbe::new(
                 "http://127.0.0.1:1",
                 "wiki",
                 "idx",

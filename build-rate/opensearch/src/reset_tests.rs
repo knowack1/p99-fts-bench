@@ -196,12 +196,12 @@ async fn the_create_waits_until_the_delete_has_landed() {
         .iter()
         .position(|at| at == "PUT /wiki-articles")
         .unwrap();
-    let heads = events[..created]
+    let polls = events[..created]
         .iter()
-        .filter(|at| *at == "HEAD /wiki-articles")
+        .filter(|at| *at == "GET /wiki-articles/_stats")
         .count();
     assert!(
-        heads >= 3,
+        polls >= 3,
         "the create did not wait for the delete: {events:?}"
     );
 }
@@ -218,7 +218,7 @@ async fn the_level_waits_until_the_new_index_answers() {
         .unwrap();
 
     assert!(
-        endpoint.times("GET /wiki-articles/_count") >= 4,
+        endpoint.times("GET /wiki-articles/_stats") >= 4,
         "{:?}",
         endpoint.events()
     );
@@ -250,7 +250,7 @@ async fn a_gate_that_never_opens_names_the_index_and_the_endpoint() {
 
     assert!(said.contains("wiki-articles"), "{said}");
     assert!(said.contains(endpoint.url()), "{said}");
-    assert!(said.contains("was last present"), "{said}");
+    assert!(said.contains("was last searchable at"), "{said}");
 }
 
 #[tokio::test]
@@ -377,9 +377,6 @@ async fn a_delete_that_was_acknowledged_but_did_nothing_fails_the_level() {
     );
     let said = format!("{:#}", reset.ensure_fresh().await.unwrap_err());
 
-    assert!(
-        said.contains("was last present with 42 document(s)"),
-        "{said}"
-    );
+    assert!(said.contains("was last searchable at 42 docs"), "{said}");
     assert_eq!(endpoint.times("PUT /wiki-articles"), 0, "it created anyway");
 }

@@ -8,6 +8,7 @@ pub mod notes;
 pub mod report;
 pub mod reset;
 pub mod sweep;
+pub mod vstore;
 
 #[cfg(test)]
 pub(crate) mod fakes;

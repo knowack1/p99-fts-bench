@@ -169,6 +169,7 @@ dependencies = [
 name = "build-rate-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "tokio",
 ]
 

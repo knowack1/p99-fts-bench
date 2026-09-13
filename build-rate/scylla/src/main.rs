@@ -19,7 +19,7 @@ use scyllarate::reset::ResettingInserters;
 use scyllarate::samples::SampleFiles;
 use scyllarate::session::{self, Topology};
 use scyllarate::sweep::{self, Cancel, Watchers};
-use scyllarate::vstore::IndexProbe;
+use scyllarate::vstore::{IndexProbe, VectorStoreProbe};
 
 fn main() -> ExitCode {
     match run(Args::parse()) {
@@ -83,11 +83,11 @@ fn open_samples(
     Ok(Some(files.with_preamble(topology, settings)))
 }
 
-fn open_probe(args: &Args) -> Result<Option<Arc<IndexProbe>>> {
+fn open_probe(args: &Args) -> Result<Option<Arc<VectorStoreProbe>>> {
     if !args.watches_index() {
         return Ok(None);
     }
-    Ok(Some(Arc::new(IndexProbe::new(
+    Ok(Some(Arc::new(VectorStoreProbe::new(
         &args.vs_url,
         &args.keyspace,
         &args.vs_index,
@@ -117,7 +117,7 @@ fn announce_reset(args: &Args) {
     ));
 }
 
-async fn settings_with_index(args: &Args, probe: Option<&IndexProbe>) -> Vec<(String, String)> {
+async fn settings_with_index(args: &Args, probe: Option<&VectorStoreProbe>) -> Vec<(String, String)> {
     let version = match probe {
         Some(probe) => probe.version().await,
         None => "off".to_string(),
@@ -130,18 +130,18 @@ async fn settings_with_index(args: &Args, probe: Option<&IndexProbe>) -> Vec<(St
 async fn sweep_levels(
     args: &Args,
     session: Arc<scylla::client::session::Session>,
-    probe: Option<Arc<IndexProbe>>,
+    probe: Option<Arc<VectorStoreProbe>>,
     sink: &mut CsvSink,
     samples: Option<&SampleFiles>,
 ) -> (Vec<PointResult>, bool) {
     let source = CorpusSource::new(&args.corpus, args.max_docs);
     let notes = Notes::stderr();
     let cancel = watch_for_interrupt();
-    let index = index_watch(args, probe.clone());
+    let index = index_watch(args, as_probe(probe.clone()));
     let inserters = ResettingInserters::new(
         session,
         args.reset_plan(),
-        probe,
+        as_probe(probe),
         args.gate_timing(),
         notes.clone(),
         args.resets(),
@@ -172,7 +172,13 @@ async fn sweep_levels(
     (results, report_outcome(outcome, sink.destination()))
 }
 
-fn index_watch(args: &Args, probe: Option<Arc<IndexProbe>>) -> IndexWatch {
+/// The vector-store is what `IndexProbe` means on this half; the watch and the
+/// reset gates take it as the trait so neither has to know that.
+fn as_probe(probe: Option<Arc<VectorStoreProbe>>) -> Option<Arc<dyn IndexProbe>> {
+    probe.map(|probe| probe as Arc<dyn IndexProbe>)
+}
+
+fn index_watch(args: &Args, probe: Option<Arc<dyn IndexProbe>>) -> IndexWatch {
     match probe {
         Some(probe) => IndexWatch::on(probe, args.watch_timing()),
         None => IndexWatch::off(),

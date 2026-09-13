@@ -11,6 +11,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+pub use build_rate_core::index::{IndexProbe, IndexState};
+
+use build_rate_core::index::{BoxFuture, IndexReading};
 use serde::Deserialize;
 
 use crate::session::UNKNOWN;
@@ -35,47 +38,28 @@ impl IndexStatus {
     pub fn is_serving(&self) -> bool {
         self.status == SERVING
     }
-}
 
-/// What one poll found. `Absent` is a real answer, not an error: between the
-/// keyspace drop and the index create there is genuinely no index, and that is
-/// the state the reset waits to see.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IndexState {
-    Absent,
-    Present(IndexStatus),
-}
-
-impl IndexState {
-    pub fn serving(&self) -> Option<&IndexStatus> {
-        match self {
-            Self::Present(status) if status.is_serving() => Some(status),
-            _ => None,
-        }
-    }
-
-    pub fn count(&self) -> u64 {
-        match self {
-            Self::Present(status) => status.count,
-            Self::Absent => 0,
-        }
-    }
-
-    pub fn describe(&self) -> String {
-        match self {
-            Self::Absent => "absent".to_string(),
-            Self::Present(status) => format!("{} at {} docs", status.status, status.count),
+    /// The vector-store counts what is in the Tantivy index, which is what a
+    /// query would find, and it has no second counter for what the base table
+    /// has accepted — hence `accepted: None` rather than a zero that would read
+    /// as an engine that had taken nothing in.
+    fn reading(self) -> IndexReading {
+        IndexReading {
+            docs: self.count,
+            accepted: None,
+            ready: self.is_serving(),
+            status: self.status,
         }
     }
 }
 
-pub struct IndexProbe {
+pub struct VectorStoreProbe {
     client: reqwest::Client,
     status_url: String,
     info_url: String,
 }
 
-impl IndexProbe {
+impl VectorStoreProbe {
     pub fn new(base_url: &str, keyspace: &str, index: &str, timeout: Duration) -> Result<Self> {
         let base = base_url.trim_end_matches('/');
         Ok(Self {
@@ -95,7 +79,7 @@ impl IndexProbe {
     /// A 404 is `Absent`; anything else non-2xx is an error rather than an
     /// absence, because "the index is not there" and "the vector-store is not
     /// answering" are the two states a reset gate must never confuse.
-    pub async fn status(&self) -> Result<IndexState> {
+    async fn poll(&self) -> Result<IndexState> {
         let response = self
             .client
             .get(&self.status_url)
@@ -109,12 +93,16 @@ impl IndexProbe {
             .error_for_status()
             .with_context(|| format!("{} answered an error", self.status_url))?;
         Ok(IndexState::Present(
-            response.json::<IndexStatus>().await.with_context(|| {
-                format!(
-                    "{} answered something that is not an index status",
-                    self.status_url
-                )
-            })?,
+            response
+                .json::<IndexStatus>()
+                .await
+                .with_context(|| {
+                    format!(
+                        "{} answered something that is not an index status",
+                        self.status_url
+                    )
+                })?
+                .reading(),
         ))
     }
 
@@ -141,6 +129,21 @@ impl IndexProbe {
             .and_then(|value| value.as_str())
             .unwrap_or(UNKNOWN)
             .to_string())
+    }
+}
+
+impl IndexProbe for VectorStoreProbe {
+    fn read(&self) -> BoxFuture<'_, IndexState> {
+        Box::pin(async move {
+            match self.poll().await {
+                Ok(state) => state,
+                Err(exc) => IndexState::Unreadable(format!("{exc:#}")),
+            }
+        })
+    }
+
+    fn endpoint(&self) -> &str {
+        &self.status_url
     }
 }
 

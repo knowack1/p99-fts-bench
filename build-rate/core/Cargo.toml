@@ -14,10 +14,12 @@ path = "src/lib.rs"
 # upgraded — the thing `../scylla/README.md` says must never happen to a
 # recorded run.
 [dependencies]
-tokio = { version = "1", features = ["sync"] }
+anyhow = "1"
+tokio = { version = "1", features = ["sync", "time"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [profile.release]
 debug = false

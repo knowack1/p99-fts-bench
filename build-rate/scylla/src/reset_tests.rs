@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::fakes::{quiet_notes, FakeVectorStore, Reply};
-use crate::vstore::DEFAULT_VS_INDEX;
+use crate::vstore::{VectorStoreProbe, DEFAULT_VS_INDEX};
 
 const A_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -29,8 +29,8 @@ fn brisk(timeout: Duration) -> GateTiming {
     }
 }
 
-async fn probe_for(store: &FakeVectorStore) -> IndexProbe {
-    IndexProbe::new(store.url(), "wiki", DEFAULT_VS_INDEX, A_TIMEOUT).unwrap()
+async fn probe_for(store: &FakeVectorStore) -> VectorStoreProbe {
+    VectorStoreProbe::new(store.url(), "wiki", DEFAULT_VS_INDEX, A_TIMEOUT).unwrap()
 }
 
 // --- the statements -------------------------------------------------------
@@ -190,7 +190,7 @@ async fn the_drop_gate_passes_once_the_index_is_gone() {
         Reply::Absent,
     ]);
 
-    Gate::new(&probe, &timing, &quiet_notes())
+    ResetGates::new(&probe, &timing, &quiet_notes())
         .await_dropped()
         .await
         .unwrap();
@@ -203,7 +203,7 @@ async fn an_index_that_stopped_serving_counts_as_dropped() {
     let store = FakeVectorStore::start(Reply::Building(0)).await;
     let probe = probe_for(&store).await;
 
-    Gate::new(&probe, &brisk(Duration::from_secs(5)), &quiet_notes())
+    ResetGates::new(&probe, &brisk(Duration::from_secs(5)), &quiet_notes())
         .await_dropped()
         .await
         .unwrap();
@@ -213,7 +213,7 @@ async fn an_index_that_stopped_serving_counts_as_dropped() {
 async fn the_drop_gate_refuses_to_pass_while_the_old_index_still_serves() {
     let store = FakeVectorStore::start(Reply::Serving(270_269)).await;
     let probe = probe_for(&store).await;
-    let failure = Gate::new(&probe, &brisk(Duration::from_millis(60)), &quiet_notes())
+    let failure = ResetGates::new(&probe, &brisk(Duration::from_millis(60)), &quiet_notes())
         .await_dropped()
         .await
         .unwrap_err();
@@ -232,7 +232,7 @@ async fn the_ready_gate_passes_on_a_serving_empty_index() {
     let probe = probe_for(&store).await;
     store.then(&[Reply::Absent, Reply::Building(0), Reply::Serving(0)]);
 
-    Gate::new(&probe, &brisk(Duration::from_secs(5)), &quiet_notes())
+    ResetGates::new(&probe, &brisk(Duration::from_secs(5)), &quiet_notes())
         .await_empty_and_serving()
         .await
         .unwrap();
@@ -244,7 +244,7 @@ async fn the_ready_gate_passes_on_a_serving_empty_index() {
 async fn a_serving_index_that_still_holds_documents_is_not_ready() {
     let store = FakeVectorStore::start(Reply::Serving(270_269)).await;
     let probe = probe_for(&store).await;
-    let failure = Gate::new(&probe, &brisk(Duration::from_millis(60)), &quiet_notes())
+    let failure = ResetGates::new(&probe, &brisk(Duration::from_millis(60)), &quiet_notes())
         .await_empty_and_serving()
         .await
         .unwrap_err();
@@ -256,7 +256,7 @@ async fn a_serving_index_that_still_holds_documents_is_not_ready() {
 async fn an_index_still_building_is_not_ready() {
     let store = FakeVectorStore::start(Reply::Building(0)).await;
     let probe = probe_for(&store).await;
-    let failure = Gate::new(&probe, &brisk(Duration::from_millis(60)), &quiet_notes())
+    let failure = ResetGates::new(&probe, &brisk(Duration::from_millis(60)), &quiet_notes())
         .await_empty_and_serving()
         .await
         .unwrap_err();
@@ -273,7 +273,7 @@ async fn a_transient_failure_is_polled_through() {
     let probe = probe_for(&store).await;
     store.then(&[Reply::Failing(503), Reply::Failing(503), Reply::Serving(0)]);
 
-    Gate::new(&probe, &brisk(Duration::from_secs(5)), &quiet_notes())
+    ResetGates::new(&probe, &brisk(Duration::from_secs(5)), &quiet_notes())
         .await_empty_and_serving()
         .await
         .unwrap();
@@ -281,14 +281,14 @@ async fn a_transient_failure_is_polled_through() {
 
 #[tokio::test]
 async fn an_endpoint_that_never_answers_times_out_saying_so() {
-    let probe = IndexProbe::new(
+    let probe = VectorStoreProbe::new(
         "http://127.0.0.1:1",
         "wiki",
         "idx",
         Duration::from_millis(50),
     )
     .unwrap();
-    let failure = Gate::new(&probe, &brisk(Duration::from_millis(120)), &quiet_notes())
+    let failure = ResetGates::new(&probe, &brisk(Duration::from_millis(120)), &quiet_notes())
         .await_empty_and_serving()
         .await
         .unwrap_err();

@@ -292,11 +292,11 @@ impl Reel {
     }
 
     fn index_sample(&self, now: Instant, state: &IndexState) -> IndexSample {
-        let docs = state.count().saturating_sub(self.before);
+        let docs = state.docs().saturating_sub(self.before);
         IndexSample {
             docs,
             docs_per_s: self.rate_since(self.last_index.as_ref(), docs, now),
-            status: status_of(state),
+            status: state.status_word().to_string(),
         }
     }
 
@@ -340,14 +340,6 @@ impl Reel {
         if let Some(sink) = self.sink.as_mut() {
             let _ = sink.append(sample);
         }
-    }
-}
-
-/// What the vector-store last called itself, or the absence of an index at all.
-pub fn status_of(state: &IndexState) -> String {
-    match state {
-        IndexState::Absent => "absent".to_string(),
-        IndexState::Present(status) => status.status.clone(),
     }
 }
 

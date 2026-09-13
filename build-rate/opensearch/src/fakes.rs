@@ -257,6 +257,8 @@ pub struct FakeIndex {
 pub struct IndexModel {
     present: bool,
     docs: u64,
+    searchable: u64,
+    publish_after: usize,
     delete_lag: usize,
     create_lag: usize,
     delete_status: u16,
@@ -305,9 +307,19 @@ impl FakeIndex {
         self
     }
 
-    /// Polls the new index takes to answer: `_count` says 503 for this many.
+    /// Polls the new index takes to answer: `_count` and `_stats` say 503 for
+    /// this many.
     pub fn answers_after(&self, polls: usize) -> &Self {
         self.state.lock().unwrap().create_lag = polls;
+        self
+    }
+
+    /// Polls before what the index accepted becomes searchable, the way an
+    /// OpenSearch `refresh_interval` does. Until then `docs.count` is behind
+    /// `indexing.index_total` — the state that separates an index which has
+    /// stalled from one which has simply not refreshed.
+    pub fn publishes_after(&self, polls: usize) -> &Self {
+        self.state.lock().unwrap().publish_after = polls;
         self
     }
 
@@ -317,6 +329,17 @@ impl FakeIndex {
     }
 
     pub fn holding(&self, docs: u64) -> &Self {
+        let mut model = self.state.lock().unwrap();
+        model.docs = docs;
+        model.searchable = docs;
+        drop(model);
+        self
+    }
+
+    /// Documents the index has taken in but not yet published. With
+    /// `publishes_after` this is the state a build-rate watch has to read
+    /// correctly: `indexing.index_total` ahead of `docs.count`.
+    pub fn accepted(&self, docs: u64) -> &Self {
         self.state.lock().unwrap().docs = docs;
         self
     }
@@ -497,6 +520,10 @@ fn answer(request: &FakeRequest, state: &Arc<Mutex<IndexModel>>) -> (u16, String
         ("DELETE", _) => delete_index(&mut model),
         ("PUT", _) => create_index(&mut model, &request.body),
         ("GET", path) if path.ends_with("/_count") => count_documents(&mut model),
+        ("GET", path) if path.ends_with("/_stats") => index_stats(&mut model),
+        // Real OpenSearch answers `_refresh` on either verb, and the client
+        // sends GET.
+        (_, path) if path.ends_with("/_refresh") => refresh_index(&mut model),
         ("POST", path) if path.ends_with("/_analyze") => analyze_text(&model),
         _ => (
             404,
@@ -506,18 +533,29 @@ fn answer(request: &FakeRequest, state: &Arc<Mutex<IndexModel>>) -> (u16, String
 }
 
 fn head_index(model: &mut IndexModel) -> (u16, String) {
+    if still_present(model) {
+        (200, String::new())
+    } else {
+        (404, String::new())
+    }
+}
+
+/// Whether the index is there *as of this poll*, ticking the delete lag on the
+/// way past.
+///
+/// Every route that answers for an index consults this, not just `HEAD`: the
+/// reset gate polls whichever endpoint the probe uses, and a lag that only
+/// counted down on one of them would make the delete land or not depending on
+/// which endpoint the harness happened to ask.
+fn still_present(model: &mut IndexModel) -> bool {
     if model.delete_lag > 0 && !model.delete_is_a_lie {
         model.delete_lag -= 1;
         if model.delete_lag == 0 {
             model.present = false;
         }
-        return (200, String::new());
+        return true;
     }
-    if model.present {
-        (200, String::new())
-    } else {
-        (404, String::new())
-    }
+    model.present
 }
 
 fn delete_index(model: &mut IndexModel) -> (u16, String) {
@@ -554,7 +592,7 @@ fn create_index(model: &mut IndexModel, body: &[u8]) -> (u16, String) {
 }
 
 fn count_documents(model: &mut IndexModel) -> (u16, String) {
-    if !model.present {
+    if !still_present(model) {
         return (
             404,
             r#"{"error":{"type":"index_not_found_exception"}}"#.to_string(),
@@ -568,6 +606,45 @@ fn count_documents(model: &mut IndexModel) -> (u16, String) {
         );
     }
     (200, format!(r#"{{"count":{}}}"#, model.docs))
+}
+
+/// The same lifecycle `_count` answers, plus the second counter. `docs.count`
+/// is what a search would find and `indexing.index_total` is what the index has
+/// accepted; `publish_after` holds the first apart from the second for a number
+/// of polls, which is what an OpenSearch `refresh_interval` does and what a
+/// build-rate watch has to be able to measure.
+fn index_stats(model: &mut IndexModel) -> (u16, String) {
+    if !still_present(model) {
+        return (
+            404,
+            r#"{"error":{"type":"index_not_found_exception"}}"#.to_string(),
+        );
+    }
+    if model.create_lag > 0 {
+        model.create_lag -= 1;
+        return (
+            503,
+            r#"{"error":{"type":"no_shard_available_action_exception"}}"#.to_string(),
+        );
+    }
+    if model.publish_after > 0 {
+        model.publish_after -= 1;
+    } else {
+        model.searchable = model.docs;
+    }
+    (
+        200,
+        format!(
+            r#"{{"_all":{{"total":{{"docs":{{"count":{}}},"indexing":{{"index_total":{}}}}}}}}}"#,
+            model.searchable, model.docs
+        ),
+    )
+}
+
+fn refresh_index(model: &mut IndexModel) -> (u16, String) {
+    model.searchable = model.docs;
+    model.publish_after = 0;
+    (200, r#"{"_shards":{"total":1,"successful":1,"failed":0}}"#.to_string())
 }
 
 fn analyze_text(model: &IndexModel) -> (u16, String) {

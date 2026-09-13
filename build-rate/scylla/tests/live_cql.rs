@@ -27,7 +27,7 @@ use scyllarate::report::PointResult;
 use scyllarate::reset::{GateTiming, ResetPlan, ResettingInserters};
 use scyllarate::session::{self, ConnectOptions};
 use scyllarate::sweep::{self, Cancel, Inserter, Watchers};
-use scyllarate::vstore::{IndexProbe, DEFAULT_VS_INDEX};
+use scyllarate::vstore::{VectorStoreProbe, DEFAULT_VS_INDEX};
 
 const BENCH_ROOT: &str = "../..";
 const VENV_PYTHON: &str = ".venv/bin/python3";
@@ -70,9 +70,9 @@ impl NullSink {
         format!("http://127.0.0.1:{}", self.vs_port)
     }
 
-    fn probe(&self) -> Arc<IndexProbe> {
+    fn probe(&self) -> Arc<VectorStoreProbe> {
         Arc::new(
-            IndexProbe::new(
+            VectorStoreProbe::new(
                 &self.vs_url(),
                 KEYSPACE,
                 DEFAULT_VS_INDEX,

@@ -20,7 +20,7 @@ use tokio::task::JoinSet;
 pub use crate::report::IndexBuild;
 
 use crate::notes::Notes;
-use crate::samples::{rate, status_of, IndexSample, Sample, Submitted, Tape};
+use crate::samples::{rate, IndexSample, Sample, Submitted, Tape};
 use crate::vstore::{IndexProbe, IndexState};
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ pub struct IndexWatch {
 }
 
 struct Watcher {
-    probe: Arc<IndexProbe>,
+    probe: Arc<dyn IndexProbe>,
     timing: WatchTiming,
 }
 
@@ -45,7 +45,7 @@ impl IndexWatch {
         Self { watcher: None }
     }
 
-    pub fn on(probe: Arc<IndexProbe>, timing: WatchTiming) -> Self {
+    pub fn on(probe: Arc<dyn IndexProbe>, timing: WatchTiming) -> Self {
         Self {
             watcher: Some(Watcher { probe, timing }),
         }
@@ -71,7 +71,7 @@ impl IndexWatch {
                 ticker: follow(None, interval, tape, submitted, notes),
             });
         };
-        let before = watcher.probe.status().await?.count();
+        let before = inherited_count(watcher.probe.as_ref()).await?;
         tape.inherited(before);
         Ok(LevelWatch {
             ticker: follow(
@@ -86,6 +86,24 @@ impl IndexWatch {
     }
 }
 
+/// What the index already held when this level started, so the level's own
+/// build can be counted apart from it.
+///
+/// A poll nobody could answer is not zero documents. Taking it as zero would
+/// make the level credit itself with everything already in the index, and the
+/// `index_docs` it reported would be a complete, plausible, wrong number rather
+/// than a failure.
+async fn inherited_count(probe: &dyn IndexProbe) -> Result<u64> {
+    match probe.read().await {
+        IndexState::Unreadable(why) => bail!(
+            "the index at {} could not be read before this level started, so \
+             what it already held is unknown: {why}",
+            probe.endpoint()
+        ),
+        state => Ok(state.docs()),
+    }
+}
+
 /// One level's watch, from the first insert to the moment the index settles.
 pub struct LevelWatch {
     level: Option<Level>,
@@ -93,7 +111,7 @@ pub struct LevelWatch {
 }
 
 struct Level {
-    probe: Arc<IndexProbe>,
+    probe: Arc<dyn IndexProbe>,
     timing: WatchTiming,
     notes: Notes,
     tape: Tape,
@@ -157,7 +175,7 @@ impl Level {
             bail!(
                 "the index was never readable at {} during this level, so its \
                  build rate cannot be reported",
-                self.probe.status_url()
+                self.probe.endpoint()
             );
         };
         Ok(self.summarize(&state, target, seen.first_count, settling_from))
@@ -167,9 +185,11 @@ impl Level {
     /// the submit rate falls to zero while the index rate does not, and that
     /// tail is the part of the build a per-level average cannot show.
     async fn sample_into(&self, seen: &mut Progress) {
-        match self.probe.status().await {
-            Ok(state) => self.keep(state, seen),
-            Err(exc) => self.notes.say(&format!("  !! index poll failed: {exc:#}")),
+        match self.probe.read().await {
+            IndexState::Unreadable(why) => {
+                self.notes.say(&format!("  !! index poll failed: {why}"));
+            }
+            state => self.keep(state, seen),
         }
     }
 
@@ -197,15 +217,15 @@ impl Level {
         at_submit_end: u64,
         settling_from: Instant,
     ) -> IndexBuild {
-        let docs = state.count().saturating_sub(self.before);
+        let docs = state.docs().saturating_sub(self.before);
         let wall_s = self.started.elapsed().as_secs_f64();
         IndexBuild {
             docs,
             docs_per_s: rate(docs, wall_s),
             lag_docs: target.saturating_sub(at_submit_end),
             settle_s: settling_from.elapsed().as_secs_f64(),
-            settled: state.count() >= target,
-            status: status_of(state),
+            settled: state.docs() >= target,
+            status: state.status_word().to_string(),
         }
     }
 }
@@ -231,7 +251,7 @@ impl Progress {
     }
 
     fn record(&mut self, state: IndexState) {
-        let count = state.count();
+        let count = state.docs();
         if self.last.is_none() {
             self.first_count = count;
         }
@@ -260,7 +280,7 @@ impl Progress {
 /// in the files afterwards, and two lines from two readings invite the reader
 /// to compare numbers that were never taken together.
 fn follow(
-    probe: Option<Arc<IndexProbe>>,
+    probe: Option<Arc<dyn IndexProbe>>,
     interval: Duration,
     tape: &Tape,
     submitted: &Arc<Submitted>,
@@ -278,7 +298,7 @@ fn follow(
 }
 
 async fn report_level(
-    probe: Option<Arc<IndexProbe>>,
+    probe: Option<Arc<dyn IndexProbe>>,
     interval: Duration,
     tape: Tape,
     submitted: Arc<Submitted>,
@@ -296,14 +316,14 @@ async fn report_level(
 /// A poll that failed leaves the index cells blank rather than zero, the same
 /// distinction the point CSV makes: an index nobody could read is not an index
 /// that indexed nothing.
-async fn read_index(probe: Option<&IndexProbe>, notes: &Notes) -> Option<IndexState> {
+async fn read_index(probe: Option<&dyn IndexProbe>, notes: &Notes) -> Option<IndexState> {
     let probe = probe?;
-    match probe.status().await {
-        Ok(state) => Some(state),
-        Err(exc) => {
-            notes.say(&format!("  !! index poll failed: {exc:#}"));
+    match probe.read().await {
+        IndexState::Unreadable(why) => {
+            notes.say(&format!("  !! index poll failed: {why}"));
             None
         }
+        state => Some(state),
     }
 }
 

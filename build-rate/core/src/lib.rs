@@ -14,6 +14,8 @@
 //! `cargo test` run from this directory: as a path dependency, the binary's
 //! lock is what resolves these dependencies.
 pub mod cli;
+pub mod gate;
+pub mod index;
 pub mod notes;
 pub mod report;
 pub mod sweep;

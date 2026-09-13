@@ -8,57 +8,60 @@ use crate::fakes::{FakeVectorStore, Reply};
 
 const A_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn probe_against(store: &FakeVectorStore) -> IndexProbe {
-    IndexProbe::new(store.url(), "wiki", DEFAULT_VS_INDEX, A_TIMEOUT).unwrap()
+async fn probe_against(store: &FakeVectorStore) -> VectorStoreProbe {
+    VectorStoreProbe::new(store.url(), "wiki", DEFAULT_VS_INDEX, A_TIMEOUT).unwrap()
 }
 
 #[tokio::test]
 async fn a_serving_index_reports_its_count() {
     let store = FakeVectorStore::start(Reply::Serving(270_269)).await;
-    let state = probe_against(&store).await.status().await.unwrap();
+    let state = probe_against(&store).await.read().await;
 
-    assert_eq!(state.count(), 270_269);
-    assert!(state.serving().is_some());
+    assert_eq!(state.docs(), 270_269);
+    assert!(state.ready().is_some());
 }
 
 #[tokio::test]
 async fn an_index_that_is_still_building_is_present_but_not_serving() {
     let store = FakeVectorStore::start(Reply::Building(12)).await;
-    let state = probe_against(&store).await.status().await.unwrap();
+    let state = probe_against(&store).await.read().await;
 
-    assert_eq!(state.count(), 12);
-    assert!(state.serving().is_none());
+    assert_eq!(state.docs(), 12);
+    assert!(state.ready().is_none());
 }
 
 #[tokio::test]
 async fn a_404_is_an_absent_index_rather_than_a_failure() {
     let store = FakeVectorStore::start(Reply::Absent).await;
     assert_eq!(
-        probe_against(&store).await.status().await.unwrap(),
+        probe_against(&store).await.read().await,
         IndexState::Absent
     );
 }
 
 /// The distinction the reset depends on: a vector-store that is down has not
-/// told us the index is gone.
+/// told us the index is gone. `Unreadable` rather than an error, because the
+/// gate waits such a moment out and the deadline decides it has lasted too
+/// long — but it must never be mistaken for `Absent`.
 #[tokio::test]
 async fn an_endpoint_that_errors_is_not_read_as_an_absent_index() {
     let store = FakeVectorStore::start(Reply::Failing(503)).await;
-    let failure = probe_against(&store).await.status().await.unwrap_err();
+    let state = probe_against(&store).await.read().await;
 
-    assert!(format!("{failure:#}").contains("answered an error"));
+    assert!(!state.is_absent());
+    assert!(state.describe().contains("answered an error"), "{state:?}");
 }
 
 #[tokio::test]
 async fn an_unreachable_vector_store_names_the_url_it_could_not_reach() {
-    let probe = IndexProbe::new(
+    let probe = VectorStoreProbe::new(
         "http://127.0.0.1:1",
         "wiki",
         "idx",
         Duration::from_millis(200),
     )
     .unwrap();
-    let failure = format!("{:#}", probe.status().await.unwrap_err());
+    let failure = probe.read().await.describe();
 
     assert!(failure.contains("cannot reach"));
     assert!(failure.contains("/api/v1/indexes/wiki/idx/status"));
@@ -66,7 +69,7 @@ async fn an_unreachable_vector_store_names_the_url_it_could_not_reach() {
 
 #[tokio::test]
 async fn the_status_url_is_the_one_the_campaign_polls() {
-    let probe = IndexProbe::new(
+    let probe = VectorStoreProbe::new(
         "http://localhost:6080/",
         "wiki",
         "articles_body_fts",
@@ -81,7 +84,7 @@ async fn the_status_url_is_the_one_the_campaign_polls() {
 
 #[tokio::test]
 async fn a_version_that_cannot_be_read_is_unknown_rather_than_fatal() {
-    let probe = IndexProbe::new(
+    let probe = VectorStoreProbe::new(
         "http://127.0.0.1:1",
         "wiki",
         "idx",
