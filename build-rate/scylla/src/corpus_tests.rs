@@ -1,3 +1,7 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+
 use super::*;
 
 const PAGE_ID: i64 = 193002;
@@ -24,7 +28,7 @@ fn a_corpus(lines: &str) -> (tempfile::TempDir, PathBuf) {
 }
 
 fn read_all(path: &Path, max_docs: usize) -> Result<Vec<InsertParams>> {
-    CorpusSource::new(path, max_docs).open()?.collect()
+    rows(&CorpusSource::new(path, max_docs))?.collect()
 }
 
 #[test]
@@ -59,8 +63,8 @@ fn stops_at_the_document_limit() {
 fn a_source_can_be_reopened_from_the_start_for_every_level() {
     let (_tmp, path) = a_corpus(&a_document_line(1));
     let source = CorpusSource::new(&path, 0);
-    let first: Vec<_> = source.open().unwrap().collect();
-    let second: Vec<_> = source.open().unwrap().collect();
+    let first: Vec<_> = rows(&source).unwrap().collect();
+    let second: Vec<_> = rows(&source).unwrap().collect();
     assert_eq!((first.len(), second.len()), (1, 1));
 }
 

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scyllarate::build_rate::{IndexWatch, WatchTiming};
-use scyllarate::corpus::CorpusSource;
+use scyllarate::corpus::{self, CorpusSource};
 use scyllarate::insert::CqlInserter;
 use scyllarate::notes::Notes;
 use scyllarate::report::PointResult;
@@ -200,7 +200,7 @@ async fn ladder(
         let (index, notes) = (watching(sink), quiet());
         sweep::run_sweep(
             &inserters,
-            || source.open(),
+            || corpus::rows(&source),
             levels,
             sweep::loader(),
             &Watchers {
@@ -252,8 +252,7 @@ async fn an_unsharded_endpoint_is_reported_as_unsharded() {
 async fn the_driver_backed_inserter_writes_one_document() {
     let sink = NullSink::start();
     let inserter = an_inserter(&sink).await;
-    let params = CorpusSource::new(a_corpus(1).1, 0)
-        .open()
+    let params = corpus::rows(&CorpusSource::new(a_corpus(1).1, 0))
         .unwrap()
         .next()
         .unwrap()

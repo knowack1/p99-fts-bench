@@ -30,7 +30,7 @@ use opensearch::{CountParts, OpenSearch};
 use serde_json::Value;
 
 use osrate::client::{self, ConnectOptions, UNKNOWN};
-use osrate::corpus::CorpusSource;
+use osrate::corpus::{self, CorpusSource};
 use osrate::insert::BulkInserter;
 use osrate::notes::Notes;
 use osrate::report::PointResult;
@@ -192,8 +192,7 @@ async fn the_bulk_backed_inserter_writes_one_batch() {
     let sink = NullSink::start();
     let inserter = an_inserter(&sink).await;
     let (_tmp, path) = a_corpus(BATCH);
-    let batch = CorpusSource::new(&path, 0, BATCH)
-        .open()
+    let batch = corpus::batches(&CorpusSource::new(&path, 0), BATCH)
         .unwrap()
         .next()
         .unwrap()
@@ -213,13 +212,13 @@ async fn the_endpoint_counts_exactly_the_documents_that_were_offered() {
     let sink = NullSink::start();
     let inserter = Arc::new(an_inserter(&sink).await);
     let (_tmp, path) = a_corpus(100);
-    let source = CorpusSource::new(&path, 0, BATCH);
+    let source = CorpusSource::new(&path, 0);
     let mut collect = |_: PointResult| Ok(());
 
     let (index, notes) = unwatched(&quiet());
     sweep::run_sweep(
         &SameInserter(Arc::clone(&inserter)),
-        || source.open(),
+        || corpus::batches(&source, BATCH),
         &[4],
         a_loader(),
         &Watchers {
@@ -241,7 +240,7 @@ async fn the_endpoint_counts_exactly_the_documents_that_were_offered() {
 async fn a_whole_ladder_runs_against_a_live_endpoint() {
     let sink = NullSink::start();
     let (_tmp, path) = a_corpus(500);
-    let source = CorpusSource::new(&path, 0, BATCH);
+    let source = CorpusSource::new(&path, 0);
     let mut results: Vec<PointResult> = Vec::new();
 
     {
@@ -252,7 +251,7 @@ async fn a_whole_ladder_runs_against_a_live_endpoint() {
         let (index, notes) = unwatched(&quiet());
         sweep::run_sweep(
             &SameInserter(Arc::new(an_inserter(&sink).await)),
-            || source.open(),
+            || corpus::batches(&source, BATCH),
             &[4, 16],
             a_loader(),
             &Watchers {
@@ -310,13 +309,13 @@ async fn a_reset_empties_the_index_over_a_live_endpoint() {
     let sink = NullSink::start();
     let inserter = Arc::new(an_inserter(&sink).await);
     let (_tmp, path) = a_corpus(100);
-    let source = CorpusSource::new(&path, 0, BATCH);
+    let source = CorpusSource::new(&path, 0);
     let mut collect = |_: PointResult| Ok(());
 
     let (index, notes) = unwatched(&quiet());
     sweep::run_sweep(
         &SameInserter(Arc::clone(&inserter)),
-        || source.open(),
+        || corpus::batches(&source, BATCH),
         &[4],
         a_loader(),
         &Watchers {
@@ -349,7 +348,7 @@ async fn every_level_of_a_reset_ladder_builds_from_zero() {
     let inserter = Arc::new(an_inserter(&sink).await);
     let reset = a_reset(&sink, inserter.client().clone());
     let (_tmp, path) = a_corpus(200);
-    let source = CorpusSource::new(&path, 0, BATCH);
+    let source = CorpusSource::new(&path, 0);
     let mut results: Vec<PointResult> = Vec::new();
 
     {
@@ -360,7 +359,7 @@ async fn every_level_of_a_reset_ladder_builds_from_zero() {
         let (index, notes) = unwatched(&quiet());
         sweep::run_sweep(
             &ResettingInserter::new(Arc::clone(&inserter), Some(reset)),
-            || source.open(),
+            || corpus::batches(&source, BATCH),
             &[4, 8, 16],
             a_loader(),
             &Watchers {

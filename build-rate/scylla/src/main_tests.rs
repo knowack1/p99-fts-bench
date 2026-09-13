@@ -1,66 +1,5 @@
 use super::*;
 
-fn a_point(concurrency: usize, errors: u64) -> PointResult {
-    PointResult {
-        engine: report::ENGINE,
-        concurrency,
-        batch_size: report::BATCH_SIZE,
-        docs: 100,
-        errors,
-        requests: 100,
-        failed_requests: errors,
-        wall_s: 2.0,
-        docs_per_s: 50.0,
-        p50_ms: Some(1.5),
-        p99_ms: Some(9.0),
-        index: None,
-    }
-}
-
-#[test]
-fn a_clean_sweep_exits_zero() {
-    assert_eq!(
-        exit_code(&[a_point(8, 0), a_point(16, 0)], false),
-        ExitCode::SUCCESS
-    );
-}
-
-#[test]
-fn a_sweep_with_any_failed_insert_exits_non_zero() {
-    assert_eq!(
-        exit_code(&[a_point(8, 0), a_point(16, 3)], false),
-        ExitCode::FAILURE
-    );
-}
-
-#[test]
-fn an_aborted_sweep_exits_non_zero_even_if_every_point_was_clean() {
-    assert_eq!(exit_code(&[a_point(8, 0)], true), ExitCode::FAILURE);
-}
-
-#[test]
-fn a_sweep_that_measured_nothing_and_was_not_aborted_exits_zero() {
-    assert_eq!(exit_code(&[], false), ExitCode::SUCCESS);
-}
-
-#[test]
-fn a_successful_outcome_is_not_an_abort() {
-    assert!(!report_outcome(Ok(()), "sweep.csv"));
-}
-
-#[test]
-fn a_failed_outcome_is_an_abort() {
-    assert!(report_outcome(
-        Err(anyhow::anyhow!("truncated")),
-        "sweep.csv"
-    ));
-}
-
-#[test]
-fn a_runtime_can_be_built_with_the_requested_worker_count() {
-    assert!(build_runtime(3).is_ok());
-}
-
 fn a_topology() -> Topology {
     Topology {
         scylla_version: "2026.3.0-rc2".to_string(),
@@ -94,21 +33,3 @@ fn the_banner_names_the_shard_topology() {
     assert!(lines[1].contains("tablets=false"));
 }
 
-#[test]
-fn an_abort_says_what_went_wrong_and_where_the_measured_levels_are() {
-    let lines = abort_lines(&anyhow::anyhow!("truncated"), "/runs/sweep.csv");
-    assert!(lines[0].contains("sweep aborted") && lines[0].contains("truncated"));
-    assert!(lines[1].contains("/runs/sweep.csv"));
-}
-
-#[test]
-fn an_abort_keeps_the_whole_error_chain() {
-    let cause = anyhow::anyhow!("line 4242").context("cannot read corpus");
-    assert!(abort_lines(&cause, "sweep.csv")[0].contains("line 4242"));
-}
-
-#[test]
-fn a_fresh_interrupt_watch_has_not_fired() {
-    let runtime = build_runtime(1).unwrap();
-    assert!(!runtime.block_on(async { watch_for_interrupt() }).is_set());
-}

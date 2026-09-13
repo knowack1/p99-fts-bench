@@ -15,10 +15,12 @@
 //! lock is what resolves these dependencies.
 pub mod build_rate;
 pub mod cli;
+pub mod corpus;
 pub mod gate;
 pub mod index;
 pub mod notes;
 pub mod report;
+pub mod run;
 pub mod samples;
 pub mod sweep;
 

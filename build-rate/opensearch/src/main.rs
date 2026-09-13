@@ -14,18 +14,19 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use opensearch::OpenSearch;
-use tokio::runtime::Runtime;
 
 use osrate::build_rate::IndexWatch;
 use osrate::cli::Args;
 use osrate::client::{self, Cluster};
-use osrate::corpus::CorpusSource;
+use osrate::corpus::{self, CorpusSource};
 use osrate::insert::BulkInserter;
 use osrate::notes::{note, Notes};
-use osrate::report::{self, summary_table, CsvSink, PointResult};
+use osrate::run::{build_runtime, echo_summary, exit_code, report_outcome, say_each,
+                  watch_for_interrupt};
+use osrate::report::{self, CsvSink, PointResult};
 use osrate::reset::{IndexReset, ResettingInserter};
 use osrate::samples::SampleFiles;
-use osrate::sweep::{self, Cancel, Watchers};
+use osrate::sweep::{self, Watchers};
 use osrate::vstore::StatsProbe;
 
 fn main() -> ExitCode {
@@ -41,17 +42,6 @@ fn main() -> ExitCode {
 fn run(args: Args) -> Result<ExitCode> {
     let workers = args.tokio_workers();
     build_runtime(workers)?.block_on(measure(args, workers))
-}
-
-/// The knob this tool exists to expose: how many cores tokio may use to encode
-/// and serve the in-flight bulks. It is orthogonal to `--concurrency`, which
-/// says how many bulks are outstanding at once.
-fn build_runtime(workers: usize) -> Result<Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers)
-        .enable_all()
-        .build()
-        .with_context(|| format!("cannot start a tokio runtime with {workers} workers"))
 }
 
 async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
@@ -187,7 +177,7 @@ async fn sweep_levels(
 ) -> (Vec<PointResult>, bool) {
     let index = index_watch(args, &client);
     let inserter = Arc::new(BulkInserter::new(client, &args.index));
-    let source = CorpusSource::new(&args.corpus, args.max_docs, args.batch_size);
+    let source = CorpusSource::new(&args.corpus, args.max_docs);
     let inserters = ResettingInserter::new(inserter, reset.map(|reset| *reset));
     let cancel = watch_for_interrupt();
     let mut results: Vec<PointResult> = Vec::new();
@@ -200,7 +190,7 @@ async fn sweep_levels(
         };
         sweep::run_sweep(
             &inserters,
-            || source.open(),
+            || corpus::batches(&source, args.batch_size),
             &args.concurrency.0,
             sweep::loader(args.batch_size, args.queue_depth),
             &Watchers {
@@ -230,42 +220,6 @@ fn index_watch(args: &Args, client: &OpenSearch) -> IndexWatch {
     IndexWatch::on(Arc::new(probe), args.watch_timing())
 }
 
-/// Ctrl-C is the ordinary way a long ladder ends early, and the levels already
-/// measured are worth as much then as after a transport error.
-fn watch_for_interrupt() -> Cancel {
-    let cancel = Cancel::default();
-    let trigger = cancel.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            trigger.trigger();
-        }
-    });
-    cancel
-}
-
-fn report_outcome(outcome: Result<()>, destination: &str) -> bool {
-    match outcome {
-        Ok(()) => false,
-        Err(exc) => {
-            announce_abort(&exc, destination);
-            true
-        }
-    }
-}
-
-fn announce_abort(exc: &anyhow::Error, destination: &str) {
-    say_each(&abort_lines(exc, destination));
-}
-
-/// An abort has to say where the levels it did measure ended up, or the operator
-/// has to guess whether anything survived.
-fn abort_lines(exc: &anyhow::Error, destination: &str) -> Vec<String> {
-    vec![
-        format!("!! sweep aborted: {exc:#}"),
-        format!("!! the levels measured before it are in {destination}"),
-    ]
-}
-
 fn describe(cluster: &Cluster) {
     say_each(&cluster_lines(cluster));
 }
@@ -291,23 +245,6 @@ fn cluster_lines(cluster: &Cluster) -> Vec<String> {
             cluster.write_pool
         ),
     ]
-}
-
-fn echo_summary(results: &[PointResult]) {
-    say_each(&["".to_string(), summary_table(results)]);
-}
-
-fn say_each(lines: &[String]) {
-    for line in lines {
-        note(line);
-    }
-}
-
-fn exit_code(results: &[PointResult], aborted: bool) -> ExitCode {
-    if aborted || results.iter().any(|result| result.errors > 0) {
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

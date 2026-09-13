@@ -171,6 +171,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
