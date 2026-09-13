@@ -561,9 +561,10 @@ property:
   **592 s (56% of the build) is pure drain with no write load at all.**
 
   That handover was reconstructed by hand from timestamps. On the harness side
-  it is now a measurement: `scyllarate --samples-dir` records both series per
-  reading, and `tools/plot_build_growth.py` marks where the client stopped on
-  the build-rate-against-index-size line.
+  it is now a measurement on both engines: `--samples-dir` records both series
+  per reading (`osrate` needs `--index-watch` too), and
+  `tools/plot_build_growth.py` marks where the client stopped on the
+  build-rate-against-index-size line.
 
 **So the sharded generator is right for ceilings (S12) and wrong for growth
 charts (S13/S14/S15)**: it front-loads every write into the first 44% of the

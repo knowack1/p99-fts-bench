@@ -23,7 +23,14 @@ pub const HTTP_CLIENT_VERSION: &str = env!("HTTP_CLIENT_VERSION");
 pub const BODY_FIELD: &str = "body";
 /// What OpenSearch refreshes at when the index never said. Reported as a
 /// default rather than as a read value, because nothing was read.
-pub const IMPLICIT_REFRESH_INTERVAL: &str = "unset(default 1s)";
+///
+/// The search-idle half matters to anyone reading a build rate: a shard with no
+/// queries for 30s stops refreshing on a timer entirely, so an index created
+/// from a config that omits `refresh_interval` will publish nothing while a
+/// loader is the only thing talking to it. Both shipped configs set it
+/// explicitly, which is what keeps that from happening here.
+pub const IMPLICIT_REFRESH_INTERVAL: &str =
+    "unset(default 1s, search-idle after 30s with no queries)";
 pub const DEFAULT_ANALYZER: &str = "unset(default standard)";
 pub const CONNECTION_POOL: &str = "reqwest-default(idle unbounded)";
 pub const ENDPOINT_SCHEMES: [&str; 2] = ["http", "https"];

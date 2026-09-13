@@ -8,8 +8,11 @@ output is one CSV that feeds two charts:
 - **chart 1** — X `concurrency`, Y `docs_per_s`
 - **chart 2** — X `concurrency`, Y `p99_ms`
 
-The first seven CSV columns are `scyllarate`'s, in its order, so a chart script
-written for one engine reads the other by name or by index.
+**Both halves write the same seventeen CSV columns in the same order**, so a
+field index means the same field on either — which it did not before, where the
+two diverged after column 7. Column 17 is `engine`, which is how a consumer
+tells the rows apart once they are in one file; `batch_size` cannot, because
+`scyllarate` writes `1` there too.
 
 Latency percentiles are computed from bulks where **every** item landed, so a
 point with a non-zero `errors` count has a p99 that excludes whatever the
@@ -24,7 +27,8 @@ failures cost — read the columns together.
 |---|---|
 | `concurrency` | in-flight `_bulk` requests |
 | `docs`, `errors`, `docs_per_s` | documents |
-| `bulks`, `failed_bulks` | `_bulk` requests |
+| `requests`, `failed_requests` | `_bulk` requests |
+| `index_docs`, `index_docs_per_s` | documents a search would find |
 | `p50_ms`, `p99_ms` | **one `_bulk` request**, not one document |
 
 **Documents in flight is `concurrency * batch_size`.** `--concurrency 64
@@ -36,13 +40,60 @@ carries `latency_unit=bulk_request`.
 At `--batch-size 1` the two units coincide, which is the shape the ScyllaDB
 half measures — useful for asking what bulking is worth.
 
-## This measures a submit rate, not a searchable-index rate
+## Two rates, and by default only one of them
 
 A `_bulk` OpenSearch has acknowledged is in the translog and the in-memory
 buffer. It is not visible to search until a refresh, and the segments it lands
-in are not merged. Read every number here as *how fast this client could hand
-work to OpenSearch* — `ftsbench.build_monitor` and `ftsbench.samplers` are what
-watch the index itself.
+in are not merged. So `docs_per_s` is *how fast this client could hand work to
+OpenSearch*, and by default that is all this measures.
+
+`--index-watch` measures the other one. It polls `GET /{index}/_stats` — the
+same request `ftsbench.samplers.OpenSearchSampler` makes for the engine
+campaign, so a harness ceiling and an engine number come from one reading — and
+fills the `index_*` columns with how fast documents became searchable, including
+the tail after the client stopped. `--samples-dir` writes the shape of that,
+one row per reading.
+
+It is off by default because it costs a poll per second and a settle wait per
+level, and the recorded submit-rate arms must keep measuring what they measured.
+
+### The searchable count moves in steps, and that is OpenSearch
+
+`docs.count` only advances when the index refreshes. At the shipped
+`refresh_interval` of 3s (`ramindex`) or 1s (`disk`), a build curve is flat,
+flat, then a jump carrying the whole interval's work. Three things follow:
+
+- **`index_lag_docs` has a floor here.** It counts documents not yet *refreshed*
+  when the client stopped, so it is at least `refresh_interval × docs_per_s` for
+  any level however fast the engine is. Read the excess, not the number.
+- **`docs_accepted` beside `docs_indexed`** in the series is what separates an
+  index that has stalled from one that has simply not refreshed: the first
+  climbs smoothly, the second in steps. They come from one `_stats` reply, so
+  the second column is free.
+- **`index_status=refreshed` means this tool asked.** After the engine has
+  accepted everything and stopped making progress, a level with nothing
+  searchable asks the index to publish, once — never mid-build, which would be
+  the harness changing what it measures. That answers "how long until it is
+  searchable if someone asks", which is not what the configured policy would
+  have delivered; at `refresh_interval: -1` the policy delivers nothing at all.
+  `--no-index-final-refresh` turns it off and the level reports the policy.
+
+**Idleness is measured on what the engine accepted, never on what is
+searchable.** A searchable count legitimately sits still between refreshes, so
+an idle timeout watching it would call an ordinary pause a finished build.
+
+### A note on two files that use the same word
+
+`ftsbench.samplers.OpenSearchSampler` and this tool's series name the same two
+`_stats` fields differently, and each is right for its own purpose:
+
+| `_stats` field | the C1 sampler calls it | this tool's series calls it |
+|---|---|---|
+| `indexing.index_total` | `docs_indexed` | `docs_accepted` |
+| `docs.count` | `docs_searchable` | `docs_indexed` |
+
+The campaign wants indexing progress; a build-rate gate wants searchability. Do
+not read one file's columns into the other.
 
 ## Setup
 
@@ -251,7 +302,7 @@ reason the batch size is a column rather than a footnote.
 - **A 2xx is not success.** OpenSearch reports per-item failures inside a 200,
   so every reply's items are read. A batch that came back with any item
   rejected costs exactly the documents it lost, contributes no latency sample,
-  and counts in `failed_bulks`. A reply whose item count does not match the
+  and counts in `failed_requests`. A reply whose item count does not match the
   documents offered fails the point rather than being guessed at.
 - **Connection pooling is left at the HTTP client's defaults.** reqwest keeps an
   unbounded idle pool per host, so N bulks in flight get N sockets by
@@ -287,7 +338,7 @@ walk of the alternation, which `tests/live_http.rs` asserts.
 - Check `source_enabled`. `false` is the ScyllaDB-parity variant
   (`index-config-ramindex.json`), whose index carries no document text.
 - Check `write_pool`. A rate that flattened at the write pool's size is a
-  thread-pool bound, and `failed_bulks` with 429s in the first failure is
+  thread-pool bound, and `failed_requests` with 429s in the first failure is
   queue rejection, not saturation.
 - Re-run the flat point with a higher `--tokio-workers`. If the knee moves, the
   client was the constraint.

@@ -132,3 +132,22 @@ defensible **provided** the write-path and resource charts carry the
 disclosure above. Running neither honestly — that is, presenting Framing A
 ingest numbers as a clean win — is the failure mode this document exists to
 prevent.
+
+## `docs_indexed` means two different things in two files
+
+`ftsbench.samplers.OpenSearchSampler` and the harness's per-second series read
+the same two `_stats` fields and name them oppositely:
+
+| `_stats` field | the C1 sampler calls it | the harness series calls it |
+|---|---|---|
+| `indexing.index_total` | `docs_indexed` | `docs_accepted` |
+| `docs.count` | `docs_searchable` | `docs_indexed` |
+
+Each is right for its own purpose: the engine campaign wants indexing progress,
+and a build-rate gate wants searchability — a build is over when a *search*
+would find what was submitted. The ScyllaDB side has one counter and no such
+ambiguity: the vector-store's `count` is what is in the Tantivy index, which is
+what a query sees.
+
+**Do not read one file's columns into the other**, and do not put the two
+`docs_indexed` columns on one axis. They differ by whatever has not refreshed.

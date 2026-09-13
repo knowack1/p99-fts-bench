@@ -159,10 +159,10 @@ one.
 
 ## The CSV columns
 
-The first seven are unchanged and the six index columns are **appended**, never
-inserted: `osrate` promises that its first seven columns are these in this
-order (`../opensearch/README.md`), and `tools/plot_harness_grid.py`
-reads both files by position.
+**Both halves write the same seventeen columns in the same order**
+(`../opensearch/README.md`), so a field index means the same field on either.
+A column an engine cannot fill is blank, never zero — the rule the latency
+columns already followed, because a zero plots as the best point on the curve.
 
 | Column | What it is |
 |---|---|
@@ -170,19 +170,24 @@ reads both files by position.
 | `docs` / `errors` | inserts that succeeded / failed |
 | `wall_s` / `docs_per_s` | how long the submit took, and its rate |
 | `p50_ms` / `p99_ms` | per-insert latency, successful inserts only |
+| `batch_size` | `1` here, always — a fact of this half, not a knob. A CQL `BATCH` is a different write path and would read as parity with a `_bulk` |
+| `requests` / `failed_requests` | equal to `docs` / `errors` here, because one request carries one document. `docs / requests` is the effective batch size, and a row where they disagree is a bug in the loader |
 | `index_docs` | documents **this level** added to the index |
 | `index_docs_per_s` | those documents over the whole build, first insert to settle |
 | `index_lag_docs` | how far behind the index was when the client stopped submitting |
 | `index_settle_s` | seconds spent waiting after the last insert |
 | `index_settled` | `false` means the index never caught up — the rate is a floor |
 | `index_status` | what the vector-store last reported, normally `SERVING` |
+| `engine` | `scylladb`. How a consumer tells the halves apart once rows are in one file — `batch_size` cannot, now that both write it |
 
 `index_docs` counts only what the level added, never the index it inherited, so
 a `--no-reset` ladder still credits each rung with its own work.
 
 ## The per-second series
 
-`--samples-dir DIR` writes `DIR/c<concurrency>-<repetition>.csv`, one file per
+`--samples-dir DIR` writes `DIR/c<concurrency>-<repetition>.csv` (the OpenSearch
+half writes `c<concurrency>-b<batch>-<repetition>.csv`, so two engines can share
+a directory without colliding), one file per
 level, one row per reading. A level is one build, so `--concurrency 8,8,16`
 writes three files and the two `8`s are separate measurements rather than one
 overwritten twice. **Keep the directory out of a `points/` directory:** the
@@ -197,7 +202,8 @@ one file at a time.
 | `t_s` | seconds since the level started |
 | `docs_submitted` / `submit_docs_per_s` | successful inserts so far, and their rate since the previous reading |
 | `docs_indexed` / `index_docs_per_s` | documents **this level** put in the index, and their rate since the previous index reading |
-| `index_status` | what the vector-store reported at that reading |
+| `index_status` | what the vector-store reported at that reading. UPPERCASE where the engine said it, lowercase where the harness minted it (`absent`) |
+| `docs_accepted` / `accepted_docs_per_s` | blank on this half. The vector-store counts what is in the index and has no second counter for what the base table accepted; on an engine where a searchable count lags behind, this pair is what separates a stalled index from an unrefreshed one |
 
 Three properties the series is worth having for:
 
@@ -227,7 +233,7 @@ misreads the curve.
 One process, one bounded channel, N worker tasks. A producer thread reads the
 JSONL and puts bound parameters on the channel; each task takes one, awaits its
 prepared `INSERT`, and takes the next. In-flight is therefore exactly N. The
-channel holds at most `2N` items so the producer cannot pull 456 MB ahead of the
+channel holds at most `10N` items so the producer cannot pull 456 MB ahead of the
 workers, and the producer runs on a blocking thread so file reads never stall
 the runtime.
 

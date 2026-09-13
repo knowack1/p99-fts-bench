@@ -90,14 +90,16 @@ giving, for example:
 bench/results/harness-aws-runbook-2026-09-10T1845Z/
 ├── RUN_ID  env/  corpus/  scripts/     # shared by both parts
 ├── scylla/      points/ samples/ samples-nproc/ logs/ nproc/ sinks/
-└── opensearch/  points/ logs/ batch/ sinks/
+└── opensearch/  points/ samples/ logs/ batch/ sinks/
 bench/results/harness-aws-latest -> harness-aws-runbook-2026-09-10T1845Z
 ```
 
 The two harnesses keep separate subtrees because their CSVs are **not
-interchangeable**: `osrate`'s `p50_ms`/`p99_ms` are per `_bulk` request and its
-rows carry a `batch_size` column. A flat directory invites someone to plot one
-against the other.
+interchangeable**, and one reason is left: `osrate`'s `p50_ms`/`p99_ms` are per
+`_bulk` request, not per document. They are the same measurement only at
+`--batch-size 1`. Everything else about the two files now lines up — same
+seventeen columns in the same order, and column 17 names the engine — so the
+separate subtrees are about the latency unit and nothing more.
 
 | | |
 |---|---|
@@ -908,6 +910,22 @@ ssh fts-harness 'REPS=3 BATCH=512 LADDER=4,4,8,16,32        MAX_DOCS=400000  QUE
 ssh fts-harness 'REPS=3 BATCH=512 LADDER=32,32,64,128,256,512 MAX_DOCS=1250000 QUEUE_DEPTH=2 ~/run-os-arm.sh os-conc-high'
 ```
 
+**These arms measure a submit rate, and that is deliberate.** `osrate` can also
+measure how fast documents become *searchable* — `--index-watch`, with
+`--samples-dir` for the per-second series — but it is off by default and these
+arms leave it off, because their numbers are what Part B has always reported and
+a watch adds a poll per second and a settle wait per level. The script forwards
+`"$@"`, so a build-rate arm is a separate run rather than an edit:
+
+```
+ssh fts-harness 'REPS=3 BATCH=512 LADDER=8,8,16,32 MAX_DOCS=400000 QUEUE_DEPTH=2 \
+    ~/run-os-arm.sh os-build --index-watch --samples-dir /mnt/nvme/work/samples-os/os-build'
+```
+
+Read its `index_docs_per_s` with the refresh caveats under "The growth chart"
+below — on this half that column is gated by `refresh_interval`, and against the
+null sink it is gated by `--os-refresh-interval-ms`.
+
 ### Arm 2 — one series per batch size, which is the point of Part B
 
 **A batch level is a whole ladder, not a point.** The knee moves with batch
@@ -960,6 +978,7 @@ averages.
 
 ```bash
 scp 'fts-harness:/mnt/nvme/work/results-os/*'  $R/opensearch/points/
+scp -r 'fts-harness:/mnt/nvme/work/samples-os/*' $R/opensearch/samples/  # only with --index-watch
 scp  fts-sut:/tmp/sinks-cpu.tsv                $R/opensearch/sinks/
 scp 'fts-sut:/tmp/sink-92*.log'                $R/opensearch/sinks/
 scp 'fts-sut:/tmp/sink-92*.json'               $R/opensearch/sinks/
@@ -1219,8 +1238,9 @@ like:
 
 ## The growth chart — X is the index itself
 
-Part A only: `osrate` writes no per-second series yet, and against the HTTP null
-sink there is no index to count.
+Both halves write a series now, but **chart them separately**. Run Part A's as
+below; for Part B pass `--samples "$R/opensearch/samples/*/c*.csv"` and its own
+`--output`.
 
 ```
 .venv/bin/python3 tools/plot_build_growth.py \
@@ -1229,6 +1249,11 @@ sink there is no index to count.
     --table    "$R/build-growth.csv" \
     --subtitle "$RUN_ID · i8g.2xlarge · null sink · N=3"
 ```
+
+One glob covering both is mechanically fine — the series carry their batch size
+in the file name, so they cannot collide — but the y axes are not comparable
+point by point. The x axis is: "documents this level made searchable" means the
+same thing on both. See the refresh note below before putting them on one image.
 
 X is the documents that level put in the index, Y is how fast they went in, one
 thin line per repetition and a bold pointwise median per concurrency. It is the
@@ -1243,11 +1268,37 @@ chart that answers questions the grid cannot:
   skipped by name — which is the same signal as the grid's short-point warning,
   read from the other side.
 
-Against the null sink both series move together by construction: the sink counts
-a document into its modelled index as it accepts it, so the two lines lie on top
-of each other and any gap between them is the harness's own. **That is the point
-of running it here** — it is the zero reading the engine campaign's version of
-this chart is read against.
+Against the CQL null sink both series move together by construction: the sink
+counts a document into its modelled index as it accepts it, so the two lines lie
+on top of each other and any gap between them is the harness's own. **That is
+the point of running it here** — it is the zero reading the engine campaign's
+version of this chart is read against.
+
+**On the OpenSearch half they do not, and that is not the harness.** A searchable
+count only advances when the index refreshes, so `docs_indexed` climbs in steps
+while `docs_accepted` climbs smoothly: flat, flat, then a jump carrying the whole
+interval's work. Read the gap between the two columns as the refresh policy, not
+as lag the loader caused. Three consequences worth knowing before reading the
+numbers:
+
+- **`index_lag_docs` has a floor on this half.** It counts documents not yet
+  *refreshed* when the client stopped, so at `refresh_interval=3s` it is at least
+  three seconds of submit rate for any level however fast the engine. The number
+  to read is the excess over `refresh_interval × docs_per_s`.
+- **The chart widens its bucket to one riser** when a series steps, and says so
+  in its footer. A finer bucket would land inside a jump and read the rate high
+  by the refresh-to-poll ratio.
+- **`index_status=refreshed` means the harness asked.** After the engine has
+  accepted everything and stopped, a level that still has nothing searchable
+  asks the index to publish, once. That is a real answer to "how long until it
+  is searchable if someone asks", and it is not what the configured refresh
+  policy would have delivered — at `refresh_interval: -1`, nothing.
+  `--no-index-final-refresh` turns it off and the level reports the policy.
+
+The null sink can produce all of this: `--os-refresh-interval-ms 3000` models a
+3s refresh, and `=-1` models an index that never publishes on a timer. Its
+default of 0 publishes immediately, which is the behaviour every recorded run
+measured.
 
 ## Then write it down
 
