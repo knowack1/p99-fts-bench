@@ -13,9 +13,14 @@
 //! `unknown` if it is not there. This crate's own lock governs nothing but
 //! `cargo test` run from this directory: as a path dependency, the binary's
 //! lock is what resolves these dependencies.
+pub mod build_rate;
 pub mod cli;
 pub mod gate;
 pub mod index;
 pub mod notes;
 pub mod report;
+pub mod samples;
 pub mod sweep;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;

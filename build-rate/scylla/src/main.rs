@@ -80,7 +80,7 @@ fn open_samples(
         "per-second samples: {}/c<level>-<n>.csv",
         dir.display()
     ));
-    Ok(Some(files.with_preamble(topology, settings)))
+    Ok(Some(files.with_preamble(report::header_lines(topology, settings))))
 }
 
 fn open_probe(args: &Args) -> Result<Option<Arc<VectorStoreProbe>>> {

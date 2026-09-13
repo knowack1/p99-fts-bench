@@ -6,10 +6,13 @@ use std::fs;
 use std::time::Duration;
 
 use super::*;
-use crate::fakes::a_topology;
-use build_rate_core::index::IndexReading;
+use crate::index::IndexReading;
 
 const NO_SETTINGS: [(String, String); 0] = [];
+
+fn a_fact() -> Vec<(String, String)> {
+    vec![("shard_aware".to_string(), "true".to_string())]
+}
 
 fn serving(count: u64) -> IndexState {
     IndexState::Present(IndexReading {
@@ -158,7 +161,7 @@ fn a_reading_without_an_index_leaves_the_index_series_where_it_was() {
 #[test]
 fn an_index_reading_counts_only_what_this_level_added() {
     let tape = a_tape();
-    tape.inherited(1000);
+    tape.inherited(1000, 1000);
 
     let sample = tape.record(0, Some(&serving(1250)));
 
@@ -230,12 +233,12 @@ fn every_level_file_carries_the_run_facts_and_the_column_header() {
     let dir = tempfile::tempdir().unwrap();
     let files = SampleFiles::new(dir.path())
         .unwrap()
-        .with_preamble(&a_topology(), &NO_SETTINGS);
+        .with_preamble(crate::report::header_lines(&a_fact(), &NO_SETTINGS));
 
     drop(files.open_level(8).unwrap());
 
     let written = fs::read_to_string(dir.path().join("c8-1.csv")).unwrap();
-    assert!(written.contains("# scylla_version="));
+    assert!(written.contains("# shard_aware=true"));
     assert!(written.contains(&SAMPLE_COLUMNS.join(",")));
 }
 
@@ -291,4 +294,35 @@ fn a_directory_that_cannot_be_created_is_refused_rather_than_silently_dropped() 
     fs::write(&blocked, "not a directory").unwrap();
 
     assert!(SampleFiles::new(&blocked.join("under")).is_err());
+}
+
+/// An engine with one counter has no accepted series, and the same rule the
+/// whole index block follows applies: blank, never zero. A zero would read as
+/// an engine that accepted nothing during the level.
+#[test]
+fn an_engine_with_one_counter_leaves_the_accepted_cells_blank() {
+    let tape = a_tape();
+    let sample = tape.record(100, Some(&serving(80)));
+
+    assert_eq!(sample.indexed.as_ref().unwrap().accepted, None);
+    let row = sample_row(&sample);
+    let cells: Vec<&str> = row.split(',').collect();
+    assert_eq!(cells.len(), SAMPLE_COLUMNS.len());
+    assert_eq!(&cells[8..10], ["", ""]);
+}
+
+/// The pair that separates an index which has stalled from one which has simply
+/// not refreshed: searchable flat, accepted climbing.
+#[test]
+fn an_engine_with_two_counters_reports_both_series() {
+    let tape = a_tape();
+    let state = crate::test_support::accepted_but_not_yet_searchable(0, 900);
+    let sample = tape.record(900, Some(&state));
+
+    let indexed = sample.indexed.as_ref().unwrap();
+    assert_eq!((indexed.docs, indexed.accepted), (0, Some(900)));
+    let row = sample_row(&sample);
+    let cells: Vec<&str> = row.split(',').collect();
+    assert_eq!(cells[5], "0", "nothing is searchable yet");
+    assert_eq!(cells[8], "900", "but the engine has taken it all in");
 }

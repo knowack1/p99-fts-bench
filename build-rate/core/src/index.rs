@@ -18,6 +18,8 @@ use std::pin::Pin;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub const ABSENT: &str = "absent";
+/// A build whose last documents the harness had to ask for.
+pub const REFRESHED: &str = "refreshed";
 
 /// One reading of an index that answered.
 #[derive(Debug, Clone, PartialEq, Eq)]

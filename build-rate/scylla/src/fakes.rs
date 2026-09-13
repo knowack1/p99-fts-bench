@@ -252,11 +252,6 @@ impl FakeVectorStore {
         &self.base_url
     }
 
-    pub fn standing(&self, reply: Reply) {
-        let mut script = self.script.lock().unwrap();
-        script.queued.clear();
-        script.standing = reply;
-    }
 
     pub fn then(&self, replies: &[Reply]) {
         self.script

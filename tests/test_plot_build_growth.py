@@ -15,7 +15,8 @@ BENCH_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BENCH_DIR))
 
 SAMPLE_HEADER = ("level,concurrency,t_s,docs_submitted,submit_docs_per_s,"
-                 "docs_indexed,index_docs_per_s,index_status")
+                 "docs_indexed,index_docs_per_s,index_status,"
+                 "docs_accepted,accepted_docs_per_s")
 
 
 def load_plot_build_growth():

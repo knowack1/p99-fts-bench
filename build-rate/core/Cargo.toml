@@ -15,7 +15,12 @@ path = "src/lib.rs"
 # recorded run.
 [dependencies]
 anyhow = "1"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+
+[features]
+# Doubles the two binary crates test against. Never enabled for a release
+# build: each binary asks for it under [dev-dependencies] only.
+test-support = []
 
 [dev-dependencies]
 tempfile = "3"
