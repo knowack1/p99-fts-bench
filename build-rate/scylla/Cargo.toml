@@ -25,6 +25,9 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal",
 uuid = { version = "1.18.1", features = ["serde", "v5"] }
 
 [dev-dependencies]
+# The doubles both harnesses test against. A dev-dependency feature never
+# reaches `cargo build --release`, so the shipped binary carries none of it.
+build-rate-core = { path = "../core", features = ["test-support"] }
 # Only so a test can assert the protocol version the header claims against the
 # constant the linked driver actually pins; the binary never depends on it.
 scylla-cql = "1.8.0"

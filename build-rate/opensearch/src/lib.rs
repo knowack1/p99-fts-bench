@@ -1,4 +1,5 @@
 //! Concurrency sweep for OpenSearch ingest: docs/s and p99 per concurrency level.
+pub mod build_rate;
 pub mod bulk;
 pub mod cli;
 pub mod client;
@@ -13,6 +14,3 @@ pub mod vstore;
 #[cfg(test)]
 pub(crate) mod fakes;
 
-#[cfg(test)]
-#[path = "durability_tests.rs"]
-mod durability_tests;

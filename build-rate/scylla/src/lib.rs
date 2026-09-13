@@ -14,6 +14,3 @@ pub mod vstore;
 #[cfg(test)]
 pub(crate) mod fakes;
 
-#[cfg(test)]
-#[path = "durability_tests.rs"]
-mod durability_tests;

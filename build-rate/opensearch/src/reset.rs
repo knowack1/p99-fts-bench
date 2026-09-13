@@ -20,6 +20,7 @@
 //! fails by name and says what it last saw, because a reset that quietly did
 //! not happen produces a complete, plausible, wrong build rate.
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use opensearch::indices::{IndicesCreateParts, IndicesDeleteParts};
@@ -34,7 +35,7 @@ use build_rate_core::index::{IndexProbe, IndexState};
 use crate::client;
 use crate::vstore::StatsProbe;
 use crate::notes::Notes;
-use crate::sweep::{BeforeLevel, BoxFuture};
+use crate::sweep::{BoxFuture, Inserter, LevelSource};
 
 /// Embedded rather than read from a path at run time, so that the mapping this
 /// tool applies cannot drift from the repo's and a bare run needs no argument.
@@ -180,6 +181,38 @@ impl<'a> ResetGates<'a> {
     }
 }
 
+/// The one inserter, with the index emptied before each level or not.
+///
+/// Every level builds from zero documents, because `_id` is the corpus page id:
+/// without a reset the second level rewrites the first level's documents, the
+/// index does not grow, and every rung but the first measures Lucene's update
+/// path instead of a cold load.
+pub struct ResettingInserter<I: Inserter> {
+    inserter: Arc<I>,
+    reset: Option<IndexReset>,
+}
+
+impl<I: Inserter> ResettingInserter<I> {
+    pub fn new(inserter: Arc<I>, reset: Option<IndexReset>) -> Self {
+        Self { inserter, reset }
+    }
+}
+
+impl<I: Inserter> LevelSource for ResettingInserter<I> {
+    type Inserter = I;
+
+    /// Nothing to rebuild afterwards, unlike the CQL half where the drop
+    /// invalidates the prepared statement: the same client serves every level.
+    fn open(&self) -> BoxFuture<'_, Result<Arc<I>>> {
+        Box::pin(async move {
+            if let Some(reset) = self.reset.as_ref() {
+                reset.ensure_fresh().await?;
+            }
+            Ok(Arc::clone(&self.inserter))
+        })
+    }
+}
+
 /// The delete-and-create cycle, run once before every level.
 pub struct IndexReset {
     client: OpenSearch,
@@ -309,11 +342,6 @@ impl IndexReset {
     }
 }
 
-impl BeforeLevel for IndexReset {
-    fn prepare(&self) -> BoxFuture<'_, Result<()>> {
-        Box::pin(self.ensure_fresh())
-    }
-}
 
 const NOT_FOUND: u16 = 404;
 const FORBIDDEN: u16 = 403;

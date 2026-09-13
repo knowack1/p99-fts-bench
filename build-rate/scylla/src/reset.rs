@@ -27,7 +27,7 @@ use scylla::client::session::Session;
 use crate::insert::CqlInserter;
 use crate::notes::Notes;
 use crate::session;
-use crate::sweep::{BoxFuture, InserterSource};
+use crate::sweep::{BoxFuture, LevelSource};
 pub use build_rate_core::gate::GateTiming;
 
 use build_rate_core::gate::Gate;
@@ -173,7 +173,7 @@ impl ResettingInserters {
     }
 }
 
-impl InserterSource for ResettingInserters {
+impl LevelSource for ResettingInserters {
     type Inserter = CqlInserter;
 
     /// The prepared statement is rebuilt per level because the reset destroyed

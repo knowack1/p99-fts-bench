@@ -1,52 +1,86 @@
 //! What survives a sweep that goes wrong: the points already measured, and the
-//! difference between "no bulk came back clean" and "the latency was zero".
+//! difference between "no latency was measured" and "the latency was zero".
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::corpus::DocumentBatch;
-use crate::fakes::{
-    a_cluster, a_ladder, a_shape, a_source, a_truncated_source, quiet_notes, FakeInserter,
+use crate::build_rate::IndexWatch;
+use crate::report::{header_lines, CsvSink, PointResult};
+use crate::sweep::{
+    run_sweep, Cancel, Loader, SameInserter, Shape, Watchers, WorkItem, };
+use crate::test_support::{quiet_notes, FakeInserter};
+
+/// One document per request, which is what makes `measured_levels` readable as
+/// a list of concurrency levels.
+#[derive(Debug, Clone, PartialEq)]
+struct OneDoc;
+
+impl WorkItem for OneDoc {
+    fn docs(&self) -> u64 {
+        1
+    }
+}
+
+type Docs = Box<dyn Iterator<Item = Result<OneDoc>> + Send>;
+
+const LOADER: Loader = Loader {
+    engine: "scylladb",
+    shape: Shape::ONE_DOCUMENT,
 };
-use crate::report::{CsvSink, PointResult};
-use crate::sweep::{run_sweep, Cancel};
 
-const BATCH: usize = 5;
+fn a_source(count: usize) -> impl Iterator<Item = Result<OneDoc>> + Send + 'static {
+    (0..count).map(|_| Ok(OneDoc))
+}
 
-type BatchSource = Box<dyn Iterator<Item = Result<DocumentBatch>> + Send>;
+fn a_truncated_source(count: usize) -> impl Iterator<Item = Result<OneDoc>> + Send + 'static {
+    a_source(count).chain(std::iter::once(Err(anyhow::anyhow!(
+        "truncated JSONL line 4242"
+    ))))
+}
+
+fn a_fact() -> Vec<(String, String)> {
+    vec![("engine".to_string(), "null-sink".to_string())]
+}
 
 /// Fails once `levels_before_failure` levels have been served, the way a
 /// truncated JSONL line does part way down a ladder.
 fn a_source_that_breaks_after(
     good_docs: usize,
     levels_before_failure: usize,
-) -> impl Fn() -> Result<BatchSource> {
+) -> impl Fn() -> Result<Docs> {
     let served = std::sync::Mutex::new(0usize);
     move || {
         let mut level = served.lock().unwrap();
         *level += 1;
         Ok(if *level > levels_before_failure {
-            Box::new(a_truncated_source(good_docs, BATCH)) as BatchSource
+            Box::new(a_truncated_source(good_docs)) as Docs
         } else {
-            Box::new(a_source(good_docs, BATCH)) as BatchSource
+            Box::new(a_source(good_docs)) as Docs
         })
     }
 }
 
 async fn sweep_into(
     sink: &mut CsvSink,
-    open_source: impl Fn() -> Result<BatchSource>,
+    open_source: impl Fn() -> Result<Docs>,
     levels: &[usize],
 ) -> Result<()> {
     let mut collect = |result: PointResult| -> Result<()> {
         sink.append_row(&result)?;
         Ok(())
     };
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
     run_sweep(
-        a_ladder(Arc::new(FakeInserter::new()), levels, a_shape(BATCH)),
+        &SameInserter(Arc::new(FakeInserter::<OneDoc>::new())),
         open_source,
-        &quiet_notes(),
+        levels,
+        LOADER,
+        &Watchers {
+            index: &index,
+            notes: &notes,
+            samples: None,
+        },
         &Cancel::default(),
         &mut collect,
     )
@@ -68,8 +102,8 @@ async fn points_measured_before_a_mid_sweep_failure_are_still_on_disk() {
     let destination = tmp.path().join("sweep.csv");
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
-    sink.write_preamble(&crate::report::header_lines(&a_cluster(), &[])).unwrap();
-    let outcome = sweep_into(&mut sink, a_source_that_breaks_after(20, 2), &[2, 4, 8]).await;
+    sink.write_preamble(&header_lines(&a_fact(), &[])).unwrap();
+    let outcome = sweep_into(&mut sink, a_source_that_breaks_after(4, 2), &[2, 4, 8]).await;
     drop(sink);
 
     assert!(outcome.is_err());
@@ -83,8 +117,8 @@ async fn a_clean_ladder_writes_every_level_it_was_asked_for() {
     let destination = tmp.path().join("sweep.csv");
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
-    sink.write_preamble(&crate::report::header_lines(&a_cluster(), &[])).unwrap();
-    let outcome = sweep_into(&mut sink, a_source_that_breaks_after(20, 99), &[2, 4]).await;
+    sink.write_preamble(&header_lines(&a_fact(), &[])).unwrap();
+    let outcome = sweep_into(&mut sink, a_source_that_breaks_after(4, 99), &[2, 4]).await;
     drop(sink);
 
     assert!(outcome.is_ok());
@@ -97,9 +131,10 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
     let tmp = tempfile::tempdir().unwrap();
     let destination = tmp.path().join("sweep.csv");
     let cancel = Cancel::default();
+    let (index, notes) = (IndexWatch::off(), quiet_notes());
 
     let mut sink = CsvSink::open(destination.to_str().unwrap()).unwrap();
-    sink.write_preamble(&crate::report::header_lines(&a_cluster(), &[])).unwrap();
+    sink.write_preamble(&header_lines(&a_fact(), &[])).unwrap();
     let outcome = {
         let stop = cancel.clone();
         let mut collect = move |result: PointResult| -> Result<()> {
@@ -108,13 +143,17 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
             Ok(())
         };
         run_sweep(
-            a_ladder(
-                Arc::new(FakeInserter::with_latency(Duration::from_millis(1))),
-                &[2, 4],
-                a_shape(BATCH),
-            ),
-            || Ok(a_source(100, BATCH)),
-            &quiet_notes(),
+            &SameInserter(Arc::new(FakeInserter::<OneDoc>::with_latency(
+                Duration::from_millis(1),
+            ))),
+            || Ok(Box::new(a_source(20)) as Docs),
+            &[2, 4],
+            LOADER,
+            &Watchers {
+                index: &index,
+                notes: &notes,
+                samples: None,
+            },
             &cancel,
             &mut collect,
         )

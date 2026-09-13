@@ -11,7 +11,7 @@ use scylla::client::session::Session;
 use scylla::statement::prepared::PreparedStatement;
 
 use crate::corpus::InsertParams;
-use crate::sweep::Inserter;
+use crate::sweep::{Accepted, Inserter};
 
 pub struct CqlInserter {
     session: Arc<Session>,
@@ -33,16 +33,21 @@ impl CqlInserter {
 }
 
 impl Inserter for CqlInserter {
+    type Item = InsertParams;
+
     // The explicit `impl Future + Send` is the point: `async fn` in a trait
     // leaves the future's `Send`ness up to the caller, and these futures are
     // spawned onto tokio, which requires it.
     #[allow(clippy::manual_async_fn)]
-    fn insert(&self, params: InsertParams) -> impl Future<Output = Result<()>> + Send {
+    /// CQL either took the row or it did not; there is no half-accepted write
+    /// to report, which is why `Accepted::CLEAN` is a constant here and a
+    /// per-item verdict on the other half.
+    fn insert(&self, params: InsertParams) -> impl Future<Output = Result<Accepted>> + Send {
         async move {
             self.session
                 .execute_unpaged(&self.statement, params)
                 .await?;
-            Ok(())
+            Ok(Accepted::CLEAN)
         }
     }
 }

@@ -202,6 +202,7 @@ async fn ladder(
             &inserters,
             || source.open(),
             levels,
+            sweep::loader(),
             &Watchers {
                 index: &index,
                 notes: &notes,

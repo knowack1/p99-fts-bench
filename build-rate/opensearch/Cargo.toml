@@ -22,6 +22,9 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal",
 url = "2.5.7"
 
 [dev-dependencies]
+# The doubles both harnesses test against. A dev-dependency feature never
+# reaches `cargo build --release`, so the shipped binary carries none of it.
+build-rate-core = { path = "../core", features = ["test-support"] }
 tempfile = "3.24.0"
 
 [features]

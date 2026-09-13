@@ -76,6 +76,17 @@ impl Submitted {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// One request's worth. Split, because a `_bulk` can land some of what it
+    /// carried and reject the rest, and only what landed will reach the index.
+    pub fn record_many(&self, landed: u64, failed: u64) {
+        if landed > 0 {
+            self.ok.fetch_add(landed, Ordering::Relaxed);
+        }
+        if failed > 0 {
+            self.errors.fetch_add(failed, Ordering::Relaxed);
+        }
+    }
+
     pub fn ok(&self) -> u64 {
         self.ok.load(Ordering::Relaxed)
     }

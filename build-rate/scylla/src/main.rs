@@ -163,6 +163,7 @@ async fn sweep_levels(
             &inserters,
             || source.open(),
             &args.concurrency.0,
+            sweep::loader(),
             &watchers,
             &cancel,
             &mut collect,

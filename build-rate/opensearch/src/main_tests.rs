@@ -134,7 +134,7 @@ fn the_shape_carries_both_knobs_from_the_command_line() {
         "3",
     ])
     .unwrap();
-    let shape = shape(&args);
+    let shape = crate::sweep::loader(args.batch_size, args.queue_depth).shape;
     assert_eq!((shape.batch_size, shape.queue_depth), (256, 3));
 }
 

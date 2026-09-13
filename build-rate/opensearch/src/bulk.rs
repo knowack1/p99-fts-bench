@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::corpus::{BulkDoc, DocumentBatch};
+use crate::sweep::Accepted;
 
 /// Item statuses OpenSearch reports inside a 200 response. Anything at 300 or
 /// above is a document that did not land.
@@ -60,27 +61,15 @@ fn write_line(payload: &mut BytesMut, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-/// What one `_bulk` response says happened, in documents.
-///
 /// A 2xx is not success: OpenSearch reports per-item failures inside a 200
-/// response, so a batch whose items were rejected has to be counted here or a
-/// failing engine would read as a fast one.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct BulkOutcome {
-    pub failed: u64,
-    pub first_failure: Option<String>,
-}
-
-impl BulkOutcome {
-    pub fn is_clean(&self) -> bool {
-        self.failed == 0
-    }
-}
-
+/// response, so a batch whose items were rejected has to be counted or a
+/// failing engine would read as a fast one. That is what `Accepted` is, and it
+/// is core's because the ScyllaDB half answers the same question with a
+/// constant.
 /// `offered` is checked against the item count rather than trusted: a reply
 /// with the wrong number of items cannot be accounted for document by
 /// document, and must not read as a batch that landed.
-pub fn read_outcome(body: &Value, offered: u64) -> Result<BulkOutcome> {
+pub fn read_outcome(body: &Value, offered: u64) -> Result<Accepted> {
     let items = items_of(body)?;
     if items.len() as u64 != offered {
         bail!(
@@ -98,9 +87,9 @@ fn items_of(body: &Value) -> Result<Vec<&Value>> {
     }
 }
 
-fn summarize_items(items: &[&Value]) -> BulkOutcome {
+fn summarize_items(items: &[&Value]) -> Accepted {
     let failures: Vec<&Value> = items.iter().copied().filter(|item| is_failure(item)).collect();
-    BulkOutcome {
+    Accepted {
         failed: failures.len() as u64,
         first_failure: failures.first().map(|item| describe_failure(item)),
     }

@@ -51,6 +51,12 @@ impl From<Document> for BulkDoc {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocumentBatch(Vec<BulkDoc>);
 
+impl build_rate_core::sweep::WorkItem for DocumentBatch {
+    fn docs(&self) -> u64 {
+        self.0.len() as u64
+    }
+}
+
 impl DocumentBatch {
     pub fn new(documents: Vec<BulkDoc>) -> Self {
         Self(documents)

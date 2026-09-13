@@ -34,8 +34,11 @@ use osrate::corpus::CorpusSource;
 use osrate::insert::BulkInserter;
 use osrate::notes::Notes;
 use osrate::report::PointResult;
-use osrate::reset::{GateTiming, IndexConfig, IndexReset, DEFAULT_INDEX_CONFIG};
-use osrate::sweep::{self, Cancel, Inserter, Ladder, NothingToPrepare, Shape};
+use osrate::reset::{
+    GateTiming, IndexConfig, IndexReset, ResettingInserter, DEFAULT_INDEX_CONFIG,
+};
+use osrate::build_rate::IndexWatch;
+use osrate::sweep::{self, Cancel, Inserter, SameInserter, Watchers};
 
 const BENCH_ROOT: &str = "../..";
 const VENV_PYTHON: &str = ".venv/bin/python3";
@@ -117,22 +120,15 @@ fn a_corpus(documents: usize) -> (tempfile::TempDir, std::path::PathBuf) {
     (tmp, path)
 }
 
-fn a_shape() -> Shape {
-    Shape {
-        batch_size: BATCH,
-        queue_depth: 2,
-    }
+fn a_loader() -> sweep::Loader {
+    sweep::loader(BATCH, sweep::QUEUE_DEPTH_PER_WORKER)
 }
 
-static NOTHING_TO_PREPARE: NothingToPrepare = NothingToPrepare;
-
-fn a_ladder<I: Inserter>(inserter: Arc<I>, levels: &[usize], shape: Shape) -> Ladder<'_, I> {
-    Ladder {
-        inserter,
-        before_level: &NOTHING_TO_PREPARE,
-        levels,
-        shape,
-    }
+/// No index watch on these: what they assert is that the documents reached the
+/// sink, and the watch has its own tests against a fake that can be told to
+/// stall.
+fn unwatched(notes: &Notes) -> (IndexWatch, Notes) {
+    (IndexWatch::off(), notes.clone())
 }
 
 fn quiet() -> Notes {
@@ -220,10 +216,17 @@ async fn the_endpoint_counts_exactly_the_documents_that_were_offered() {
     let source = CorpusSource::new(&path, 0, BATCH);
     let mut collect = |_: PointResult| Ok(());
 
+    let (index, notes) = unwatched(&quiet());
     sweep::run_sweep(
-        a_ladder(Arc::clone(&inserter), &[4], a_shape()),
+        &SameInserter(Arc::clone(&inserter)),
         || source.open(),
-        &quiet(),
+        &[4],
+        a_loader(),
+        &Watchers {
+            index: &index,
+            notes: &notes,
+            samples: None,
+        },
         &Cancel::default(),
         &mut collect,
     )
@@ -246,10 +249,17 @@ async fn a_whole_ladder_runs_against_a_live_endpoint() {
             results.push(result);
             Ok(())
         };
+        let (index, notes) = unwatched(&quiet());
         sweep::run_sweep(
-            a_ladder(Arc::new(an_inserter(&sink).await), &[4, 16], a_shape()),
+            &SameInserter(Arc::new(an_inserter(&sink).await)),
             || source.open(),
-            &quiet(),
+            &[4, 16],
+            a_loader(),
+            &Watchers {
+                index: &index,
+                notes: &notes,
+                samples: None,
+            },
             &Cancel::default(),
             &mut collect,
         )
@@ -303,10 +313,17 @@ async fn a_reset_empties_the_index_over_a_live_endpoint() {
     let source = CorpusSource::new(&path, 0, BATCH);
     let mut collect = |_: PointResult| Ok(());
 
+    let (index, notes) = unwatched(&quiet());
     sweep::run_sweep(
-        a_ladder(Arc::clone(&inserter), &[4], a_shape()),
+        &SameInserter(Arc::clone(&inserter)),
         || source.open(),
-        &quiet(),
+        &[4],
+        a_loader(),
+        &Watchers {
+            index: &index,
+            notes: &notes,
+            samples: None,
+        },
         &Cancel::default(),
         &mut collect,
     )
@@ -340,15 +357,17 @@ async fn every_level_of_a_reset_ladder_builds_from_zero() {
             results.push(result);
             Ok(())
         };
+        let (index, notes) = unwatched(&quiet());
         sweep::run_sweep(
-            Ladder {
-                inserter: Arc::clone(&inserter),
-                before_level: &reset,
-                levels: &[4, 8, 16],
-                shape: a_shape(),
-            },
+            &ResettingInserter::new(Arc::clone(&inserter), Some(reset)),
             || source.open(),
-            &quiet(),
+            &[4, 8, 16],
+            a_loader(),
+            &Watchers {
+                index: &index,
+                notes: &notes,
+                samples: None,
+            },
             &Cancel::default(),
             &mut collect,
         )

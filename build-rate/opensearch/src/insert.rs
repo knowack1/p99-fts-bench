@@ -11,9 +11,9 @@ use anyhow::{Context, Result};
 use opensearch::{BulkParts, OpenSearch};
 use serde_json::Value;
 
-use crate::bulk::{self, BulkOutcome};
+use crate::bulk;
 use crate::corpus::DocumentBatch;
-use crate::sweep::Inserter;
+use crate::sweep::{Accepted, Inserter};
 
 pub struct BulkInserter {
     client: OpenSearch,
@@ -41,7 +41,7 @@ impl BulkInserter {
     /// makes, down to the URL. `refresh` is left off rather than set to
     /// `false`: false is already the default for `_bulk`, so sending it would
     /// only put a parameter on the wire that the Python loader does not.
-    async fn post(&self, payload: bytes::Bytes, offered: u64) -> Result<BulkOutcome> {
+    async fn post(&self, payload: bytes::Bytes, offered: u64) -> Result<Accepted> {
         let response = self
             .client
             .bulk(BulkParts::None)
@@ -60,11 +60,13 @@ impl BulkInserter {
 }
 
 impl Inserter for BulkInserter {
+    type Item = DocumentBatch;
+
     // The explicit `impl Future + Send` is the point: `async fn` in a trait
     // leaves the future's `Send`ness up to the caller, and these futures are
     // spawned onto tokio, which requires it.
     #[allow(clippy::manual_async_fn)]
-    fn insert(&self, batch: DocumentBatch) -> impl Future<Output = Result<BulkOutcome>> + Send {
+    fn insert(&self, batch: DocumentBatch) -> impl Future<Output = Result<Accepted>> + Send {
         async move {
             let offered = batch.docs();
             let payload = bulk::ndjson(&batch, &self.index)?;

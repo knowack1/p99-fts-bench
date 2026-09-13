@@ -29,6 +29,12 @@ struct Document {
     text: String,
 }
 
+impl build_rate_core::sweep::WorkItem for InsertParams {
+    fn docs(&self) -> u64 {
+        1
+    }
+}
+
 impl From<Document> for InsertParams {
     fn from(doc: Document) -> Self {
         Self {

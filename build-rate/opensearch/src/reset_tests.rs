@@ -298,7 +298,7 @@ async fn the_reset_says_what_it_did() {
 async fn a_reset_is_what_a_level_prepares_with() {
     let endpoint = FakeIndex::start().await;
     let reset = reset_for(&endpoint, quiet_notes());
-    (&reset as &dyn BeforeLevel).prepare().await.unwrap();
+    reset.ensure_fresh().await.unwrap();
 
     assert_eq!(endpoint.times("PUT /wiki-articles"), 1);
 }

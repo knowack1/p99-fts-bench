@@ -90,7 +90,7 @@ fn non_ascii_text_is_sent_as_utf8_not_escaped() {
 #[test]
 fn a_reply_where_every_item_landed_is_clean() {
     let outcome = read_outcome(&a_reply(vec![an_item(201), an_item(201)]), 2).unwrap();
-    assert_eq!(outcome, BulkOutcome::default());
+    assert_eq!(outcome, Accepted::default());
     assert!(outcome.is_clean());
 }
 

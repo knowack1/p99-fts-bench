@@ -22,8 +22,9 @@ use osrate::corpus::CorpusSource;
 use osrate::insert::BulkInserter;
 use osrate::notes::{note, Notes};
 use osrate::report::{self, summary_table, CsvSink, PointResult};
-use osrate::reset::IndexReset;
-use osrate::sweep::{self, BeforeLevel, Cancel, Ladder, NothingToPrepare, Shape};
+use osrate::reset::{IndexReset, ResettingInserter};
+use osrate::build_rate::IndexWatch;
+use osrate::sweep::{self, Cancel, Watchers};
 
 fn main() -> ExitCode {
     match run(Args::parse()) {
@@ -63,7 +64,7 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
 
     let mut sink = CsvSink::open(&args.out)?;
     sink.write_preamble(&report::header_lines(&cluster, &args.settings()))?;
-    let (results, aborted) = sweep_levels(&args, client, reset.as_deref(), &notes, &mut sink).await;
+    let (results, aborted) = sweep_levels(&args, client, reset, &notes, &mut sink).await;
 
     echo_summary(&results);
     Ok(exit_code(&results, aborted))
@@ -126,17 +127,13 @@ fn reset_line(args: &Args) -> String {
 async fn sweep_levels(
     args: &Args,
     client: OpenSearch,
-    reset: Option<&IndexReset>,
+    reset: Option<Box<IndexReset>>,
     notes: &Notes,
     sink: &mut CsvSink,
 ) -> (Vec<PointResult>, bool) {
     let inserter = Arc::new(BulkInserter::new(client, &args.index));
     let source = CorpusSource::new(&args.corpus, args.max_docs, args.batch_size);
-    let nothing = NothingToPrepare;
-    let before_level: &dyn BeforeLevel = match reset {
-        Some(reset) => reset,
-        None => &nothing,
-    };
+    let inserters = ResettingInserter::new(inserter, reset.map(|reset| *reset));
     let cancel = watch_for_interrupt();
     let mut results: Vec<PointResult> = Vec::new();
 
@@ -147,27 +144,21 @@ async fn sweep_levels(
             Ok(())
         };
         sweep::run_sweep(
-            Ladder {
-                inserter,
-                before_level,
-                levels: &args.concurrency.0,
-                shape: shape(args),
-            },
+            &inserters,
             || source.open(),
-            notes,
+            &args.concurrency.0,
+            sweep::loader(args.batch_size, args.queue_depth),
+            &Watchers {
+                index: &IndexWatch::off(),
+                notes,
+                samples: None,
+            },
             &cancel,
             &mut collect,
         )
         .await
     };
     (results, report_outcome(outcome, sink.destination()))
-}
-
-fn shape(args: &Args) -> Shape {
-    Shape {
-        batch_size: args.batch_size,
-        queue_depth: args.queue_depth,
-    }
 }
 
 /// Ctrl-C is the ordinary way a long ladder ends early, and the levels already
