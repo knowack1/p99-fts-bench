@@ -14,6 +14,7 @@ path = "src/lib.rs"
 # upgraded — the thing `../scylla/README.md` says must never happen to a
 # recorded run.
 [dependencies]
+tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
 

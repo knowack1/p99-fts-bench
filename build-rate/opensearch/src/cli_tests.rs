@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use clap::CommandFactory;
 
 use super::*;

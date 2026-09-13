@@ -1,9 +1,9 @@
 //! Command line: a corpus, a list of concurrency levels, a batch size, and
 //! where the CSV goes.
-use std::fmt;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Duration;
+
+pub use build_rate_core::cli::{available_cores, split_fields, Levels};
 
 use clap::Parser;
 
@@ -175,10 +175,6 @@ impl Args {
 /// something the header should be able to show.
 pub const REFRESH_INTERVAL_FROM_CONFIG: &str = "from-index-config";
 
-pub fn available_cores() -> usize {
-    std::thread::available_parallelism().map_or(1, |cores| cores.get())
-}
-
 pub fn tls_state() -> &'static str {
     if cfg!(feature = "tls") {
         "rustls"
@@ -195,48 +191,6 @@ fn parse_batch_size(raw: &str) -> Result<usize, String> {
         return Err(format!("--batch-size must be >= 1, got {size}"));
     }
     Ok(size)
-}
-
-/// Repeats are kept: a throwaway leading level absorbs the cold page cache, and
-/// dropping it silently would make the ladder disagree with what was asked for.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Levels(pub Vec<usize>);
-
-impl FromStr for Levels {
-    type Err = String;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let levels = split_fields(raw)
-            .map(parse_level)
-            .collect::<Result<Vec<_>, _>>()?;
-        if levels.is_empty() {
-            return Err("--concurrency needs at least one level".to_string());
-        }
-        Ok(Self(levels))
-    }
-}
-
-impl fmt::Display for Levels {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let levels: Vec<String> = self.0.iter().map(ToString::to_string).collect();
-        write!(f, "{}", levels.join(","))
-    }
-}
-
-fn parse_level(field: &str) -> Result<usize, String> {
-    let level: usize = field
-        .parse()
-        .map_err(|_| format!("not an integer: {field:?}"))?;
-    if level < 1 {
-        return Err(format!("concurrency must be >= 1, got {level}"));
-    }
-    Ok(level)
-}
-
-fn split_fields(raw: &str) -> impl Iterator<Item = &str> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|field| !field.is_empty())
 }
 
 #[cfg(test)]

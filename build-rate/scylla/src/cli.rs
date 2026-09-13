@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+pub use build_rate_core::cli::{available_cores, split_fields, Levels};
+
 use clap::Parser;
 use scylla::statement::Consistency;
 
@@ -195,45 +197,12 @@ impl Args {
     }
 }
 
-pub fn available_cores() -> usize {
-    std::thread::available_parallelism().map_or(1, |cores| cores.get())
-}
-
 pub fn driver_metrics_state() -> &'static str {
     if cfg!(feature = "driver-metrics") {
         "on"
     } else {
         "off"
     }
-}
-
-/// Repeats are kept: a throwaway leading level absorbs the cold page cache, and
-/// dropping it silently would make the ladder disagree with what was asked for.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Levels(pub Vec<usize>);
-
-impl FromStr for Levels {
-    type Err = String;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let levels = split_fields(raw)
-            .map(parse_level)
-            .collect::<Result<Vec<_>, _>>()?;
-        if levels.is_empty() {
-            return Err("--concurrency needs at least one level".to_string());
-        }
-        Ok(Self(levels))
-    }
-}
-
-fn parse_level(field: &str) -> Result<usize, String> {
-    let level: usize = field
-        .parse()
-        .map_err(|_| format!("not an integer: {field:?}"))?;
-    if level < 1 {
-        return Err(format!("concurrency must be >= 1, got {level}"));
-    }
-    Ok(level)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,12 +224,6 @@ impl fmt::Display for Hosts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0.join(","))
     }
-}
-
-fn split_fields(raw: &str) -> impl Iterator<Item = &str> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|field| !field.is_empty())
 }
 
 fn parse_consistency(raw: &str) -> Result<Consistency, String> {

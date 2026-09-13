@@ -13,3 +13,7 @@
 //! `unknown` if it is not there. This crate's own lock governs nothing but
 //! `cargo test` run from this directory: as a path dependency, the binary's
 //! lock is what resolves these dependencies.
+pub mod cli;
+pub mod notes;
+pub mod report;
+pub mod sweep;

@@ -12,6 +12,8 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
+pub use build_rate_core::report::{latency_text, percentile};
+
 use crate::client::Cluster;
 
 /// The first seven columns and their order are `scyllarate`'s, so a chart
@@ -50,20 +52,6 @@ impl PointResult {
     pub fn docs_in_flight(&self) -> usize {
         self.concurrency * self.batch_size
     }
-}
-
-/// `None`, never 0.0, when no bulk came back clean. A point where every bulk
-/// failed would otherwise plot as the best latency on the curve.
-pub fn percentile(sorted_values: &[f64], fraction: f64) -> Option<f64> {
-    if sorted_values.is_empty() {
-        return None;
-    }
-    let rank = (fraction * sorted_values.len() as f64).ceil() as usize;
-    Some(sorted_values[clamp(rank.saturating_sub(1), sorted_values.len())])
-}
-
-fn clamp(index: usize, length: usize) -> usize {
-    index.min(length - 1)
 }
 
 pub fn header_lines(cluster: &Cluster, settings: &[(String, String)]) -> Vec<String> {
@@ -167,18 +155,6 @@ fn summary_row(result: &PointResult) -> String {
         latency_text(result.p99_ms),
         result.bulks
     )
-}
-
-/// A dash where no bulk came back clean, so an unmeasured point cannot read as
-/// a fast one on stderr any more than it can in the CSV.
-pub fn latency_text(value: Option<f64>) -> String {
-    value.map_or_else(|| "-".to_string(), |ms| format!("{ms:.2}"))
-}
-
-pub fn note(message: &str) {
-    let mut stderr = io::stderr();
-    let _ = writeln!(stderr, "{message}");
-    let _ = stderr.flush();
 }
 
 #[cfg(test)]

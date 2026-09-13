@@ -7,6 +7,8 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
+pub use build_rate_core::report::{latency_text, percentile};
+
 use crate::build_rate::IndexBuild;
 use crate::session::Topology;
 
@@ -44,20 +46,6 @@ pub struct PointResult {
     /// `None` when the vector-store was not watched. Blank cells, never zeros:
     /// a zero build rate is a finding, and an unwatched level is not one.
     pub index: Option<IndexBuild>,
-}
-
-/// `None`, never 0.0, when nothing succeeded. A point where every insert failed
-/// would otherwise plot as the best latency on the curve.
-pub fn percentile(sorted_values: &[f64], fraction: f64) -> Option<f64> {
-    if sorted_values.is_empty() {
-        return None;
-    }
-    let rank = (fraction * sorted_values.len() as f64).ceil() as usize;
-    Some(sorted_values[clamp(rank.saturating_sub(1), sorted_values.len())])
-}
-
-fn clamp(index: usize, length: usize) -> usize {
-    index.min(length - 1)
 }
 
 pub fn header_lines(topology: &Topology, settings: &[(String, String)]) -> Vec<String> {
@@ -188,18 +176,6 @@ fn index_rate_text(build: Option<&IndexBuild>) -> String {
         || "-".to_string(),
         |build| format!("{:.1}", build.docs_per_s),
     )
-}
-
-/// A dash where nothing succeeded, so an unmeasured point cannot read as a fast
-/// one on stderr any more than it can in the CSV.
-pub fn latency_text(value: Option<f64>) -> String {
-    value.map_or_else(|| "-".to_string(), |ms| format!("{ms:.2}"))
-}
-
-pub fn note(message: &str) {
-    let mut stderr = io::stderr();
-    let _ = writeln!(stderr, "{message}");
-    let _ = stderr.flush();
 }
 
 #[cfg(test)]

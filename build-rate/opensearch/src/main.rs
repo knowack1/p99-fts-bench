@@ -20,8 +20,8 @@ use osrate::cli::Args;
 use osrate::client::{self, Cluster};
 use osrate::corpus::CorpusSource;
 use osrate::insert::BulkInserter;
-use osrate::notes::Notes;
-use osrate::report::{note, summary_table, CsvSink, PointResult};
+use osrate::notes::{note, Notes};
+use osrate::report::{summary_table, CsvSink, PointResult};
 use osrate::reset::IndexReset;
 use osrate::sweep::{self, BeforeLevel, Cancel, Ladder, NothingToPrepare, Shape};
 
