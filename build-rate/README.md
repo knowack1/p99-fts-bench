@@ -7,10 +7,17 @@ Two binaries asking one question of two engines, over a crate they share.
 | [`core/`](core) | `build-rate-core`: the sweep, the watch, the report. Every part of the measurement that does not depend on which engine is underneath. Not a binary, and not a workspace member. |
 | [`scylla/`](scylla/README.md) | `scyllarate`: prepared CQL INSERTs into `wiki.articles`, index build read from the vector-store's status endpoint. |
 | [`opensearch/`](opensearch/README.md) | `osrate`: `_bulk` into `wiki-articles`, index build read from `_stats`. |
+| [`charts/`](charts/README.md) | The two images a local engine run ends in: docs/s against concurrency, and docs/s against the index already built. Reads the CSVs below; imports the null-sink renderers in `../tools` rather than copying them. |
 
 Both write **the same seventeen-column point CSV** and, with `--samples-dir`,
 the same ten-column per-second series. Column 17 is `engine`, which is how a
 consumer tells rows apart once two runs are in one file.
+
+Against the **null sink** on AWS, both halves are driven by
+[`../HARNESS-AWS-RUNBOOK.md`](../HARNESS-AWS-RUNBOOK.md). Against the **real
+engines** in Docker on a laptop, by
+[`HARNESS-LOCAL-RUNBOOK.md`](HARNESS-LOCAL-RUNBOOK.md) — same binaries, same
+ladder, and every number from it preliminary.
 
 ## What belongs to an engine, and what does not
 
