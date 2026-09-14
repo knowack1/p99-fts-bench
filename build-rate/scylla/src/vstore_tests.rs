@@ -33,10 +33,7 @@ async fn an_index_that_is_still_building_is_present_but_not_serving() {
 #[tokio::test]
 async fn a_404_is_an_absent_index_rather_than_a_failure() {
     let store = FakeVectorStore::start(Reply::Absent).await;
-    assert_eq!(
-        probe_against(&store).await.read().await,
-        IndexState::Absent
-    );
+    assert_eq!(probe_against(&store).await.read().await, IndexState::Absent);
 }
 
 /// The distinction the reset depends on: a vector-store that is down has not

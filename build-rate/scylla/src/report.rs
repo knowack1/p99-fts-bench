@@ -2,11 +2,11 @@
 //!
 //! What stays here is the ScyllaDB half of the header — the topology facts that
 //! make the numbers interpretable — and the engine's own name for its rows.
+use build_rate_core::report::{header_lines as core_header_lines, SCYLLADB};
 pub use build_rate_core::report::{
     latency_text, percentile, summary_table, CsvSink, IndexBuild, PointResult, CSV_COLUMNS,
     INDEX_COLUMNS, STDOUT,
 };
-use build_rate_core::report::{header_lines as core_header_lines, SCYLLADB};
 
 use crate::session::Topology;
 

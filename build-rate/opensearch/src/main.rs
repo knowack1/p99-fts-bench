@@ -21,10 +21,11 @@ use osrate::client::{self, Cluster};
 use osrate::corpus::{self, CorpusSource};
 use osrate::insert::BulkInserter;
 use osrate::notes::{note, Notes};
-use osrate::run::{build_runtime, echo_summary, exit_code, report_outcome, say_each,
-                  watch_for_interrupt};
 use osrate::report::{self, CsvSink, PointResult};
 use osrate::reset::{IndexReset, ResettingInserter};
+use osrate::run::{
+    build_runtime, echo_summary, exit_code, report_outcome, say_each, watch_for_interrupt,
+};
 use osrate::samples::SampleFiles;
 use osrate::sweep::{self, Watchers};
 use osrate::vstore::StatsProbe;
@@ -75,7 +76,9 @@ fn check_the_refresh_policy(args: &Args, cluster: &client::Cluster) -> Result<()
     }
     let interval = cluster.refresh_interval.as_str();
     if !interval.starts_with("-1") {
-        note(&format!("index watch ON: polling _stats, refresh_interval={interval}"));
+        note(&format!(
+            "index watch ON: polling _stats, refresh_interval={interval}"
+        ));
         return Ok(());
     }
     if args.asks_for_a_final_refresh() {

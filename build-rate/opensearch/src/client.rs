@@ -321,8 +321,8 @@ fn write_pool(nodes: Option<Value>) -> String {
 }
 
 fn pool_size(node_id: &str, node: &Value) -> String {
-    let size = text_at(node, &["thread_pool", "write", "size"])
-        .unwrap_or_else(|| UNKNOWN.to_string());
+    let size =
+        text_at(node, &["thread_pool", "write", "size"]).unwrap_or_else(|| UNKNOWN.to_string());
     format!("{node_id}=write:{size}")
 }
 

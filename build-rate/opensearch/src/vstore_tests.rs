@@ -13,7 +13,11 @@ fn probe_against(index: &FakeIndex) -> StatsProbe {
         index: "wiki-articles".to_string(),
         request_timeout: Duration::from_secs(5),
     };
-    StatsProbe::new(build_client(&options).unwrap(), index.url(), "wiki-articles")
+    StatsProbe::new(
+        build_client(&options).unwrap(),
+        index.url(),
+        "wiki-articles",
+    )
 }
 
 #[tokio::test]

@@ -161,7 +161,10 @@ async fn an_index_that_cannot_be_read_before_the_level_fails_by_name() {
         .expect("an unreadable first poll must fail the level");
     let said = format!("{failed:#}");
 
-    assert!(said.contains("could not be read before this level"), "{said}");
+    assert!(
+        said.contains("could not be read before this level"),
+        "{said}"
+    );
     assert!(said.contains("503 from the index"), "{said}");
 }
 
@@ -189,7 +192,10 @@ async fn an_index_still_accepting_is_not_idle_even_while_nothing_is_searchable()
 
     let build = level.finish(300).await.unwrap().unwrap();
 
-    assert!(build.settled, "the flat searchable count ended the build early");
+    assert!(
+        build.settled,
+        "the flat searchable count ended the build early"
+    );
     assert_eq!(build.docs, 300);
 }
 
@@ -198,8 +204,7 @@ async fn an_index_still_accepting_is_not_idle_even_while_nothing_is_searchable()
 #[tokio::test]
 async fn an_engine_holding_everything_unpublished_is_asked_once_to_publish() {
     let probe = Arc::new(
-        ScriptedProbe::new(vec![accepted_but_not_yet_searchable(0, 0)])
-            .publishing(a_reading(500)),
+        ScriptedProbe::new(vec![accepted_but_not_yet_searchable(0, 0)]).publishing(a_reading(500)),
     );
     let watch = watching(
         Arc::clone(&probe),
@@ -276,10 +281,10 @@ async fn an_engine_with_one_counter_is_never_asked_to_publish() {
 #[tokio::test]
 async fn an_absent_index_reads_as_absent_rather_than_as_a_failed_poll() {
     let probe = Arc::new(ScriptedProbe::new(vec![IndexState::Absent]));
-    let watch = watching(Arc::clone(&probe), brisk(
-        Duration::from_millis(30),
-        Duration::from_millis(20),
-    ));
+    let watch = watching(
+        Arc::clone(&probe),
+        brisk(Duration::from_millis(30), Duration::from_millis(20)),
+    );
     let level = begin(&watch, &quiet_notes()).await.unwrap();
 
     let build = level.finish(10).await.unwrap().unwrap();

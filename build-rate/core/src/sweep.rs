@@ -348,7 +348,12 @@ pub type ItemOf<P> = <<P as LevelSource>::Inserter as Inserter>::Item;
 /// level's result line, and an announcement carrying that phrase would return
 /// two lines per level where it expects one.
 fn announce_level(position: usize, levels: &[usize], point: Point) -> String {
-    let ladder = format!("[{}/{}] concurrency={}", position + 1, levels.len(), point.concurrency);
+    let ladder = format!(
+        "[{}/{}] concurrency={}",
+        position + 1,
+        levels.len(),
+        point.concurrency
+    );
     if point.batch_size == 1 {
         return ladder;
     }
@@ -431,8 +436,7 @@ pub async fn measure_at_concurrency<I: Inserter, S: Source<Work = I::Item>>(
     notes: &Notes,
     submitted: &Arc<Submitted>,
 ) -> Result<PointResult> {
-    let (sender, receiver) =
-        async_channel::bounded(loader.shape.queue_capacity(concurrency));
+    let (sender, receiver) = async_channel::bounded(loader.shape.queue_capacity(concurrency));
     let producer = tokio::task::spawn_blocking(move || fill_channel(sender, source));
     let mut workers = start_workers(inserter, &receiver, submitted, concurrency);
     drop(receiver);

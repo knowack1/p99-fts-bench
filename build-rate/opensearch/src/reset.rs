@@ -33,9 +33,9 @@ use build_rate_core::gate::Gate;
 use build_rate_core::index::{IndexProbe, IndexState};
 
 use crate::client;
-use crate::vstore::StatsProbe;
 use crate::notes::Notes;
 use crate::sweep::{BoxFuture, Inserter, LevelSource};
+use crate::vstore::StatsProbe;
 
 /// Embedded rather than read from a path at run time, so that the mapping this
 /// tool applies cannot drift from the repo's and a bare run needs no argument.
@@ -341,7 +341,6 @@ impl IndexReset {
         Ok(())
     }
 }
-
 
 const NOT_FOUND: u16 = 404;
 const FORBIDDEN: u16 = 403;

@@ -19,7 +19,10 @@ fn settings_of(index_settings: Value) -> Value {
 }
 
 fn mappings_of(mappings: Value) -> Value {
-    index_subtree(Ok(json!({"wiki-articles": {"mappings": mappings}})), "mappings")
+    index_subtree(
+        Ok(json!({"wiki-articles": {"mappings": mappings}})),
+        "mappings",
+    )
 }
 
 fn parity_settings() -> Value {
@@ -32,7 +35,11 @@ fn parity_settings() -> Value {
 
 #[test]
 fn the_cluster_gathers_what_the_csv_header_needs() {
-    let keys: Vec<String> = a_cluster().facts().into_iter().map(|(key, _)| key).collect();
+    let keys: Vec<String> = a_cluster()
+        .facts()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
     assert_eq!(
         keys,
         [
@@ -122,7 +129,10 @@ fn an_unset_refresh_interval_is_named_as_the_default_not_as_unknown() {
 
 #[test]
 fn a_missing_setting_is_unknown_rather_than_invented() {
-    assert_eq!(index_setting(&settings_of(json!({})), "number_of_shards"), UNKNOWN);
+    assert_eq!(
+        index_setting(&settings_of(json!({})), "number_of_shards"),
+        UNKNOWN
+    );
 }
 
 /// `_source` off is the ScyllaDB-parity variant, whose index carries no
@@ -137,7 +147,10 @@ fn source_disabled_is_recorded_because_it_is_the_scylladb_parity_variant() {
 
 #[test]
 fn a_mapping_that_never_mentions_source_has_it_on() {
-    assert_eq!(source_enabled(&mappings_of(json!({"properties": {}}))), "true");
+    assert_eq!(
+        source_enabled(&mappings_of(json!({"properties": {}}))),
+        "true"
+    );
 }
 
 /// Analyzer parity is load-bearing for every relevance and BM25 comparison in
@@ -176,7 +189,10 @@ fn an_endpoint_that_does_not_answer_the_node_probe_reports_an_unknown_pool() {
 #[test]
 fn a_numeric_field_reads_as_readily_as_a_string_one() {
     let numeric = json!({"index": {"number_of_shards": 3}});
-    assert_eq!(index_setting(&settings_of(numeric), "number_of_shards"), "3");
+    assert_eq!(
+        index_setting(&settings_of(numeric), "number_of_shards"),
+        "3"
+    );
 }
 
 #[test]

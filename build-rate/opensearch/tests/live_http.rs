@@ -29,15 +29,13 @@ use std::time::{Duration, Instant};
 use opensearch::{CountParts, OpenSearch};
 use serde_json::Value;
 
+use osrate::build_rate::IndexWatch;
 use osrate::client::{self, ConnectOptions, UNKNOWN};
 use osrate::corpus::{self, CorpusSource};
 use osrate::insert::BulkInserter;
 use osrate::notes::Notes;
 use osrate::report::PointResult;
-use osrate::reset::{
-    GateTiming, IndexConfig, IndexReset, ResettingInserter, DEFAULT_INDEX_CONFIG,
-};
-use osrate::build_rate::IndexWatch;
+use osrate::reset::{GateTiming, IndexConfig, IndexReset, ResettingInserter, DEFAULT_INDEX_CONFIG};
 use osrate::sweep::{self, Cancel, Inserter, SameInserter, Watchers};
 
 const BENCH_ROOT: &str = "../..";

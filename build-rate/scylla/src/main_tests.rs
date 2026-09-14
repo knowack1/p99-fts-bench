@@ -32,4 +32,3 @@ fn the_banner_names_the_shard_topology() {
     assert!(lines[1].contains("shards:3"));
     assert!(lines[1].contains("tablets=false"));
 }
-

@@ -71,7 +71,9 @@ fn the_payload_ends_with_a_newline_as_the_ndjson_grammar_requires() {
 
 #[test]
 fn an_empty_batch_encodes_as_an_empty_payload() {
-    assert!(ndjson(&DocumentBatch::new(vec![]), INDEX).unwrap().is_empty());
+    assert!(ndjson(&DocumentBatch::new(vec![]), INDEX)
+        .unwrap()
+        .is_empty());
 }
 
 /// `ensure_ascii=False` in the Python loader; serde_json writes raw UTF-8 by
@@ -127,8 +129,12 @@ fn an_item_failure_with_no_error_object_still_names_its_status() {
 #[test]
 fn the_failure_boundary_is_three_hundred() {
     assert_eq!(FIRST_FAILING_STATUS, 300);
-    assert!(read_outcome(&a_reply(vec![an_item(299)]), 1).unwrap().is_clean());
-    assert!(!read_outcome(&a_reply(vec![an_item(300)]), 1).unwrap().is_clean());
+    assert!(read_outcome(&a_reply(vec![an_item(299)]), 1)
+        .unwrap()
+        .is_clean());
+    assert!(!read_outcome(&a_reply(vec![an_item(300)]), 1)
+        .unwrap()
+        .is_clean());
 }
 
 /// A reply that cannot be accounted for document by document must not read as

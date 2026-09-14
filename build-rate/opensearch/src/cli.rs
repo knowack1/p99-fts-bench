@@ -7,8 +7,8 @@ pub use build_rate_core::cli::{available_cores, split_fields, Levels};
 
 use clap::Parser;
 
-use crate::client::ConnectOptions;
 use crate::build_rate::WatchTiming;
+use crate::client::ConnectOptions;
 use crate::report::LATENCY_UNIT;
 use crate::reset::{GateTiming, IndexConfig, DEFAULT_INDEX_CONFIG};
 use crate::sweep::QUEUE_DEPTH_PER_WORKER;

@@ -6,8 +6,6 @@
 //! bound.
 use std::sync::{Arc, Mutex};
 
-
-
 use crate::client::Cluster;
 use crate::corpus::{BulkDoc, DocumentBatch};
 pub use build_rate_core::test_support::{quiet_notes, SpokenNotes};
@@ -452,7 +450,10 @@ fn index_stats(model: &mut IndexModel) -> (u16, String) {
 fn refresh_index(model: &mut IndexModel) -> (u16, String) {
     model.searchable = model.docs;
     model.publish_after = 0;
-    (200, r#"{"_shards":{"total":1,"successful":1,"failed":0}}"#.to_string())
+    (
+        200,
+        r#"{"_shards":{"total":1,"successful":1,"failed":0}}"#.to_string(),
+    )
 }
 
 fn analyze_text(model: &IndexModel) -> (u16, String) {

@@ -93,7 +93,6 @@ impl FakeVectorStore {
         &self.base_url
     }
 
-
     pub fn then(&self, replies: &[Reply]) {
         self.script
             .lock()
@@ -138,4 +137,3 @@ async fn answer_one(mut stream: tokio::net::TcpStream, script: &Arc<Mutex<Script
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.shutdown().await;
 }
-

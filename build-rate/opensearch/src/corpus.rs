@@ -85,5 +85,6 @@ pub fn batches(
     let documents = source
         .open::<Document>()?
         .map(|line| line.map(BulkDoc::from));
-    Ok(build_rate_core::corpus::chunks(documents, batch_size).map(|batch| batch.map(DocumentBatch::new)))
+    Ok(build_rate_core::corpus::chunks(documents, batch_size)
+        .map(|batch| batch.map(DocumentBatch::new)))
 }

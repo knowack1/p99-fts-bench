@@ -13,10 +13,11 @@ use scyllarate::build_rate::IndexWatch;
 use scyllarate::cli::Args;
 use scyllarate::corpus::{self, CorpusSource};
 use scyllarate::notes::{note, Notes};
-use scyllarate::run::{build_runtime, echo_summary, exit_code, report_outcome, say_each,
-                  watch_for_interrupt};
 use scyllarate::report::{self, CsvSink, PointResult};
 use scyllarate::reset::ResettingInserters;
+use scyllarate::run::{
+    build_runtime, echo_summary, exit_code, report_outcome, say_each, watch_for_interrupt,
+};
 use scyllarate::samples::SampleFiles;
 use scyllarate::session::{self, Topology};
 use scyllarate::sweep::{self, Watchers};
@@ -70,7 +71,9 @@ fn open_samples(
         "per-second samples: {}/c<level>-<n>.csv",
         dir.display()
     ));
-    Ok(Some(files.with_preamble(report::header_lines(topology, settings))))
+    Ok(Some(
+        files.with_preamble(report::header_lines(topology, settings)),
+    ))
 }
 
 fn open_probe(args: &Args) -> Result<Option<Arc<VectorStoreProbe>>> {
@@ -107,7 +110,10 @@ fn announce_reset(args: &Args) {
     ));
 }
 
-async fn settings_with_index(args: &Args, probe: Option<&VectorStoreProbe>) -> Vec<(String, String)> {
+async fn settings_with_index(
+    args: &Args,
+    probe: Option<&VectorStoreProbe>,
+) -> Vec<(String, String)> {
     let version = match probe {
         Some(probe) => probe.version().await,
         None => "off".to_string(),

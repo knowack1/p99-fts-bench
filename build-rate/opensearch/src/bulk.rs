@@ -88,7 +88,11 @@ fn items_of(body: &Value) -> Result<Vec<&Value>> {
 }
 
 fn summarize_items(items: &[&Value]) -> Accepted {
-    let failures: Vec<&Value> = items.iter().copied().filter(|item| is_failure(item)).collect();
+    let failures: Vec<&Value> = items
+        .iter()
+        .copied()
+        .filter(|item| is_failure(item))
+        .collect();
     Accepted {
         failed: failures.len() as u64,
         first_failure: failures.first().map(|item| describe_failure(item)),

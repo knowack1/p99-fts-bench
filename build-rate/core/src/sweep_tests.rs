@@ -63,7 +63,9 @@ async fn measure(
 #[tokio::test]
 async fn a_point_delivers_every_document_once() {
     let inserter = Arc::new(FakeInserter::default());
-    let result = measure(&inserter, a_source(5, 1), ONE_DOC, 2).await.unwrap();
+    let result = measure(&inserter, a_source(5, 1), ONE_DOC, 2)
+        .await
+        .unwrap();
 
     assert_eq!((result.docs, result.errors), (5, 0));
     assert_eq!(inserter.docs(), 5);
@@ -74,9 +76,15 @@ async fn a_point_delivers_every_document_once() {
 #[tokio::test]
 async fn in_flight_never_exceeds_the_concurrency_level() {
     let inserter = Arc::new(FakeInserter::with_latency(Duration::from_millis(5)));
-    measure(&inserter, a_source(40, 1), ONE_DOC, 4).await.unwrap();
+    measure(&inserter, a_source(40, 1), ONE_DOC, 4)
+        .await
+        .unwrap();
 
-    assert!(inserter.max_in_flight() <= 4, "{}", inserter.max_in_flight());
+    assert!(
+        inserter.max_in_flight() <= 4,
+        "{}",
+        inserter.max_in_flight()
+    );
 }
 
 /// `c=64` and `c=64 batch=512` are not the same offer, and the product is what
@@ -97,7 +105,9 @@ async fn the_channel_is_bounded_so_the_producer_cannot_race_ahead() {
     let inserter = Arc::new(FakeInserter::with_latency(Duration::from_millis(20)));
     let inserter_for_task = Arc::clone(&inserter);
     let measuring =
-        tokio::spawn(async move { measure(&inserter_for_task, a_source(10_000, 1), ONE_DOC, 1).await });
+        tokio::spawn(
+            async move { measure(&inserter_for_task, a_source(10_000, 1), ONE_DOC, 1).await },
+        );
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     let buffered = inserter.requests();
@@ -116,7 +126,9 @@ async fn the_channel_is_bounded_so_the_producer_cannot_race_ahead() {
 #[tokio::test]
 async fn one_document_per_request_makes_docs_and_requests_agree() {
     let inserter = Arc::new(FakeInserter::default());
-    let result = measure(&inserter, a_source(7, 1), ONE_DOC, 2).await.unwrap();
+    let result = measure(&inserter, a_source(7, 1), ONE_DOC, 2)
+        .await
+        .unwrap();
 
     assert_eq!((result.docs, result.requests), (7, 7));
     assert_eq!(result.batch_size, 1);
@@ -175,7 +187,11 @@ async fn a_failure_is_said_out_loud_rather_than_left_to_the_csv() {
     .unwrap();
 
     assert!(spoken.mentions("failed requests"), "{:?}", spoken.lines());
-    assert!(spoken.mentions("the socket went away"), "{:?}", spoken.lines());
+    assert!(
+        spoken.mentions("the socket went away"),
+        "{:?}",
+        spoken.lines()
+    );
 }
 
 /// Workers count in parallel, so "first" has to be the earliest failure by
@@ -200,7 +216,10 @@ fn offered_is_what_landed_plus_what_did_not() {
     counters.record(50, &Accepted::CLEAN, 1.0);
     counters.record_failure(50, anyhow!("gone"));
 
-    assert_eq!((counters.docs, counters.errors, counters.offered()), (50, 50, 100));
+    assert_eq!(
+        (counters.docs, counters.errors, counters.offered()),
+        (50, 50, 100)
+    );
 }
 
 // --- the ladder -----------------------------------------------------------
@@ -218,7 +237,9 @@ async fn a_source_that_breaks_stops_the_level_rather_than_reporting_a_short_one(
 #[tokio::test]
 async fn every_row_carries_the_engine_that_produced_it() {
     let inserter = Arc::new(FakeInserter::default());
-    let scylla = measure(&inserter, a_source(1, 1), ONE_DOC, 1).await.unwrap();
+    let scylla = measure(&inserter, a_source(1, 1), ONE_DOC, 1)
+        .await
+        .unwrap();
     let opensearch = measure(&inserter, a_source(1, 1), batched(1), 1)
         .await
         .unwrap();

@@ -7,8 +7,7 @@ use anyhow::Result;
 
 use crate::build_rate::IndexWatch;
 use crate::report::{header_lines, CsvSink, PointResult};
-use crate::sweep::{
-    run_sweep, Cancel, Loader, SameInserter, Shape, Watchers, WorkItem, };
+use crate::sweep::{run_sweep, Cancel, Loader, SameInserter, Shape, Watchers, WorkItem};
 use crate::test_support::{quiet_notes, FakeInserter};
 
 /// One document per request, which is what makes `measured_levels` readable as

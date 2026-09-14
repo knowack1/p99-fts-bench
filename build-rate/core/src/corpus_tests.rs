@@ -40,13 +40,19 @@ fn every_line_becomes_a_document() {
 #[test]
 fn max_docs_zero_reads_everything() {
     let (_dir, path) = a_corpus(&three_documents());
-    assert_eq!(CorpusSource::new(&path, 0).open::<Doc>().unwrap().count(), 3);
+    assert_eq!(
+        CorpusSource::new(&path, 0).open::<Doc>().unwrap().count(),
+        3
+    );
 }
 
 #[test]
 fn max_docs_stops_the_level_where_it_was_asked_to() {
     let (_dir, path) = a_corpus(&three_documents());
-    assert_eq!(CorpusSource::new(&path, 2).open::<Doc>().unwrap().count(), 2);
+    assert_eq!(
+        CorpusSource::new(&path, 2).open::<Doc>().unwrap().count(),
+        2
+    );
 }
 
 /// A fresh reader per call, so every concurrency level reads the corpus from
@@ -107,10 +113,7 @@ fn documents_are_grouped_into_runs_of_the_asked_size() {
 #[test]
 fn the_last_run_is_short_rather_than_padded() {
     let batches = batched(5, 2);
-    assert_eq!(
-        batches.iter().map(Vec::len).collect::<Vec<_>>(),
-        [2, 2, 1]
-    );
+    assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), [2, 2, 1]);
 }
 
 #[test]
@@ -125,7 +128,10 @@ fn a_failure_part_way_through_a_run_reaches_the_caller() {
         Ok(Doc { id: 1 }),
         Err(anyhow::anyhow!("truncated JSONL line 4242")),
     ];
-    let failed = chunks(documents.into_iter(), 4).next().unwrap().unwrap_err();
+    let failed = chunks(documents.into_iter(), 4)
+        .next()
+        .unwrap()
+        .unwrap_err();
 
     assert!(format!("{failed:#}").contains("truncated JSONL line 4242"));
 }

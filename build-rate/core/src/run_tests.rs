@@ -56,7 +56,10 @@ fn an_abort_says_where_the_levels_it_measured_went() {
     let exc = anyhow::anyhow!("interrupted at concurrency=64");
     let said = abort_lines(&exc, "/mnt/nvme/work/results/high-rep1.csv").join("\n");
 
-    assert!(said.contains("/mnt/nvme/work/results/high-rep1.csv"), "{said}");
+    assert!(
+        said.contains("/mnt/nvme/work/results/high-rep1.csv"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -92,7 +95,10 @@ fn a_successful_outcome_is_not_an_abort() {
 
 #[test]
 fn a_failed_outcome_is_an_abort() {
-    assert!(report_outcome(Err(anyhow::anyhow!("the driver gave up")), "sweep.csv"));
+    assert!(report_outcome(
+        Err(anyhow::anyhow!("the driver gave up")),
+        "sweep.csv"
+    ));
 }
 
 #[test]

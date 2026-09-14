@@ -56,7 +56,10 @@ async fn a_gate_returns_as_soon_as_the_state_is_reached() {
     let probe = ScriptedProbe::new(vec![present(9, true), IndexState::Absent]);
     let timing = quick();
     let gate = Gate::new(&probe, &timing);
-    assert!(gate.await_state("it to go", IndexState::is_absent).await.is_ok());
+    assert!(gate
+        .await_state("it to go", IndexState::is_absent)
+        .await
+        .is_ok());
 }
 
 /// A poll the engine could not answer is not a reason to give up: a delete is
@@ -70,7 +73,10 @@ async fn an_unreadable_poll_is_waited_through_not_raised() {
     ]);
     let timing = quick();
     let gate = Gate::new(&probe, &timing);
-    assert!(gate.await_state("it to go", IndexState::is_absent).await.is_ok());
+    assert!(gate
+        .await_state("it to go", IndexState::is_absent)
+        .await
+        .is_ok());
 }
 
 /// A reset that quietly did not happen produces a complete, plausible, wrong

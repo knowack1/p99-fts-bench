@@ -20,7 +20,6 @@
 //! produces a complete, plausible, wrong build rate.
 use std::sync::Arc;
 
-
 use anyhow::Result;
 use scylla::client::session::Session;
 

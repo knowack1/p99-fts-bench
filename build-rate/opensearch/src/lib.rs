@@ -7,12 +7,11 @@ pub mod corpus;
 pub mod insert;
 pub mod notes;
 pub mod report;
+pub mod reset;
 pub mod run;
 pub mod samples;
-pub mod reset;
 pub mod sweep;
 pub mod vstore;
 
 #[cfg(test)]
 pub(crate) mod fakes;
-

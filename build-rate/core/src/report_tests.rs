@@ -157,7 +157,10 @@ fn every_row_names_the_engine_that_produced_it() {
 #[test]
 fn csv_row_reports_the_two_plotted_metrics() {
     let row = fields(&a_point(32));
-    assert_eq!((&row[0][..], &row[4][..], &row[6][..]), ("32", "50.0", "9.000"));
+    assert_eq!(
+        (&row[0][..], &row[4][..], &row[6][..]),
+        ("32", "50.0", "9.000")
+    );
 }
 
 #[test]
@@ -200,8 +203,17 @@ fn the_summary_table_has_a_header_and_one_row_per_point() {
     assert_eq!(
         lines[0].split_whitespace().collect::<Vec<_>>(),
         [
-            "conc", "batch", "docs", "err", "wall_s", "docs/s", "p50_ms", "p99_ms", "reqs",
-            "idx_docs", "idx_docs/s"
+            "conc",
+            "batch",
+            "docs",
+            "err",
+            "wall_s",
+            "docs/s",
+            "p50_ms",
+            "p99_ms",
+            "reqs",
+            "idx_docs",
+            "idx_docs/s"
         ]
     );
     assert_eq!(lines.len(), 3);
