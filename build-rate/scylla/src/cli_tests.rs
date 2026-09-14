@@ -255,3 +255,20 @@ fn a_corpus_is_required() {
 fn a_concurrency_ladder_is_required() {
     assert!(Args::try_parse_from(["scyllarate", "--corpus", "c.jsonl"]).is_err());
 }
+
+/// `Builder::worker_threads(0)` panics rather than returning an error, so the
+/// flag has to refuse zero where it is read.
+#[test]
+fn a_runtime_with_no_workers_is_refused_by_the_flag() {
+    let refused = Args::try_parse_from([
+        "scyllarate",
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "8",
+        "--tokio-workers",
+        "0",
+    ]);
+    assert!(refused.is_err());
+    assert!(refused.unwrap_err().to_string().contains("must be >= 1"));
+}

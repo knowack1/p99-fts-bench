@@ -33,13 +33,21 @@ impl fmt::Display for Levels {
 }
 
 fn parse_level(field: &str) -> Result<usize, String> {
-    let level: usize = field
+    at_least_one(field, "concurrency")
+}
+
+/// The count every knob in this harness shares a floor of. Zero is never the
+/// degenerate-but-harmless case it looks like: zero concurrency offers nothing,
+/// a zero batch carries nothing, and zero tokio workers reaches
+/// `Builder::worker_threads(0)`, which panics instead of failing.
+pub fn at_least_one(raw: &str, what: &str) -> Result<usize, String> {
+    let value: usize = raw
         .parse()
-        .map_err(|_| format!("not an integer: {field:?}"))?;
-    if level < 1 {
-        return Err(format!("concurrency must be >= 1, got {level}"));
+        .map_err(|_| format!("not an integer: {raw:?}"))?;
+    if value < 1 {
+        return Err(format!("{what} must be >= 1, got {value}"));
     }
-    Ok(level)
+    Ok(value)
 }
 
 pub fn split_fields(raw: &str) -> impl Iterator<Item = &str> {

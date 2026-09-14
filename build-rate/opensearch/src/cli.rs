@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use build_rate_core::cli::{available_cores, path_setting, split_fields, Levels};
+pub use build_rate_core::cli::{at_least_one, available_cores, path_setting, split_fields, Levels};
 
 use clap::Parser;
 
@@ -85,7 +85,7 @@ pub struct Args {
     pub queue_depth: usize,
 
     /// Tokio worker threads; defaults to every core the machine reports
-    #[arg(long)]
+    #[arg(long, value_parser = parse_workers)]
     pub tokio_workers: Option<usize>,
 
     /// CSV destination; '-' writes to stdout
@@ -272,13 +272,11 @@ pub fn tls_state() -> &'static str {
 }
 
 fn parse_batch_size(raw: &str) -> Result<usize, String> {
-    let size: usize = raw
-        .parse()
-        .map_err(|_| format!("not an integer: {raw:?}"))?;
-    if size < 1 {
-        return Err(format!("--batch-size must be >= 1, got {size}"));
-    }
-    Ok(size)
+    at_least_one(raw, "--batch-size")
+}
+
+fn parse_workers(raw: &str) -> Result<usize, String> {
+    at_least_one(raw, "--tokio-workers")
 }
 
 #[cfg(test)]

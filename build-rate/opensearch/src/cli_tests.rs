@@ -451,3 +451,22 @@ fn the_header_names_the_samples_directory_or_says_it_was_off() {
     let args = parse(&[a_minimal_command(), vec!["--samples-dir", "/tmp/series"]].concat());
     assert_eq!(setting(&args, "samples_dir"), "/tmp/series");
 }
+
+/// `Builder::worker_threads(0)` panics rather than returning an error, so the
+/// flag has to refuse zero where it is read.
+#[test]
+fn a_runtime_with_no_workers_is_refused_by_the_flag() {
+    let refused = Args::try_parse_from(
+        std::iter::once("osrate")
+            .chain(a_minimal_command())
+            .chain(["--tokio-workers", "0"]),
+    );
+    assert!(refused.is_err());
+    assert!(refused.unwrap_err().to_string().contains("must be >= 1"));
+}
+
+#[test]
+fn a_runtime_with_workers_is_taken_as_given() {
+    let args = parse(&[a_minimal_command(), vec!["--tokio-workers", "3"]].concat());
+    assert_eq!(args.tokio_workers(), 3);
+}

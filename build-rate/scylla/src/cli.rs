@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub use build_rate_core::cli::{available_cores, path_setting, split_fields, Levels};
+pub use build_rate_core::cli::{at_least_one, available_cores, path_setting, split_fields, Levels};
 
 use clap::Parser;
 use scylla::statement::Consistency;
@@ -71,7 +71,7 @@ pub struct Args {
     pub request_timeout: f64,
 
     /// Tokio worker threads; defaults to every core the machine reports
-    #[arg(long)]
+    #[arg(long, value_parser = parse_workers)]
     pub tokio_workers: Option<usize>,
 
     /// CSV destination; '-' writes to stdout
@@ -224,6 +224,10 @@ impl fmt::Display for Hosts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0.join(","))
     }
+}
+
+fn parse_workers(raw: &str) -> Result<usize, String> {
+    at_least_one(raw, "--tokio-workers")
 }
 
 fn parse_consistency(raw: &str) -> Result<Consistency, String> {
