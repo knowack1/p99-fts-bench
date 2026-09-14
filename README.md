@@ -165,6 +165,7 @@ FTS-enabled cluster, which stock images do not provide.
 | `HARDWARE.md` | What to provision for the enwiki run, why each box exists, and what it costs |
 | `AWS-RUN-PLAN.md` | Runbook for the enwiki/AWS measurement: what to finish on the laptop first, phase order, per-repetition gates, cost control |
 | `LAPTOP-RUN-PLAN.md` | The $0 laptop campaign this repo already executed — harness build, verification, and the C1-C8 pass over simplewiki |
+| `build-rate/` | The Rust build-rate harness: `core/` (the sweep, the watch and the report both halves share), `scylla/` (`scyllarate`) and `opensearch/` (`osrate`). One CSV schema, one `engine` column, three Cargo locks — see [`build-rate/README.md`](build-rate/README.md) |
 | `tantivy-ram/` | Standalone harness replicating the vector-store Tantivy schema, used to measure index RAM footprint |
 | `feature-mapping.md` | ScyllaDB M1 ↔ OpenSearch counterpart for every query class, analyzer parity, M2/M3 preview, open verification items |
 | `tools/download_wikipedia.sh` | Downloads all content shards for a wiki from a pinned `cirrus_search_index` dump date, verifies `_SUCCESS`, records sha256 checksums |

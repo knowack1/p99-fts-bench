@@ -1,5 +1,9 @@
 # scyllarate — a concurrency sweep for ScyllaDB ingest
 
+The ScyllaDB half of the build-rate harness, sibling to
+`build-rate/opensearch` and built on `build-rate/core` — see
+[`../README.md`](../README.md) for the seam between them.
+
 Loads a corpus into `wiki.articles` once per concurrency level and reports, for
 each level, how fast the client delivered documents, what the p99 insert latency
 was, and how fast those documents reached the full-text index. The output is one
