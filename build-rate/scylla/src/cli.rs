@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub use build_rate_core::cli::{available_cores, split_fields, Levels};
+pub use build_rate_core::cli::{available_cores, path_setting, split_fields, Levels};
 
 use clap::Parser;
 use scylla::statement::Consistency;
@@ -140,9 +140,7 @@ impl Args {
 
     /// Named in both preambles, so each file says whether the other exists.
     pub fn samples_dir_name(&self) -> String {
-        self.samples_dir
-            .as_ref()
-            .map_or_else(|| "off".to_string(), |dir| dir.display().to_string())
+        path_setting(self.samples_dir.as_ref())
     }
 
     /// `--no-index-watch` implies no reset: the gates that make a reset a

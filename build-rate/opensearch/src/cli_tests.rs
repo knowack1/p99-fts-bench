@@ -395,3 +395,59 @@ fn the_gate_timing_carries_the_requested_timeout() {
     let args = parse(&[a_minimal_command(), vec!["--reset-timeout", "42.0"]].concat());
     assert_eq!(args.gate_timing().timeout, Duration::from_secs_f64(42.0));
 }
+
+/// The index columns mean different things at different settle settings, so a
+/// CSV that does not carry them cannot be compared with another one.
+#[test]
+fn the_header_records_what_the_index_watch_was_told_to_do() {
+    let args = parse(
+        &[
+            a_minimal_command(),
+            vec![
+                "--index-watch",
+                "--index-interval",
+                "0.5",
+                "--index-settle-timeout",
+                "240.0",
+                "--index-idle-timeout",
+                "20.0",
+            ],
+        ]
+        .concat(),
+    );
+
+    assert_eq!(setting(&args, "index_watch"), "true");
+    assert_eq!(setting(&args, "index_poll_interval_s"), "0.5");
+    assert_eq!(setting(&args, "index_settle_timeout_s"), "240");
+    assert_eq!(setting(&args, "index_idle_timeout_s"), "20");
+    assert_eq!(setting(&args, "index_final_refresh"), "true");
+}
+
+/// `index_status=refreshed` is the harness having asked, which is not the
+/// measurement the configured policy would have produced — so which way the
+/// flag was set has to survive into the file.
+#[test]
+fn the_header_records_that_the_final_refresh_was_refused() {
+    let args = parse(&[a_minimal_command(), vec!["--no-index-final-refresh"]].concat());
+    assert_eq!(setting(&args, "index_final_refresh"), "false");
+}
+
+/// A watch nobody switched on leaves every index column blank, and the header
+/// is what says that was asked for rather than gone wrong.
+#[test]
+fn the_header_records_an_index_watch_that_was_never_switched_on() {
+    assert_eq!(
+        setting(&parse(&a_minimal_command()), "index_watch"),
+        "false"
+    );
+}
+
+/// Both halves name a `--samples-dir` that was not given the same way, so a
+/// reader does not have to learn two conventions for one absence.
+#[test]
+fn the_header_names_the_samples_directory_or_says_it_was_off() {
+    assert_eq!(setting(&parse(&a_minimal_command()), "samples_dir"), "off");
+
+    let args = parse(&[a_minimal_command(), vec!["--samples-dir", "/tmp/series"]].concat());
+    assert_eq!(setting(&args, "samples_dir"), "/tmp/series");
+}

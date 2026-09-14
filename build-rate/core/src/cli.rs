@@ -47,3 +47,13 @@ pub fn split_fields(raw: &str) -> impl Iterator<Item = &str> {
         .map(str::trim)
         .filter(|field| !field.is_empty())
 }
+
+/// `off` rather than an empty cell when a path was not given, so a header can
+/// say that an optional output was not written rather than leaving a reader to
+/// guess. Both halves name their `--samples-dir` this way.
+pub fn path_setting(path: Option<&std::path::PathBuf>) -> String {
+    path.map_or_else(|| OFF.to_string(), |path| path.display().to_string())
+}
+
+/// What a header says about an output or a watch that was not switched on.
+pub const OFF: &str = "off";

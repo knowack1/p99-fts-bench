@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use build_rate_core::cli::{available_cores, split_fields, Levels};
+pub use build_rate_core::cli::{available_cores, path_setting, split_fields, Levels};
 
 use clap::Parser;
 
@@ -208,6 +208,19 @@ impl Args {
         }
     }
 
+    /// Named in the preamble, so a CSV found on its own says whether the
+    /// per-second series exists beside it.
+    pub fn samples_dir_name(&self) -> String {
+        path_setting(self.samples_dir.as_ref())
+    }
+
+    /// The index block of the header. `index_docs_per_s` is a build rate only
+    /// as far as these say it is: `index_idle_timeout_s` is what decides
+    /// whether a level is `index_settled` or reporting a floor, and
+    /// `index_final_refresh` says whether the last documents were published
+    /// because the harness asked rather than because the engine's own refresh
+    /// policy delivered them. Two runs at different values here are not
+    /// comparable, and without them in the header nothing says so.
     pub fn settings(&self) -> Vec<(String, String)> {
         [
             ("batch_size", self.batch_size.to_string()),
@@ -226,6 +239,18 @@ impl Args {
             ),
             ("reset_timeout_s", self.reset_timeout.to_string()),
             ("analyzer_check", self.checks_analyzer().to_string()),
+            ("samples_dir", self.samples_dir_name()),
+            ("index_watch", self.watches_index().to_string()),
+            ("index_poll_interval_s", self.index_interval.to_string()),
+            (
+                "index_settle_timeout_s",
+                self.index_settle_timeout.to_string(),
+            ),
+            ("index_idle_timeout_s", self.index_idle_timeout.to_string()),
+            (
+                "index_final_refresh",
+                self.asks_for_a_final_refresh().to_string(),
+            ),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))

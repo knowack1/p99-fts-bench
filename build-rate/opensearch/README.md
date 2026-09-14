@@ -315,8 +315,16 @@ reason the batch size is a column rather than a footnote.
   `refresh_interval`, whether `_source` is on, the body field's analyzer, the
   nodes' `write` thread-pool size, batch size, latency unit, timeout and queue
   depth — and what the reset was told to do: `reset_per_level`, `index_config`,
-  `refresh_interval_requested`, `reset_timeout_s`, `analyzer_check`. A chart
-  without those facts is not interpretable. The ten CSV *columns* are unchanged.
+  `refresh_interval_requested`, `reset_timeout_s`, `analyzer_check`. It records
+  what the **index watch** was told to do too: `index_watch`,
+  `index_poll_interval_s`, `index_settle_timeout_s`, `index_idle_timeout_s`,
+  `index_final_refresh`, and `samples_dir` beside them. Those are not
+  decoration: `index_idle_timeout_s` is what decides whether a level reports
+  `index_settled` or a floor, and `index_final_refresh` says whether the last
+  documents became searchable because the harness asked. Two runs at different
+  values are not comparable, and the header is the only thing that can say so.
+  A chart without those facts is not interpretable. The CSV *columns* are
+  unchanged.
 
 ### One deliberate difference from the Python loader
 
