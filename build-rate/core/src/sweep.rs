@@ -58,8 +58,20 @@ impl Accepted {
         first_failure: None,
     };
 
+    /// Documents are the authority, not the message: a reply that rejected
+    /// nothing is clean however much it had to say, and one that rejected
+    /// something is not clean even if it declined to say why.
     pub fn is_clean(&self) -> bool {
         self.failed == 0
+    }
+
+    /// An engine that rejects items without a reason still leaves a count, and
+    /// the count is the finding — a failed request whose stderr line said
+    /// nothing would read as no failure at all.
+    pub fn why_it_failed(&self) -> String {
+        self.first_failure
+            .clone()
+            .unwrap_or_else(|| format!("{} item(s) rejected, no reason given", self.failed))
     }
 }
 
@@ -217,19 +229,22 @@ impl Counters {
     /// Only a request where every item landed contributes a latency sample: a
     /// half-rejected reply came back early for a reason that is not the engine
     /// indexing faster.
+    ///
+    /// Asked of the rejected *count* rather than of whether a message came with
+    /// it. The two agree for every inserter in the tree, but only the count is
+    /// the rule this states, and a reply that reported failures without a
+    /// reason would otherwise have put its latency in the p99 and its request
+    /// in the divisor of `docs / requests`.
     pub fn record(&mut self, offered: u64, accepted: &Accepted, latency_ms: f64) {
         self.docs += offered.saturating_sub(accepted.failed);
         self.errors += accepted.failed;
-        match &accepted.first_failure {
-            None => {
-                self.requests += 1;
-                self.latencies_ms.push(latency_ms);
-            }
-            Some(failure) => {
-                self.failed_requests += 1;
-                self.remember_first_error(Instant::now(), failure.clone());
-            }
+        if accepted.is_clean() {
+            self.requests += 1;
+            self.latencies_ms.push(latency_ms);
+            return;
         }
+        self.failed_requests += 1;
+        self.remember_first_error(Instant::now(), accepted.why_it_failed());
     }
 
     /// A request that never came back delivered nothing, so every document it

@@ -66,10 +66,6 @@ impl DocumentBatch {
     pub fn docs(&self) -> u64 {
         self.0.len() as u64
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 /// A fresh reader per level and the `--max-docs` cut are

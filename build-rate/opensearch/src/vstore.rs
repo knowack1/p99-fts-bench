@@ -25,9 +25,7 @@ use serde_json::Value;
 /// can tell a derived status from a quoted one.
 pub const SEARCHABLE: &str = "searchable";
 pub const INDEXING: &str = "indexing";
-pub const IDLE: &str = "idle";
 pub const UNREADY: &str = "unready";
-pub const REFRESHED: &str = "refreshed";
 
 pub struct StatsProbe {
     client: OpenSearch,

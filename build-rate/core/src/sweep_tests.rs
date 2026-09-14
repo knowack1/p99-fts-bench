@@ -278,3 +278,42 @@ fn the_queue_is_bounded_in_requests_not_documents() {
     assert_eq!(shape.queue_capacity(64), 128);
     assert_eq!(Shape::ONE_DOCUMENT.queue_capacity(64), 640);
 }
+
+/// The rule is "every item landed", and the count is the only thing that says
+/// so. A reply that rejected items without explaining itself must not put its
+/// latency in the distribution or its request in the `docs / requests` divisor.
+#[test]
+fn a_reply_that_rejected_items_without_a_reason_is_still_a_failed_request() {
+    let mut counters = Counters::default();
+    counters.record(
+        512,
+        &Accepted {
+            failed: 3,
+            first_failure: None,
+        },
+        12.0,
+    );
+
+    assert_eq!(counters.requests, 0);
+    assert_eq!(counters.failed_requests, 1);
+    assert_eq!(counters.docs, 509);
+    assert_eq!(counters.errors, 3);
+    assert!(counters.latencies_ms.is_empty());
+    assert_eq!(
+        counters.first_error(),
+        Some("3 item(s) rejected, no reason given")
+    );
+}
+
+/// And the other way: a reply that rejected nothing is clean, so it earns its
+/// latency sample.
+#[test]
+fn a_reply_that_rejected_nothing_contributes_its_latency() {
+    let mut counters = Counters::default();
+    counters.record(512, &Accepted::CLEAN, 12.0);
+
+    assert_eq!(counters.requests, 1);
+    assert_eq!(counters.failed_requests, 0);
+    assert_eq!(counters.docs, 512);
+    assert_eq!(counters.latencies_ms, vec![12.0]);
+}
