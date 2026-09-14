@@ -1,11 +1,30 @@
-# Harness-on-laptop runbook — what the two engines actually build, locally
+# Harness-on-laptop runbook — a short run that proves the pipeline works
 
-**Hand this file to Claude Code as the instruction and it runs the whole
-campaign: brings up one engine at a time in Docker, builds both harnesses,
-measures each engine's real index build across a concurrency ladder — OpenSearch
-once per batch size — tears each stack down, and renders the two charts.** It is
+**Hand this file to Claude Code as the instruction and it runs a short proving
+pass: brings up one engine at a time in Docker, builds both harnesses, runs
+twelve index builds across three concurrency levels and three OpenSearch batch
+sizes, tears each stack down, and renders the two charts.** It is
 self-contained; every script it needs is inline below. Nothing else in `bench/`
-has to be read first.
+has to be read first. **Budget 10–15 minutes.**
+
+**This run exists to prove the machinery, not to measure the engines.** Every
+level is deliberately tiny, so most of them finish in under the three seconds
+that makes a point a measurement. The charts will say so in their own footers,
+and that is the expected outcome rather than a fault. **No number from this run
+may be repeated at all** — not even as a preliminary one.
+
+What it does establish is narrower and worth having on its own:
+
+| # | The claim it proves |
+|---|---|
+| 1 | Both stacks come up from `docker/` and both binaries reach them |
+| 2 | Reset-per-level really does rebuild an empty index on **both** sides, gates included |
+| 3 | `--index-watch` populates the six `index_*` columns on both halves |
+| 4 | `--samples-dir` leaves a series with enough readings to draw |
+| 5 | Both charts render from `$R` alone, with both engines down |
+
+The full matrix this is a rehearsal for is at the end, under **Then the real
+run**. Nothing below changes for it except the numbers in one table.
 
 Two halves, measured in this order, off one corpus, on one box:
 
@@ -26,12 +45,20 @@ and the host capture, and the ScyllaDB numbers are what Part B is read against.
 
 ## What this measures, and what it is not
 
-The subject here is **the engines**. Both binaries push at a real ScyllaDB +
-vector-store and a real OpenSearch, with the index reset to empty before every
-level, so what comes back is a genuine build rate — and every level's
-`index_docs_per_s` is the engine's, not the client's.
+The subject of a **full** run is the engines: both binaries push at a real
+ScyllaDB + vector-store and a real OpenSearch, with the index reset to empty
+before every level, so what comes back is a genuine build rate and every level's
+`index_docs_per_s` is the engine's rather than the client's.
 
-**And none of it is quotable.** Three separate reasons, each sufficient:
+The subject of **this** run is the pipeline that produces that. It exercises
+every step end to end on a budget small enough to fit in a coffee break, and it
+answers "does this work" rather than "how fast is it".
+
+**And none of it is quotable.** Four separate reasons, each sufficient:
+
+- **The budget is a rehearsal budget.** 50,000 documents a level, 10,000 at
+  `batch=1`, N=1. A point that short is dominated by the level's own start-up
+  and carries no rate anybody should read.
 
 - `docker/.env`'s own header says every sizing value in it is a
   laptop-simulation value and that nothing produced under them may be quoted.
@@ -41,8 +68,9 @@ level, so what comes back is a genuine build rate — and every level's
 - One box runs the client and the engine. On the fleet they are separate hosts
   with a measured 0.142 ms between them.
 
-So: real engine behaviour, real shapes, **preliminary numbers**. Say that
-wherever a number from here is repeated, and never let one into the deck.
+So: **a green pipeline, and no numbers**. The first three reasons still apply
+after the matrix is widened, which is why even a full local run is preliminary
+and never reaches the deck.
 
 | File | Its job |
 |---|---|
@@ -84,12 +112,12 @@ bench/results/local-harness-2026-09-14T1204Z/
 ├── env/            host.txt  docker-env.txt  images.txt  binary-provenance.txt  corpus.txt
 ├── scripts/        the two arm scripts, as they were actually run
 ├── scylla/
-│   ├── points/     scylla-rep1.csv  scylla-rep2.csv
-│   ├── samples/    scylla-rep1/c4-1.csv c8-1.csv c16-1.csv c32-1.csv  (and rep2)
-│   └── logs/       scylla-rep1.stderr.tsv  ...
+│   ├── points/     scylla-rep1.csv
+│   ├── samples/    scylla-rep1/c4-1.csv c8-1.csv c16-1.csv
+│   └── logs/       scylla-rep1.stderr.tsv
 ├── opensearch/
-│   ├── points/     os-b1-rep1.csv  os-b128-rep1.csv  ...  (4 batches x 2 reps)
-│   ├── samples/    os-b512-rep1/c4-b512-1.csv ...
+│   ├── points/     os-b1-rep1.csv  os-b128-rep1.csv  os-b1024-rep1.csv
+│   ├── samples/    os-b128-rep1/c4-b128-1.csv c8-b128-1.csv c16-b128-1.csv
 │   └── logs/
 ├── build-rate-vs-concurrency.png / .csv
 ├── build-rate-vs-index-size.png  / .csv
@@ -110,20 +138,26 @@ in order. If the shell dies: `export R="$(readlink -f results/local-harness-late
 
 | | |
 |---|---|
-| Concurrency ladder | `4,8,16,32` — four levels, **no throwaway warm-up row**; see below |
-| OpenSearch batch sizes | `1, 128, 512, 1024` — each a whole ladder |
-| Repetitions | **N=2** |
-| Corpus | `data/corpus.jsonl`, frozen simplewiki, **270,269 documents, ~1,688 B mean** |
-| `--max-docs` | `0` (whole corpus) everywhere **except** `osrate --batch-size 1`, which gets `60000` |
-| Index builds | 4 levels x 2 reps x 5 configurations = **40 builds**, every one from an empty index |
-| Estimated wall | 50–75 min including bring-up, teardown and both renders |
+| Concurrency ladder | `4,8,16` — three levels, **no throwaway warm-up row**; see below |
+| OpenSearch batch sizes | `1, 128, 1024` — the bottom, a middle and the top |
+| Repetitions | **N=1** |
+| Corpus | `data/corpus.jsonl`, frozen simplewiki, 270,269 documents — **a slice of it** |
+| `--max-docs` | `50000`, except `osrate --batch-size 1`, which gets `10000` |
+| Index builds | 3 levels x 1 rep x 4 configurations = **12 builds**, every one from an empty index |
+| Estimated wall | **10–15 min** including bring-up, teardown and both renders |
+
+Three batch levels rather than four, because the ends are what prove the
+mechanism: `1` is one document per request with bulking switched off, `1024` is
+the top, and `128` shows the middle is wired up too. N=1, because a repetition
+count proves nothing about whether the pipeline runs — it only narrows a number
+this run is not allowed to report.
 
 ### The shared concurrency grid — do not vary it per arm
 
 **Every series in both parts is measured on the same x values:**
 
 ```
-4   8   16   32
+4   8   16
 ```
 
 The deliverable chart puts concurrency on x and every engine-and-batch
@@ -134,34 +168,27 @@ drawn on a log2 axis.
 
 ### The ladder carries no warm-up row, and the charts are told so
 
-`4,8,16,32` is four levels and four x values. It is **not** the
-`8,8,16,32,64` idiom the AWS runbook uses, where the first rung is repeated so
-the leading one can be thrown away — and both renderers drop the first data row
-of every CSV by default, which on this ladder would delete `c=4` outright rather
-than delete a throwaway.
+`4,8,16` is three levels and three x values. It is **not** the `8,8,16,32,64`
+idiom the AWS runbook uses, where the first rung is repeated so the leading one
+can be thrown away — and both renderers drop the first data row of every CSV by
+default, which on this ladder would delete `c=4` outright rather than delete a
+throwaway, leaving a two-point chart.
 
-So the chart command passes **`--keep-warmup`**, and that has a cost worth
-stating rather than burying: `c=4` is now measured on a cold process — page
-cache, connection pool and JIT all unwarmed — and is the one point on the chart
-carrying that. Two ways to deal with it, in order of preference:
+So the chart command passes **`--keep-warmup`**. On a proving run the cost of
+that is irrelevant — `c=4` is measured on a cold process, and no point here is a
+measurement anyway — but it is the same flag the real run needs, which is part
+of what this rehearses. Putting a throwaway back (`LADDER=4,4,8,16`, and drop
+`--keep-warmup`) is the alternative when the numbers start to matter.
 
-- **Read `c=4` as a soft point.** With N=2 and everything here already
-  preliminary, a cold first rung is within the noise the run reports anyway.
-- **Put the throwaway back** with `LADDER=4,4,8,16,32` and drop `--keep-warmup`
-  from the chart command. That is five levels again, restoring the AWS idiom and
-  about a fifth of the wall time.
+What must not happen is the ladder keeping three rungs while the chart keeps its
+default: that silently yields a two-point x axis and a `c=4` that was measured
+and then discarded.
 
-What must not happen is the ladder keeping four rungs while the chart keeps its
-default: that silently yields a three-point x axis (`8 16 32`) and a `c=4` that
-was measured and then discarded.
-
-**One budget, not a per-batch table.** The whole corpus serves every level:
-it puts every series on the same x range on the index-size chart, and at 270,269
-documents no level falls under the three-second floor that makes a point "not a
-measurement". `osrate --batch-size 1` is the one exception — at roughly 800
-docs/s at `c=8` the whole corpus is ~5.6 minutes for one level, which alone
-would double the campaign. It is cut to 60,000 documents, and its shorter line
-on the second chart is footnoted rather than hidden.
+**Two budgets, and both are rehearsal budgets.** 50,000 documents serves every
+level except `osrate --batch-size 1`, which at roughly 800 docs/s at `c=4` would
+take a minute on its own and gets 10,000 instead. Neither is a measurement
+budget. **Expect most points to come in under three seconds** and expect both
+charts to say so — that is the short-point gate working, not the run failing.
 
 ### The memory gate — run this before anything comes up
 
@@ -247,15 +274,16 @@ cat > "$R/scripts/run-scylla-arm.sh" << 'EOF'
 set -euo pipefail
 BIN=${BIN:-./build-rate/scylla/target/release/scyllarate}
 CORPUS=${CORPUS:-./data/corpus.jsonl}
-LADDER=${LADDER:-4,8,16,32}
-REPS=${REPS:-2}
+LADDER=${LADDER:-4,8,16}
+REPS=${REPS:-1}
+MAX_DOCS=${MAX_DOCS:-50000}
 GEN_CPUSET=${GEN_CPUSET:-12-19}
 stamp() { while IFS= read -r line; do printf '%s\t%s\n' "$(date -u +%H:%M:%S)" "$line"; done; }
 
 for rep in $(seq 1 "$REPS"); do
   echo "=== scylla rep $rep/$REPS  ladder=$LADDER ==="
   taskset -c "$GEN_CPUSET" "$BIN" \
-      --corpus "$CORPUS" --concurrency "$LADDER" \
+      --corpus "$CORPUS" --concurrency "$LADDER" --max-docs "$MAX_DOCS" \
       --hosts 127.0.0.1 --port 19042 \
       --vs-url http://localhost:16080 --vs-index articles_body_fts \
       --vs-interval 0.25 --vs-settle-timeout 600 --vs-idle-timeout 30 \
@@ -278,8 +306,9 @@ Four flags there are not defaults and each has a reason:
 - **`--vs-idle-timeout 30`.** Ten seconds of no index progress ends the settle
   wait. A laptop vector-store stalls longer than that mid-build, and ending the
   wait early reports `index_settled=false` and a build rate that is a floor.
-- **`--vs-settle-timeout 600`.** 270,269 documents take well over the default
-  120 s to finish indexing here.
+- **`--vs-settle-timeout 600`.** Generous on purpose. 50,000 documents settle
+  quickly, but the real run's 270,269 do not, and a timeout that only works at
+  rehearsal scale has not been rehearsed.
 - **`--tokio-workers 8`.** The eight cores `GEN_CPUSET` actually grants. Left at
   every core the runtime spawns 22 threads for 8 cores' worth of CPU.
 
@@ -291,10 +320,11 @@ seconds.
 Everything already writes into `$R`, so there is nothing to copy. Verify before
 the stack goes down, while it can still be re-run.
 
-**Verification gate — all of it must pass:**
+**Gate A — the pipeline works. Every line must print nothing but the row
+counts, and a row count that is not 3 is a failure:**
 
 ```bash
-# every ladder CSV has one row per ladder entry (5), plus the header
+# every ladder CSV has one row per ladder entry (3), plus the header
 for f in "$R"/scylla/points/*.csv; do
   n=$(grep -vc '^#' "$f"); echo "$f rows=$((n-1))"; done
 
@@ -306,10 +336,6 @@ awk -F, '!/^#/ && NR>1 && $3+0>0 {print FILENAME": errors="$3}' "$R"/scylla/poin
 awk -F, '!/^#/ && $1!="concurrency" && $12=="" {print FILENAME" line "FNR": index unwatched"}' \
     "$R"/scylla/points/*.csv
 
-# every level ran long enough to be a measurement (col 4 is wall_s)
-awk -F, '!/^#/ && $1!="concurrency" && $4+0<3 {print FILENAME": c="$1" wall="$4"s -- NOT a measurement"}' \
-    "$R"/scylla/points/*.csv
-
 # every level left a series with more than 3 readings, or chart 2 drops it
 for d in "$R"/scylla/samples/*/; do for f in "$d"c*.csv; do
   n=$(grep -vc '^#' "$f"); [ "$((n-1))" -le 3 ] && echo "$f only $((n-1)) readings"; done; done
@@ -318,6 +344,20 @@ for d in "$R"/scylla/samples/*/; do for f in "$d"c*.csv; do
 awk -F, '!/^#/ && $1!="concurrency" && $15!="true" {print FILENAME": c="$1" NOT settled -- rate is a floor"}' \
     "$R"/scylla/points/*.csv
 ```
+
+**Gate B — expected to flag on a proving run, and not a failure here:**
+
+```bash
+# points too short to be a measurement (col 4 is wall_s). On the rehearsal
+# budget most of them will be, which is the gate working rather than the run
+# failing. On the real run this list must be EMPTY.
+awk -F, '!/^#/ && $1!="concurrency" && $4+0<3 {print FILENAME": c="$1" wall="$4"s -- not a measurement"}' \
+    "$R"/scylla/points/*.csv
+```
+
+The distinction is the whole reason there are two gates. Gate A says the
+machinery ran; Gate B says whether what it produced is readable. A proving run
+is allowed to fail B and is never allowed to fail A.
 
 An `index_settled=false` row is not a failure to discard — it is a build rate
 that must be reported as `≥`. Say which rows they were.
@@ -398,17 +438,17 @@ cat > "$R/scripts/run-os-arm.sh" << 'EOF'
 set -euo pipefail
 BIN=${BIN:-./build-rate/opensearch/target/release/osrate}
 CORPUS=${CORPUS:-./data/corpus.jsonl}
-LADDER=${LADDER:-4,8,16,32}
-REPS=${REPS:-2}
-BATCHES=${BATCHES:-1 128 512 1024}
+LADDER=${LADDER:-4,8,16}
+REPS=${REPS:-1}
+BATCHES=${BATCHES:-1 128 1024}
 GEN_CPUSET=${GEN_CPUSET:-12-19}
 stamp() { while IFS= read -r line; do printf '%s\t%s\n' "$(date -u +%H:%M:%S)" "$line"; done; }
 
 for b in $BATCHES; do
-  # batch=1 is ~1 document per request and the whole corpus would take minutes
-  # per level. Every other level gets the whole corpus so their index-size lines
-  # cover the same x range.
-  if [ "$b" = "1" ]; then MAX_DOCS=60000; else MAX_DOCS=0; fi
+  # batch=1 is ~1 document per request and 50,000 of them would take a minute
+  # per level on its own. Every other level gets the same budget so their
+  # index-size lines cover the same x range.
+  if [ "$b" = "1" ]; then MAX_DOCS=10000; else MAX_DOCS=50000; fi
   for rep in $(seq 1 "$REPS"); do
     echo "=== osrate batch=$b rep $rep/$REPS  ladder=$LADDER max_docs=$MAX_DOCS ==="
     OS_REFRESH_INTERVAL=1s taskset -c "$GEN_CPUSET" "$BIN" \
@@ -433,15 +473,15 @@ chmod +x "$R/scripts/run-os-arm.sh"
   per-request framing cost with bulking switched off, and the only level whose x
   axis is the same shape as Part A's.
 - **`--queue-depth 2`, not the default 10.** Buffered documents are
-  `queue_depth x concurrency x batch_size`. At `c=32 batch=1024` the default
-  holds 327,680 documents — over half a gigabyte of corpus in the loader's own
+  `queue_depth x concurrency x batch_size`. At `c=16 batch=1024` the default
+  holds 163,840 documents — a quarter-gigabyte of corpus in the loader's own
   heap, on a box that already refused to run both engines at once.
 - **`--refresh-interval 1s` explicitly**, so the header records it and the
   `index_lag_docs` floor is a number rather than a guess.
 - **Do not tailor the ladder per batch level.** A taller ladder for the small
   batches would reach their knee and take them off the shared x grid, and chart
-  1 can no longer be drawn. If `batch=1` is still rising at `c=32`, that is a
-  result to state — "unresolved above 32" — not a reason to give it its own x
+  1 can no longer be drawn. If `batch=1` is still rising at `c=16`, that is a
+  result to state — "unresolved above 16" — not a reason to give it its own x
   values.
 
 ## B3 — collect, verify, tear down
@@ -490,7 +530,10 @@ OS_RAM_INDEX=1 make os-reset
    name the rows.
 8. **Rebuilding a binary mid-campaign.** The arms stop being comparable and the
    CSV headers stop describing the binaries that wrote them.
-9. **Quoting anything.** See the top of this file. Three independent reasons.
+9. **Quoting anything.** See the top of this file. Four independent reasons.
+10. **Treating a short-point warning as a broken run.** On this budget it is the
+    expected outcome and it is Gate B, not Gate A. Treating it as a failure
+    sends someone chasing a bug that is a deliberate setting.
 
 ---
 
@@ -510,42 +553,49 @@ cd ~/Projects/Scylla/p99/bench
     --output     "$R/build-rate-vs-concurrency.png" \
     --table      "$R/build-rate-vs-concurrency.csv" \
     --title      "Build rate against concurrency — real engines, laptop" \
-    --subtitle   "$RUN_ID · simplewiki 270,269 docs · N=2 · PRELIMINARY, NOT QUOTABLE"
+    --subtitle   "$RUN_ID · PROVING RUN, 50k docs/level, N=1 · NO NUMBER HERE IS A MEASUREMENT"
 ```
 
-Ten lines off five configurations:
+Eight lines off four configurations:
 
 | Colour | Solid | Dashed |
 |---|---|---|
 | `#2b6cb0` | `scyllarate CQL 1 doc/op` — CQL inserts accepted | the vector-store's FTS build |
-| ramp 1–4 | `osrate batch=1 / 128 / 512 / 1024` — `_bulk` documents accepted | documents made searchable |
+| ramp 1–3 | `osrate batch=1 / 128 / 1024` — `_bulk` documents accepted | documents made searchable |
 
-The chart should print `(10 lines, 40 points)`. Fewer lines means a config did
-not produce one of its two families — go back to the gate.
+**The chart must print `(8 lines, 24 points)`.** That line is the single best
+check in this runbook: eight lines means all four configurations produced both
+families, and twenty-four points means three x values on every one of them.
+Anything less and a config lost its index columns or a rung never ran — go back
+to Gate A.
 
-**Read it in this order.** First the gap inside each pair: that is how far the
-index fell behind the client, and it is the finding. Then the spacing between
-the batch series: that is what bulking bought, and if `128`, `512` and `1024`
-lie on top of each other, bulking buys nothing past ~128 on this box. Then the
-short-point footer, which names every level under three seconds — those are not
-measurements, raise their `--max-docs` and re-run them.
+Expect a `SHORT POINTS` footer naming most of the levels. On the rehearsal
+budget that is correct.
 
-## Chart 2 — X is the index itself, at `c=32`
+## Chart 2 — X is the index itself, at `c=4`
 
 ```bash
 .venv/bin/python3 build-rate/charts/rate_vs_index_size.py \
-    --scylla     "$R/scylla/samples/*/c32-*.csv" \
-    --opensearch "$R/opensearch/samples/*/c32-b*-*.csv" \
+    --scylla     "$R/scylla/samples/*/c4-*.csv" \
+    --opensearch "$R/opensearch/samples/*/c4-b*-*.csv" \
     --output     "$R/build-rate-vs-index-size.png" \
     --table      "$R/build-rate-vs-index-size.csv" \
     --title      "Build rate as the index grows — real engines, laptop" \
-    --subtitle   "$RUN_ID · c=32 · N=2 · PRELIMINARY, NOT QUOTABLE"
+    --subtitle   "$RUN_ID · c=4 · PROVING RUN · NO NUMBER HERE IS A MEASUREMENT"
 ```
 
-Five bold lines — one per index build at `c=32`, the ladder's top rung — each
-with its two repetitions thin behind it. The slice is chosen by the glob, and
-it has to name a rung the ladder actually has; widening it to `c*` puts
-every level of every ladder on one axis, which is complete and unreadable.
+**Four bold lines — one per index build at `c=4`, and the slice is the ladder's
+BOTTOM rung on purpose.** A full run slices the top, where the engine is working
+hardest. A proving run slices the bottom, because it is the rung whose build
+lasts longest, and a build needs **more than three readings** to be drawn at
+all. At `c=16 batch=1024` fifty thousand documents are gone in well under a
+second and the line would be skipped by name; at `c=4` the same build has time
+to leave a shape. The slice is chosen by the glob, and it has to name a rung the
+ladder actually has.
+
+**The chart must print `(4 series)`.** Three would mean one build was skipped —
+read the `skipped ...` lines it prints underneath, which name the file and the
+reason.
 
 It answers what chart 1 cannot:
 
@@ -565,24 +615,95 @@ against its own budget, never one engine's height against the other's.
 
 ```bash
 cat > "$R/README.md" << EOF
-# Build rate on the laptop, both engines, $(date -u +%Y-%m-%d)
+# Pipeline proving run, both engines, $(date -u +%Y-%m-%d)
 
-**PRELIMINARY — not quotable, and not a fleet measurement.** Produced by
-\`bench/build-rate/HARNESS-LOCAL-RUNBOOK.md\` under the laptop-simulation caps
-recorded in \`env/docker-env.txt\`, on a shared box, with the client and the
-engine on the same host.
+**A PROVING RUN. No number in this directory is a measurement** — not even a
+preliminary one. Produced by \`bench/build-rate/HARNESS-LOCAL-RUNBOOK.md\` on a
+rehearsal budget of 50,000 documents a level (10,000 at batch=1), N=1, under the
+laptop-simulation caps recorded in \`env/docker-env.txt\`, on a shared box, with
+the client and the engine on the same host.
 
-Run \`$RUN_ID\`. Ladder 4,8,16,32 · N=2 · corpus 270,269 docs ·
-ScyllaDB then OpenSearch at batch 1/128/512/1024, never both up at once.
+What it establishes is that the machinery runs end to end: both stacks up, both
+binaries reaching them, reset-per-level rebuilding an empty index on each side,
+the index columns populated, and both charts rendering from these files alone.
+
+Run \`$RUN_ID\`. Ladder 4,8,16 · N=1 · ScyllaDB then OpenSearch at batch
+1/128/1024, never both up at once.
 
 | Chart | What it shows |
 |---|---|
 | \`build-rate-vs-concurrency.png\` | docs/s against concurrency; solid = submitted, dashed = indexed, one colour per configuration |
-| \`build-rate-vs-index-size.png\` | docs/s against documents in the index, one line per build at c=32 |
+| \`build-rate-vs-index-size.png\` | docs/s against documents in the index, one line per build at c=4 |
 EOF
 ```
 
-Fill in, by hand, underneath: which rows came back `index_settled=false` (their
-rates are floors, written `≥`), which levels the charts named as short or
-skipped, and what the two images actually show. Then hand the user the absolute
-path of `$R`. **A results directory nobody can find is the same as no results.**
+Fill in, by hand, underneath: whether Gate A passed clean, which levels Gate B
+flagged as short, which builds the growth chart skipped and why, and any row
+that came back `index_settled=false`. Then hand the user the absolute path of
+`$R`. **A results directory nobody can find is the same as no results.**
+
+---
+
+# What a pass looks like
+
+The run succeeded if **all five** of these hold. Report them as a list, by
+number, and do not describe the run as working if one of them is missing.
+
+| # | Check | Where it comes from |
+|---|---|---|
+| 1 | Both stacks came up and both `make *-wait` returned | Phases 1 and B1 |
+| 2 | **Gate A printed nothing but row counts, and every count is 3** | Phase 4 and B3 |
+| 3 | Chart 1 printed **`(8 lines, 24 points)`** | the chart section |
+| 4 | Chart 2 printed **`(4 series)`** and skipped nothing | the chart section |
+| 5 | Both PNGs and both CSVs exist in `$R` with both engines down | `ls "$R"` |
+
+Gate B flagging short points does **not** fail the run. That is the expected
+outcome on this budget, and it is what check 3's point count already proves was
+measured anyway.
+
+If any of the five fails, the fix is almost always one of the traps above —
+`--index-watch` missing, a poll interval too coarse for a build this small, a
+plain `down` leaving yesterday's data, or both engines up at once.
+
+---
+
+# Then the real run
+
+When the five checks pass, the same document runs the real thing. **Change one
+table and two globs; nothing else in this runbook moves.**
+
+| | Proving run | Real run |
+|---|---|---|
+| `LADDER` | `4,8,16` | `4,8,16,32` |
+| `BATCHES` | `1 128 1024` | `1 128 512 1024` |
+| `REPS` | `1` | `2` |
+| `MAX_DOCS` (scyllarate) | `50000` | `0` — the whole corpus |
+| `MAX_DOCS` (osrate) | `50000`, `10000` at batch=1 | `0`, `60000` at batch=1 |
+| Chart 2 slice | `c4-*` — the longest-running rung | `c32-*` — the top rung, where the engine works hardest |
+| Index builds | 12 | 40 |
+| Wall | 10–15 min | 50–75 min |
+
+```bash
+REPS=2 LADDER=4,8,16,32 MAX_DOCS=0        "$R/scripts/run-scylla-arm.sh"
+REPS=2 LADDER=4,8,16,32 BATCHES="1 128 512 1024" "$R/scripts/run-os-arm.sh"
+```
+
+The osrate script picks its own per-batch budget, so only `BATCHES` and `REPS`
+have to change there — but **read its `MAX_DOCS` case first**: it hard-codes the
+rehearsal numbers, and a real run needs `10000` to become `60000` and `50000` to
+become `0`.
+
+Three things become true on the real run that are not true here, and each turns
+a "fine" into a failure:
+
+- **Gate B must be empty.** Short points are no longer expected; a level under
+  three seconds is a level to re-run with a bigger budget.
+- **Chart 2 slices the top rung**, where a build is long enough to have a shape
+  even at `batch=1024` — which is the rung whose behaviour anybody actually
+  wants to see.
+- **N=2 makes the spread visible.** Chart 1 gains min..max bars and chart 2
+  gains thin repetition lines behind each bold median; with N=1 both collapse to
+  a single line that cannot show disagreement.
+
+Even then the numbers stay unquotable, for the three reasons at the top of this
+file that the budget has nothing to do with.
