@@ -14,6 +14,12 @@ use crate::session::Topology;
 /// a different write path, and reporting it here would read as parity with
 /// OpenSearch's `_bulk`.
 pub const BATCH_SIZE: usize = 1;
+/// One prepared INSERT carries one document, so a latency here is per request
+/// *and* per document. Said out loud in the header rather than left to be
+/// inferred from `batch_size=1`: the other half writes `bulk_request` there,
+/// and a fact that appears in only one of two files is one a reader has to
+/// know the convention for.
+pub const LATENCY_UNIT: &str = "insert_request";
 pub const ENGINE: &str = SCYLLADB;
 
 pub fn header_lines(topology: &Topology, settings: &[(String, String)]) -> Vec<String> {

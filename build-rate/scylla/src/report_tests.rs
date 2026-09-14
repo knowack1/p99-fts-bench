@@ -27,3 +27,10 @@ fn this_half_carries_one_document_per_request() {
     assert_eq!(BATCH_SIZE, 1);
     assert_eq!(ENGINE, "scylladb");
 }
+
+/// One document per request, so a latency here is per request and per document
+/// alike — which is exactly what the other half's `bulk_request` is not.
+#[test]
+fn a_latency_sample_on_this_half_is_one_insert() {
+    assert_eq!(LATENCY_UNIT, "insert_request");
+}

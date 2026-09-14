@@ -173,6 +173,14 @@ fn settings_record_the_consistency_by_name() {
     assert!(settings.contains(&("consistency".to_string(), "LOCAL_ONE".to_string())));
 }
 
+/// The other half writes `latency_unit=bulk_request`, so a fact carried by
+/// only one of two files is one a reader has to know the convention for.
+#[test]
+fn settings_say_what_one_latency_sample_is_a_latency_of() {
+    let settings = parse(&a_minimal_command()).settings();
+    assert!(settings.contains(&("latency_unit".to_string(), "insert_request".to_string())));
+}
+
 #[test]
 fn settings_record_the_corpus_and_the_document_limit() {
     let args = parse(&[

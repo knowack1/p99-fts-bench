@@ -258,8 +258,11 @@ chart made at 4 workers cannot be silently compared against one made at 16.
   `driver=` in the header is what pins the behaviour.
 - **The CSV header records the topology** — engine and driver version, protocol,
   runtime and worker count, `shard_aware`, per-endpoint `shards:N`, live
-  connection count, tablets, consistency and timeout. A chart without those
-  facts is not interpretable.
+  connection count, tablets, consistency and timeout. It also carries
+  `latency_unit=insert_request`, because one prepared INSERT carries one
+  document and `osrate` writes `bulk_request` in the same field — a chart
+  cannot put the two percentiles on one axis without showing it. A chart
+  without those facts is not interpretable.
 
 ## Reading the curve
 

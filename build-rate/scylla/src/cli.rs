@@ -10,6 +10,7 @@ use clap::Parser;
 use scylla::statement::Consistency;
 
 use crate::build_rate::WatchTiming;
+use crate::report::LATENCY_UNIT;
 use crate::reset::{GateTiming, ResetPlan};
 use crate::session::{consistency_from_name, consistency_name, ConnectOptions};
 use crate::vstore::{DEFAULT_VS_INDEX, DEFAULT_VS_URL};
@@ -176,6 +177,7 @@ impl Args {
     pub fn settings(&self) -> Vec<(String, String)> {
         [
             ("consistency", consistency_name(self.consistency)),
+            ("latency_unit", LATENCY_UNIT.to_string()),
             ("request_timeout_s", self.request_timeout.to_string()),
             ("tokio_workers", self.tokio_workers().to_string()),
             ("driver_metrics", driver_metrics_state().to_string()),
