@@ -154,12 +154,24 @@ impl LevelWatch {
     /// `finish` is what keeps the handover ordered: the row that closes the
     /// submit series is written next, and a tick landing between the two would
     /// put the two readings in the file in either order.
-    pub fn client_stopped(&mut self) {
+    ///
+    /// Aborting is not enough to promise that. `abort_all` only marks the task;
+    /// a ticker already past its poll runs the rest of its turn — including the
+    /// `tape.record` — and is cancelled at the *next* await. So this waits for
+    /// the task to be gone, which is the only point at which nothing else can
+    /// still write to the tape.
+    pub async fn client_stopped(&mut self) {
         self.ticker.abort_all();
+        while self.ticker.join_next().await.is_some() {}
+    }
+
+    /// Whether anything is still able to write to this level's tape.
+    pub fn is_quiet(&self) -> bool {
+        self.ticker.is_empty()
     }
 
     pub async fn finish(mut self, submitted: u64) -> Result<Option<IndexBuild>> {
-        self.client_stopped();
+        self.client_stopped().await;
         let Some(level) = self.level else {
             return Ok(None);
         };

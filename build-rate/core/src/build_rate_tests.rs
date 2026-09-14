@@ -321,3 +321,33 @@ async fn a_hint_that_publishes_nothing_does_not_claim_the_level_was_refreshed() 
     assert!(!build.settled);
     assert_eq!(build.docs, 0);
 }
+
+/// `abort_all` alone leaves the task in the set until someone joins it, and a
+/// ticker already past its poll still has a `tape.record` to run before it
+/// notices. The submit-end row is written the moment this returns, so "the
+/// ticker is gone" has to be true by then and not merely requested.
+#[tokio::test]
+async fn nothing_can_still_write_to_the_tape_once_the_client_has_stopped() {
+    let probe = Arc::new(ScriptedProbe::new(vec![a_reading(10)]));
+    let watch = watching(Arc::clone(&probe), patient());
+    let mut level = begin(&watch, &quiet_notes()).await.unwrap();
+
+    assert!(!level.is_quiet(), "the ticker should be running by now");
+    level.client_stopped().await;
+
+    assert!(level.is_quiet());
+}
+
+/// Stopping twice is what `finish` does after `run_level` already has, and a
+/// drain that waited on an empty set would hang the second time.
+#[tokio::test]
+async fn stopping_a_client_that_has_already_stopped_is_not_a_second_wait() {
+    let probe = Arc::new(ScriptedProbe::new(vec![a_reading(10)]));
+    let watch = watching(Arc::clone(&probe), patient());
+    let mut level = begin(&watch, &quiet_notes()).await.unwrap();
+
+    level.client_stopped().await;
+    level.client_stopped().await;
+
+    assert!(level.is_quiet());
+}

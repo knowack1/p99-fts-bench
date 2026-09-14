@@ -392,7 +392,7 @@ async fn run_level<I: Inserter, S: Source<Work = I::Item>>(
         cancel,
     )
     .await;
-    watch.client_stopped();
+    watch.client_stopped().await;
     let mut result = close_submit_series(outcome, &tape, &submitted)?;
     result.index = watch.finish(result.docs).await?;
     Ok(result)
