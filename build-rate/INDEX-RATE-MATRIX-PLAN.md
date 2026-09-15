@@ -58,6 +58,15 @@ across six rungs.
 | **R7** | `os-ramindex-b1` | OpenSearch | R4's knobs | as R4, **`--batch-size 1`** | 3 | 21 |
 | **R8** | `scylla-buf376-disk` | Scylla + vector-store | R2's knobs **+ `VS_FTS_INDEX_DIR=/var/lib/vector-store/fts`** — the Tantivy index on the NVMe instead of in RAM | as R1 | 3 | 21 |
 
+**Every arm's command additionally carries
+`--corpus /mnt/nvme/data/corpus.jsonl`**, the frozen enwiki corpus on the
+harness box — the same file, same bytes, for all eight, which is the
+"every document exactly once, same set per engine" invariant. It is left out of
+the cells above only because repeating it eight times would hide what actually
+differs between the rows. See "The corpus" below for how it gets there.
+`osrate` does not read the line's `uuid` (it is ScyllaDB's partition key), so
+one file serves both halves.
+
 Eight arms, 168 runs, sixteen lines with the pairs kept. The readings the
 table is built to give, stated on the chart so a cropped screenshot still
 carries them:
@@ -249,16 +258,88 @@ this campaign additionally depends on:
   is built from the fork and `docker save | ssh … docker load`ed (for R8, from
   the commit that carries `VECTOR_STORE_FTS_INDEX_DIR`).
 - **`/mnt/nvme` is re-made and re-mounted on both boxes**, docker restarted.
-- **The corpus restages in ~1.5–2 min**, a local `pzstd -d -p 8` from the grown
-  EBS root — not the 36 min mirror download `../BUILD-RATE-MATRIX-PLAN.md`
-  describes. `../FREEZE.md`'s sha256 of the prepared corpus is what proves the
-  bytes.
+- **The corpus restages on the harness** — see the next section.
 
 **Do not stop the boxes mid-campaign.** Every stop costs a full re-entry before
 any arm can run. If the campaign is split across sessions, split it at an arm
 boundary and record which arms were measured in which session — a re-entry
 between two arms of the same comparison is a provenance difference the footer
 has to carry.
+
+### The corpus — on the harness, and only there
+
+**The corpus is a harness-box file.** Both loaders read it locally through
+`--corpus`; nothing streams it and the SUT never sees a line of it. So the
+staging question is entirely about one box, and it is on the critical path of
+every start: no corpus, no arm.
+
+**Where it lives, and what survives a stop.**
+
+| Path | Box | Survives a stop? | What |
+|---|---|---|---|
+| `~/corpus.jsonl.zst` | harness **root EBS** | **yes** | ~10.2 GB, `pzstd -10`. The root was grown 8 GiB → 32 GiB on 2026-09-11 for exactly this |
+| `/mnt/nvme/data/corpus.jsonl` | harness **instance store** | **no** | 35,448,823,550 bytes prepared, re-made from the archive on every start |
+
+`/mnt/nvme` is destroyed on every stop and the root volume is not, which is the
+whole reason the compressed copy sits where it does. **The only thing that
+belongs on the harness root is `corpus.jsonl.zst`** — build outputs and the
+uncompressed corpus go on `/mnt/nvme`, which has 1.9 TB and no reason to be
+careful.
+
+**On every start**, once `/mnt/nvme` is mounted:
+
+```bash
+ssh fts-harness 'set -e
+  mkdir -p /mnt/nvme/data
+  pzstd -d -p 8 -f -o /mnt/nvme/data/corpus.jsonl ~/corpus.jsonl.zst
+  sha256sum /mnt/nvme/data/corpus.jsonl'
+# expect 1700bb6c9b2652cf7b248e8caff7bfecc54fd2376e9a75e43379aaa79c50c432
+```
+
+**~1.5–2 min**, bounded by gp3's 125 MB/s baseline read (10.2 GB ≈ 82 s), not
+by `pzstd`'s ~2.85 GB/s. The sha256 is `../FREEZE.md`'s and is what proves the
+bytes are the frozen corpus rather than a re-download that drifted; check it
+every time, not only when something looks wrong.
+
+**One-time, at the first start after 2026-09-11:** the EBS volume is bigger but
+Linux does not notice on its own. **Identify the root device first** — re-entry
+formats `/dev/nvme0n1` as the *instance store*, so the EBS root is a different
+nvme device and `growpart` against the wrong one is destructive:
+
+```bash
+findmnt -no SOURCE /          # e.g. /dev/nvme1n1p1
+lsblk
+sudo growpart <root-disk> 1   # the DISK, then the partition number
+sudo xfs_growfs /             # AL2023 root is xfs
+df -h /                       # expect ~32 GiB
+```
+
+**If the archive is not on the root volume** — a replaced box, a rebuilt
+volume, or the first run of this campaign — it has to be put there before
+anything else, and this is the expensive path:
+
+1. **Re-stage from the Swedish Wikimedia mirror**, `~36 min` at ~215 MB/s
+   against ~5 MB/s from `dumps.wikimedia.org`, then `prepare_corpus`, then
+   `pzstd -10` the result back to `~/corpus.jsonl.zst` so the next start is
+   2 minutes instead of 36. Verify against `../FREEZE.md` before compressing.
+2. **Not from the laptop.** `../S3-CORPUS-STAGING-PLAN.md` costed the upload at
+   37–54 min on the measured uplink, and the laptop does not hold the enwiki
+   corpus anyway.
+3. **Not from S3.** The bucket `knowacki-p99-fts-corpus` exists, but the IAM
+   policy and role are blocked (`DeveloperAccessRole` cannot `iam:CreatePolicy`)
+   and the harness has no instance profile, so the box has no AWS identity to
+   download with. A presigned URL minted from the console is the fallback that
+   needs no IAM change, 12 h expiry, regenerated per session.
+
+Budget the 36 min into the session if the archive's presence has not been
+confirmed — it is a quarter of the measurement time.
+
+**Do not use `HARNESS-AWS-RUNBOOK.md` Phase 4 here.** That runbook *generates*
+a synthetic corpus at enwiki's mean line length, which is right for a null-sink
+run where no document is ever indexed and wrong for every arm in this campaign:
+BM25 term statistics, segment merges and the analyzer all depend on real text,
+and `../FREEZE.md`'s checksum is the provenance every number here rests on.
+The synthetic generator and this corpus are not interchangeable.
 
 ### Stop the boxes
 
@@ -518,8 +599,11 @@ settle. At the budgets above a low-sweep point runs ~45–120 s and a high-sweep
 point ~110–125 s, so call it **~125 s per run** all-in. Nine arms
 (the table's eight plus `os-disk-refresh3`) × 21 runs × 125 s ≈ **6.6 h**,
 band 6–8 h, **~$26–35 at the $4.37/h fleet rate** — plus re-entry, which is
-billed like anything else: ~15–20 min of image rebuild, restage and mounts
-before the first arm runs, and more if the campaign is split across sessions. R7 is the long pole on the
+billed like anything else: ~15–20 min of image rebuild, corpus decompress and
+mounts before the first arm runs, and more if the campaign is split across
+sessions. **If `corpus.jsonl.zst` is not on the harness root, add ~40 min**
+(mirror re-stage, prepare, compress) — ~$3, and it is one-time only if the
+archive is written back. R7 is the long pole on the
 OpenSearch side — batch 1 is the slowest way to feed `_bulk` — and R3 on the
 ScyllaDB side, where the 30 s cadence sets the budget for everyone.
 
@@ -547,8 +631,10 @@ ScyllaDB side, where the 30 s cadence sets the budget for everyone.
    re-entry"** — `$R` and its nine arm subdirectories on the laptop first,
    both boxes started from the console with the tab kept alive, SSH
    re-pointed, private IPs confirmed against `.env.sut`, `/mnt/nvme` re-made,
-   images re-pulled and the vector-store image rebuilt, corpus restaged and
-   verified against `../FREEZE.md`.
+   images re-pulled and the vector-store image rebuilt, and the corpus
+   decompressed onto the harness's `/mnt/nvme` and checked against
+   `../FREEZE.md`'s sha256 — budget 36 min instead of 2 if the archive is not
+   on the harness root.
 4. **Smoke**: 2 rungs × all nine arms at a 20k cap. Gates: every point
    complete, every arm's startup lines match, R3 does not end unsettled, R8's
    line says `index=disk:`, the ramindex arms do not hit ENOSPC.
