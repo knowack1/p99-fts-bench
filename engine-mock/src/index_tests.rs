@@ -290,3 +290,97 @@ fn a_stats_reading_never_reports_more_searchable_than_accepted() {
 
     writer.join().expect("the writing thread");
 }
+
+/// Every document is either in the new index or recorded as having arrived
+/// while none existed. A `create` captures the base offset its count is
+/// measured from, and an add that lands while it does so is counted into
+/// `accepted` and into the offset at once — dropped, and dropped in the one way
+/// this instrument cannot report, because the whole point of
+/// `adds_while_absent` is that a loader/mock lifecycle disagreement is never
+/// silently absorbed.
+#[test]
+fn a_create_racing_with_adds_absorbs_none_of_them() {
+    const ROUNDS: usize = 200;
+    const EACH: u64 = 500;
+    for _ in 0..ROUNDS {
+        let (index, _clock) = an_index(Duration::ZERO, Refresh::immediately());
+        let start = AtomicBool::new(false);
+        thread::scope(|scope| {
+            for lane in 0..THREADS {
+                let (index, start) = (&index, &start);
+                scope.spawn(move || {
+                    while !start.load(Ordering::Acquire) {
+                        std::hint::spin_loop();
+                    }
+                    for _ in 0..EACH {
+                        index.add(lane, 1);
+                    }
+                });
+            }
+            start.store(true, Ordering::Release);
+            index.create();
+        });
+        assert_eq!(
+            index.count() + index.adds_while_absent(),
+            THREADS as u64 * EACH
+        );
+    }
+}
+
+/// The other half of the lifecycle pair, which cannot be fixed the way `create`
+/// was and does not need to be.
+///
+/// `drop_index` clears the flag and then captures the offset, and reordering
+/// that would not close the window: a thread can read `present` as true and be
+/// descheduled arbitrarily long before it adds, so no snapshot the drop takes
+/// bounds it. What the reorder buys on the `create` side is an accident of
+/// direction — the flag is false until the store, so an offset taken first
+/// bounds every reader that will ever see true.
+///
+/// So this pins what the window can and cannot do rather than pretending it is
+/// shut. A document caught in it belongs to the generation being dropped: it is
+/// left out of that index's count, which nothing reads once `status` answers
+/// `None`, and absorbed by the next `create`. It never reaches the new index,
+/// and it is never missing from `docs_accepted`, which is the key the run's
+/// reconciliation gate reads and which `add`'s lifecycle check does not gate.
+#[test]
+fn a_reset_racing_with_adds_carries_nothing_into_the_new_index() {
+    const ROUNDS: usize = 300;
+    const EACH: u64 = 500;
+    let issued = THREADS as u64 * EACH;
+    for _ in 0..ROUNDS {
+        let work = AcceptedWork::new(LANES);
+        let (index, _clock) = a_created_index(Duration::ZERO, Refresh::immediately());
+        let start = AtomicBool::new(false);
+        thread::scope(|scope| {
+            for lane in 0..THREADS {
+                let (index, start, work) = (&index, &start, &work);
+                scope.spawn(move || {
+                    while !start.load(Ordering::Acquire) {
+                        std::hint::spin_loop();
+                    }
+                    for _ in 0..EACH {
+                        accept(work, index, lane, 1);
+                    }
+                });
+            }
+            start.store(true, Ordering::Release);
+            index.drop_index();
+            index.create();
+        });
+
+        assert_eq!(
+            work.snapshot().docs,
+            issued,
+            "docs_accepted lost a document"
+        );
+        assert!(
+            index.count() <= issued,
+            "the new index counted a document twice"
+        );
+        assert!(
+            index.count() + index.adds_while_absent() <= issued,
+            "a document was attributed to the new index and to the absent count"
+        );
+    }
+}

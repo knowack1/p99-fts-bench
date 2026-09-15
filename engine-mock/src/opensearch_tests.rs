@@ -498,7 +498,11 @@ fn a_bulk_of_a_size_already_answered_hands_back_the_same_body() {
 fn a_bulk_that_carries_a_query_string_is_still_a_bulk() {
     let mut mock = a_mock();
 
-    let (status, reply) = mock.json("POST", "/wiki-articles/_bulk?refresh=false", &bulk_body("wiki-articles", &[1, 2]));
+    let (status, reply) = mock.json(
+        "POST",
+        "/wiki-articles/_bulk?refresh=false",
+        &bulk_body("wiki-articles", &[1, 2]),
+    );
 
     assert_eq!(status, 200);
     assert_eq!(reply["items"].as_array().expect("items").len(), 2);

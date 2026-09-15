@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::*;
 
 const SHARED_KEYS: [&str; 13] = [
@@ -232,4 +234,45 @@ fn a_subprocess_that_never_answers_does_not_hold_the_artifact_up() {
 #[test]
 fn the_bound_on_a_git_call_is_the_one_the_python_producers_use() {
     assert_eq!(GIT_PATIENCE, std::time::Duration::from_secs(5));
+}
+
+/// `SCHEMAS.md` is the contract, so the field list is read out of it rather
+/// than restated here. A test that hardcodes the keys only proves it agrees
+/// with itself, and the results tree that builds the per-chart write-ups reads
+/// every producer's artifact the same way: a header that quietly stopped
+/// matching the document would be found by a reader, not by a test.
+///
+/// `batch_size` is the one documented key this producer does not write.
+/// `SCHEMAS.md` calls it optional and **absent rather than zero** where the
+/// caller did not name it, and the mock has no batch to report — it counts what
+/// arrived, in whatever shape the loader chose to send it.
+#[test]
+fn the_header_carries_exactly_the_shared_keys_schemas_md_documents() {
+    let documented: Vec<String> = documented_header_keys()
+        .into_iter()
+        .filter(|key| key != "batch_size")
+        .collect();
+
+    assert_eq!(named(&SHARED_KEYS), documented);
+}
+
+/// The example object under `## Header` in `SCHEMAS.md`, in the order it is
+/// written there: the header's keys are an order as well as a set.
+fn documented_header_keys() -> Vec<String> {
+    let text = fs::read_to_string(schemas_md()).expect("SCHEMAS.md is beside the bench tree");
+    let (_, after_heading) = text
+        .split_once("\n## Header")
+        .expect("SCHEMAS.md has no `## Header` section");
+    let (_, fenced) = after_heading
+        .split_once("```json\n")
+        .expect("the header section has no JSON example");
+    let (example, _) = fenced
+        .split_once("\n```")
+        .expect("the header section's JSON example is unterminated");
+    let parsed: Value = serde_json::from_str(example).expect("the example parses as JSON");
+    keys(&parsed)
+}
+
+fn schemas_md() -> PathBuf {
+    Path::new(SOURCE_DIR).join("../SCHEMAS.md")
 }

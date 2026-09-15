@@ -123,7 +123,12 @@ connection is a tokio task; the runtime spreads them.
   one of those stripes behind one atomic flag; the prepared-statement registry
   is read through a per-connection cache whose first entry answers every
   document of a level. The index's lock is taken by pollers and by DDL, never by
-  a document.
+  a document. A shared handle counts as shared: that cache answers out of a
+  borrow rather than handing back the `Arc` every connection holds, because a
+  refcount touched once per document is the one cache line in this binary
+  guaranteed to be contended. Cloning one shared `Arc` from 22 threads on this
+  laptop costs 46.4 ns against 0.8 ns for a per-thread one — the refcount alone,
+  not a mock measurement, but it is per document either way.
 - **Nothing allocated on it either.** A CQL frame body is borrowed from the read
   buffer, a mutation's 13-byte answer is written straight into the connection's
   reusable output buffer, and a bulk reply body is built once per item count and
@@ -166,6 +171,7 @@ mistakes but are load-bearing. These are the deliberate departures:
 | HTTP body length | unbounded | refused over 64 MiB | same |
 | `HEAD` of a path that is not an index | always 200, never recorded | 404 and recorded | a probe that moved to `HEAD` would otherwise drop out of the witness entirely |
 | Documents offered while no index exists | counted internally, reported nowhere | reported as `index_adds_while_absent` | a loader/mock lifecycle disagreement is exactly the silent failure this instrument exists to expose |
+| Order inside `create` | the index is made present, then its count is zeroed — safe, because one asyncio thread cannot interleave the two | the base offset is captured first, then the index is made present | on a runtime with real threads an add between the two steps is counted into the accepted total *and* into the offset that total is measured from, so it is dropped and reported nowhere. Taking the offset first turns that window into an add that finds no index, which `index_adds_while_absent` reports |
 | `--port 0` | the announce line and the stats header report `0` | both report the port actually bound | otherwise nothing can learn an ephemeral port |
 | `--report-interval 0` | a spin loop printing to stderr as fast as one core allows | refused by the flag parser | the spin loop competes with the request path |
 | Malformed request or frame | the connection dies silently | the connection dies and the reason is recorded | same reason every other refusal is recorded |
@@ -174,6 +180,17 @@ mistakes but are load-bearing. These are the deliberate departures:
 | `started_at` and the env block | read when the artifact is written, i.e. at the end | captured at process start | the field is a time base for aligning artifacts, and the error was exactly one run long |
 | A non-finite or absurd numeric flag | accepted, then a no-op or a wrong value | refused at the flag | `Duration::from_secs_f64` panics on them, and it would panic after the readiness line had already been printed |
 | The stderr summary and the JSON | two snapshots taken moments apart, so their rates disagree | one snapshot, taken after the runtime has stopped | the two disagreeing reads as a mock that lost documents |
+
+One window is left open deliberately. `add` reads the presence flag and then
+adds, and nothing makes those two steps one; on `create` the offset is captured
+first, which bounds every add that will ever see the index present, but the same
+reorder does nothing on `drop` — a thread can read the flag as true and be
+descheduled arbitrarily long before it adds. Closing that would need a
+generation stamped atomically with the increment, or a drain, and both put
+shared state back on the one path this mock keeps clear of it. What falls in it
+is a document of the generation being dropped: never carried into the new index,
+never missing from `docs_accepted`, and named in `index_adds_while_absent` only
+if it observed the index already gone. `src/index_tests.rs` pins each of those.
 
 Known limitations kept from the Python, because no client sends them and
 guessing would be worse than refusing: `TRUNCATE` and `ALTER` are answered as an

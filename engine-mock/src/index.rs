@@ -185,15 +185,41 @@ impl ModelledIndex {
         self.present.load(Ordering::Relaxed)
     }
 
+    /// The base offset is captured **before** the index becomes present, and
+    /// that order is the whole correctness of the pair.
+    ///
+    /// `add` reads the flag and then adds, and nothing makes those two steps
+    /// one. With the flag set first, an add that lands in the window between
+    /// them is counted into `accepted` *and* into the offset measured from it —
+    /// dropped, and dropped in the only way this instrument cannot report.
+    /// Capturing the offset first turns the same window into an add that finds
+    /// no index, which is recorded in `index_adds_while_absent` and visible in
+    /// the artifact. The documents in it are real either way; the question is
+    /// only whether the mock admits to them.
     pub fn create(&self) {
         let now = self.clock.now();
         let mut state = self.state.lock().expect("index lifecycle");
+        self.forget_documents(&mut state);
         self.present.store(true, Ordering::Relaxed);
         state.created_at = Some(now);
         state.refreshed_at = now;
-        self.forget_documents(&mut state);
     }
 
+    /// The same window as `create`'s, in the direction the reorder cannot close.
+    ///
+    /// A thread can read `present` as true and be descheduled arbitrarily long
+    /// before it adds, so no offset this takes — first or last — bounds it.
+    /// Closing it would need a generation the add stamps atomically with its
+    /// increment, or a drain, and both put shared state back on the path this
+    /// index exists to keep off it. It is left open because what falls in it is
+    /// a document of the generation being dropped: left out of that index's
+    /// count, which nothing reads once `status` answers `None`, and absorbed by
+    /// the next `create`. It is never carried into the new index, and it is
+    /// never missing from `docs_accepted` — `AcceptedWork` is a separate
+    /// cumulative total that this check does not gate. The one thing it costs
+    /// is that a loader still writing during its own `DROP` has that document
+    /// attributed to the old index rather than named in
+    /// `index_adds_while_absent`.
     pub fn drop_index(&self) {
         let mut state = self.state.lock().expect("index lifecycle");
         self.present.store(false, Ordering::Relaxed);

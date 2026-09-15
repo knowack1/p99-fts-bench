@@ -503,11 +503,42 @@ impl Node {
     }
 }
 
+/// What one EXECUTE resolved to, carried away from the cache by value.
+///
+/// The mutation arm carries nothing, and that is the point: it is the arm every
+/// document of a run takes, and a handle to the statement would have to be a
+/// refcount on an `Arc` every connection shares. The query arm copies the text
+/// instead, which costs one allocation on a path a run takes a handful of times
+/// — DDL, a `system.local` read, the driver's metadata questions.
+enum Resolved {
+    Mutation,
+    Query(String),
+}
+
+impl Resolved {
+    fn of(statement: &Prepared) -> Self {
+        if statement.mutation {
+            return Self::Mutation;
+        }
+        Self::Query(statement.query.clone())
+    }
+}
+
 /// What a connection remembers so the hot path touches no shared state.
 ///
 /// One statement answers every document of a level, so the last one used is
 /// checked first: a 16-byte compare, against a hash lookup and the shared map's
 /// read lock behind it.
+///
+/// **The compare is the whole hot path, and nothing after it is shared.** An
+/// earlier version handed the caller an `Arc<Prepared>`, which meant every
+/// document incremented and decremented a refcount that every connection on
+/// every core shared — the one cache line in this binary guaranteed to be
+/// contended, on the one path taken per document. Cloning one shared `Arc` from
+/// 22 threads on this laptop costs 46.4 ns against 0.8 ns for a per-thread one;
+/// that is the refcount alone rather than a mock measurement, but it is paid
+/// once per document. So the cache answers with a `Resolved` taken from a
+/// borrow and never clones the handle.
 #[derive(Default)]
 struct StatementCache {
     last: Option<(StatementId, Arc<Prepared>)>,
@@ -515,15 +546,23 @@ struct StatementCache {
 }
 
 impl StatementCache {
-    fn get(&mut self, id: &StatementId) -> Option<Arc<Prepared>> {
-        if let Some((last, statement)) = &self.last {
-            if last == id {
-                return Some(Arc::clone(statement));
-            }
+    fn resolve(&mut self, id: &StatementId) -> Option<Resolved> {
+        if !self.last_is(id) {
+            self.promote(id)?;
         }
-        let statement = self.known.get(id).cloned()?;
-        self.last = Some((*id, Arc::clone(&statement)));
-        Some(statement)
+        let (_, statement) = self.last.as_ref()?;
+        Some(Resolved::of(statement))
+    }
+
+    fn last_is(&self, id: &StatementId) -> bool {
+        matches!(&self.last, Some((last, _)) if last == id)
+    }
+
+    /// Once per statement per connection, not once per document.
+    fn promote(&mut self, id: &StatementId) -> Option<()> {
+        let statement = Arc::clone(self.known.get(id)?);
+        self.last = Some((*id, statement));
+        Some(())
     }
 
     fn insert(&mut self, id: StatementId, statement: Arc<Prepared>) {
@@ -577,25 +616,25 @@ impl Handler {
             wire::write_frame(out, wire::OPCODE_ERROR, frame.stream, &body);
             return;
         };
-        let Some(statement) = self.resolve(&id) else {
+        let Some(resolved) = self.resolve(&id) else {
             self.unprepared(&id, frame.stream, out);
             return;
         };
-        if statement.mutation {
+        let Resolved::Query(query) = resolved else {
             self.accept(1, frame.stream, out);
             return;
-        }
-        let body = self.answer_query(&statement.query);
+        };
+        let body = self.answer_query(&query);
         wire::write_frame(out, wire::OPCODE_RESULT, frame.stream, &body);
     }
 
-    fn resolve(&mut self, id: &StatementId) -> Option<Arc<Prepared>> {
-        if let Some(statement) = self.statements.get(id) {
-            return Some(statement);
+    fn resolve(&mut self, id: &StatementId) -> Option<Resolved> {
+        if let Some(resolved) = self.statements.resolve(id) {
+            return Some(resolved);
         }
         let statement = self.node.recall(id)?;
-        self.statements.insert(*id, Arc::clone(&statement));
-        Some(statement)
+        self.statements.insert(*id, statement);
+        self.statements.resolve(id)
     }
 
     /// The driver re-prepares and retries, which is how a real node answers a
