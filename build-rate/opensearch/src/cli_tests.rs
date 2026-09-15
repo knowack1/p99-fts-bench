@@ -148,7 +148,7 @@ fn the_parser_defaults_to_the_wiki_articles_index() {
             args.max_docs,
             args.out.as_str()
         ),
-        ("http://localhost:9200", "wiki-articles", 0, "-")
+        ("http://127.0.0.1:9200", "wiki-articles", 0, "-")
     );
 }
 
@@ -171,9 +171,9 @@ fn a_trailing_slash_on_the_url_is_trimmed_before_paths_are_appended() {
         "--concurrency",
         "24",
         "--url",
-        "http://localhost:9200/",
+        "http://127.0.0.1:9200/",
     ]);
-    assert_eq!(args.connect_options().url, "http://localhost:9200");
+    assert_eq!(args.connect_options().url, "http://127.0.0.1:9200");
 }
 
 #[test]

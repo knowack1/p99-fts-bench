@@ -53,7 +53,7 @@ run_point() {
 
   $PYTHON -m ftsbench.resource_probe --engine scylladb \
     --containers fts-bench-scylla:scylladb --containers fts-bench-vector-store:vector-store \
-    --vs-url http://localhost:16080 --keyspace wiki --vs-index articles_body_fts \
+    --vs-url http://127.0.0.1:16080 --keyspace wiki --vs-index articles_body_fts \
     --output "$OUT_DIR/cpu-$name-$rep.jsonl" --interval 1 --duration 0 --label "$name" >/dev/null 2>&1 &
   local probe=$!
   local rc=0

@@ -217,7 +217,7 @@ assert_not_oom_killed() {
 assert_opensearch_doc_count() {
   local want actual
   want="$(expected_docs)"
-  actual="$(curl -fsS "${OS_URL:-http://localhost:9200}/wiki-articles/_count" \
+  actual="$(curl -fsS "${OS_URL:-http://127.0.0.1:9200}/wiki-articles/_count" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')"
   echo "OpenSearch holds $actual docs, expected $want"
   [[ "$actual" == "$want" ]]
@@ -230,7 +230,7 @@ assert_scylla_index_complete() {
   local want status count allocation_errors
   want="$(expected_docs)"
   read -r count status <<<"$(curl -fsS \
-    "${VS_URL:-http://localhost:16080}/api/v1/indexes/wiki/articles_body_fts/status" \
+    "${VS_URL:-http://127.0.0.1:16080}/api/v1/indexes/wiki/articles_body_fts/status" \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("count",-1), d.get("status",""))')"
   allocation_errors="$(vector_store_allocation_errors)"
   echo "index count=$count status=$status (want $want/SERVING), " \
@@ -357,14 +357,14 @@ scylla_cold_stack() {
 # it reads /sys/fs/cgroup on the machine it runs on, and the containers are on
 # the SUT. tools/sut_probe.sh runs it there and copies the series back on
 # stop, so gates and plots read the same file either way. The probe's engine
-# URLs are localhost in that case — its own box.
+# URLs are 127.0.0.1 in that case — its own box.
 FLEET_PROBE_OUT=""
 
 fleet_probe_args() {
   local target="$1"
   case "$target" in
-    c4-os) echo "--engine opensearch --containers fts-bench-opensearch:opensearch --os-url http://localhost:9200 --os-index wiki-articles" ;;
-    c4-scylla) echo "--engine scylladb --containers fts-bench-scylla:scylladb --containers fts-bench-vector-store:vector-store --vs-url http://localhost:16080 --keyspace wiki --vs-index articles_body_fts" ;;
+    c4-os) echo "--engine opensearch --containers fts-bench-opensearch:opensearch --os-url http://127.0.0.1:9200 --os-index wiki-articles" ;;
+    c4-scylla) echo "--engine scylladb --containers fts-bench-scylla:scylladb --containers fts-bench-vector-store:vector-store --vs-url http://127.0.0.1:16080 --keyspace wiki --vs-index articles_body_fts" ;;
     *) echo "unknown probe target: $target" >&2; return 2 ;;
   esac
 }

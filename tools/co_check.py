@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
 
 def connection_args(engine: str) -> list[str]:
     if engine == "opensearch":
-        return ["--url", "http://localhost:9200", "--index", "wiki-articles"]
+        return ["--url", "http://127.0.0.1:9200", "--index", "wiki-articles"]
     return ["--hosts", "127.0.0.1", "--port", "19042", "--keyspace", "wiki"]
 
 

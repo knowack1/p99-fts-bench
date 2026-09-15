@@ -234,7 +234,7 @@ def test_a_matching_refresh_interval_is_silent(capsys):
 
 def test_opensearch_write_never_forces_a_refresh():
     """?refresh would make the write searchable by construction."""
-    probe = OpenSearchFreshness("http://localhost:9200", "wiki-articles")
+    probe = OpenSearchFreshness("http://127.0.0.1:9200", "wiki-articles")
     probe._session = FakeSession()
     probe.write_marker("ftsfresh0abc", 0)
     url, kwargs = probe._session.calls[0]
@@ -244,7 +244,7 @@ def test_opensearch_write_never_forces_a_refresh():
 
 
 def test_opensearch_searchability_requires_the_written_document_id():
-    probe = OpenSearchFreshness("http://localhost:9200", "wiki-articles")
+    probe = OpenSearchFreshness("http://127.0.0.1:9200", "wiki-articles")
     probe._engine = FakeSearchEngine(hits=["some-other-doc"])
     assert probe.is_searchable("ftsfresh0abc", "ftsfresh0abc") is False
     probe._engine = FakeSearchEngine(hits=["ftsfresh0abc"])

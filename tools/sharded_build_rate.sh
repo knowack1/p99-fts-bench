@@ -112,8 +112,8 @@ run_rep() {
 
   tools/sut_probe.sh start "$OUT_DIR/cpu-$tag.jsonl" \
     $(case "$ENGINE" in
-        opensearch) echo "--engine opensearch --containers fts-bench-opensearch:opensearch --os-url http://localhost:9200 --os-index wiki-articles" ;;
-        scylla-cdc) echo "--engine scylladb --containers fts-bench-scylla:scylladb --containers fts-bench-vector-store:vector-store --vs-url http://localhost:16080 --keyspace wiki --vs-index articles_body_fts" ;;
+        opensearch) echo "--engine opensearch --containers fts-bench-opensearch:opensearch --os-url http://127.0.0.1:9200 --os-index wiki-articles" ;;
+        scylla-cdc) echo "--engine scylladb --containers fts-bench-scylla:scylladb --containers fts-bench-vector-store:vector-store --vs-url http://127.0.0.1:16080 --keyspace wiki --vs-index articles_body_fts" ;;
       esac) \
     --interval 1 --duration 0 --label "$tag"
 

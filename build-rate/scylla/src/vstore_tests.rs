@@ -67,7 +67,7 @@ async fn an_unreachable_vector_store_names_the_url_it_could_not_reach() {
 #[tokio::test]
 async fn the_status_url_is_the_one_the_campaign_polls() {
     let probe = VectorStoreProbe::new(
-        "http://localhost:6080/",
+        "http://127.0.0.1:6080/",
         "wiki",
         "articles_body_fts",
         A_TIMEOUT,
@@ -75,7 +75,7 @@ async fn the_status_url_is_the_one_the_campaign_polls() {
     .unwrap();
     assert_eq!(
         probe.status_url(),
-        "http://localhost:6080/api/v1/indexes/wiki/articles_body_fts/status"
+        "http://127.0.0.1:6080/api/v1/indexes/wiki/articles_body_fts/status"
     );
 }
 

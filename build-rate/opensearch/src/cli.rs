@@ -13,7 +13,7 @@ use crate::report::LATENCY_UNIT;
 use crate::reset::{GateTiming, IndexConfig, DEFAULT_INDEX_CONFIG};
 use crate::sweep::QUEUE_DEPTH_PER_WORKER;
 
-pub const DEFAULT_URL: &str = "http://localhost:9200";
+pub const DEFAULT_URL: &str = "http://127.0.0.1:9200";
 pub const DEFAULT_INDEX: &str = "wiki-articles";
 /// The campaign's `OS_BATCH` (tools/loader_capability_sweep.sh), so a ladder
 /// run here without the flag is the ladder the Python loader was run at.

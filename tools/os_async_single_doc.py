@@ -12,7 +12,7 @@ is deliberately NOT used — one outstanding request per connection, N connectio
 """
 import asyncio, json, sys, time
 
-URL_HOST, URL_PORT = "localhost", 9200
+URL_HOST, URL_PORT = "127.0.0.1", 9200
 INDEX = "wiki-articles"
 
 

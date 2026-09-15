@@ -39,8 +39,8 @@ QUERIES="${QUERIES:-data/queries.json}"
 PYTHON="${PYTHON:-.venv/bin/python3}"
 EXPECTED_DOCS="${EXPECTED_DOCS:-8967625}"
 
-OS_URL="${OS_URL:-http://localhost:9200}"
-VS_URL="${VS_URL:-http://localhost:16080}"
+OS_URL="${OS_URL:-http://127.0.0.1:9200}"
+VS_URL="${VS_URL:-http://127.0.0.1:16080}"
 SCYLLA_HOSTS="${SCYLLA_HOSTS:-127.0.0.1}"
 SCYLLA_PORT="${SCYLLA_PORT:-9042}"
 

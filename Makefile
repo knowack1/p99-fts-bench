@@ -4,12 +4,12 @@ DATA_DIR ?= data
 CORPUS ?= $(DATA_DIR)/corpus.jsonl
 QUERIES ?= $(DATA_DIR)/queries.json
 MAX_DOCS ?= 0
-OS_URL ?= http://localhost:9200
+OS_URL ?= http://127.0.0.1:9200
 OS_INDEX ?= wiki-articles
 OS_INDEX_RECREATE ?=
 SCYLLA_HOSTS ?= 127.0.0.1
 SCYLLA_PORT ?= 19042
-VS_URL ?= http://localhost:16080
+VS_URL ?= http://127.0.0.1:16080
 KEYSPACE ?= wiki
 VS_INDEX ?= articles_body_fts
 SHARD_GLOB ?= $(DATA_DIR)/$(DUMP_DATE)/index_name=$(WIKI)_content/$(WIKI)_content-$(DUMP_DATE)-*.json.bz2

@@ -22,7 +22,7 @@ import requests
 
 from . import async_http, load_driver, load_retry, mp_load, samplers
 
-DEFAULT_URL = "http://localhost:9200"
+DEFAULT_URL = "http://127.0.0.1:9200"
 DEFAULT_INDEX = "wiki-articles"
 BULK_TIMEOUT_S = 120
 SETTINGS_TIMEOUT_S = 30
@@ -142,7 +142,7 @@ def bulk_pool(url: str, concurrency: int) -> async_http.Pool:
     in-flight bulk always has a socket of its own and `--concurrency` is what
     the engine is actually being asked at once."""
     parsed = urlparse(url)
-    return async_http.Pool(parsed.hostname or "localhost",
+    return async_http.Pool(parsed.hostname or "127.0.0.1",
                            parsed.port or (443 if parsed.scheme == "https" else 80),
                            concurrency)
 

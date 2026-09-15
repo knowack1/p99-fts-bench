@@ -110,7 +110,7 @@ apply `bench/scylladb/schema.cql` and `index.cql` first.
     --concurrency 8,8,16,32,64,128 \
     --port 19042 \
     --tokio-workers 8 \
-    --vs-url http://localhost:6080 \
+    --vs-url http://127.0.0.1:6080 \
     --out sweep.csv
 ```
 
@@ -131,7 +131,7 @@ row before plotting.
 | `--tokio-workers` | every core | runtime threads; see "Two different knobs" |
 | `--out` | `-` | CSV destination; `-` is stdout |
 | `--samples-dir` | off | directory for the per-second series, one CSV per level |
-| `--vs-url` | `$VS_URL` or `http://localhost:6080` | vector-store base URL |
+| `--vs-url` | `$VS_URL` or `http://127.0.0.1:6080` | vector-store base URL |
 | `--vs-index` | `articles_body_fts` | the index name, on the CQL side and in the endpoint path alike |
 | `--vs-interval` | 1.0 | seconds between index-count polls |
 | `--vs-settle-timeout` | 120.0 | seconds to keep watching after the last insert |

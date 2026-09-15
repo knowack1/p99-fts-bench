@@ -15,10 +15,10 @@
 # Positions are asserted too, not just token text: M1 supports exact phrases,
 # so a stop word must leave the same position gap on both sides.
 #
-# Usage: OS_URL=http://localhost:9200 verify_analyzer.sh [index]
+# Usage: OS_URL=http://127.0.0.1:9200 verify_analyzer.sh [index]
 set -euo pipefail
 
-OS_URL="${OS_URL:-http://localhost:9200}"
+OS_URL="${OS_URL:-http://127.0.0.1:9200}"
 INDEX="${1:-wiki-articles}"
 
 # probe <TAB> expected "position:token" stream

@@ -50,7 +50,7 @@ from . import (churn_stream, load_driver, load_retry, opensearch_load, runmeta,
                scylla_load, target)
 from .corpus import read_corpus
 
-DEFAULT_URL = "http://localhost:9200"
+DEFAULT_URL = "http://127.0.0.1:9200"
 DEFAULT_INDEX = "wiki-articles"
 DEFAULT_HOSTS = "127.0.0.1"
 DEFAULT_PORT = 9042

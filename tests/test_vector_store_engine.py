@@ -42,7 +42,7 @@ def test_fetch_documents_is_refused_not_ignored():
     returning identities would put the cost of the other engines' document
     fetch on the chart as an engine difference."""
     with pytest.raises(ValueError, match="primary keys only"):
-        VectorStoreEngine("http://localhost:1", fetch_documents=True)
+        VectorStoreEngine("http://127.0.0.1:1", fetch_documents=True)
 
 
 class _Bm25Handler(BaseHTTPRequestHandler):

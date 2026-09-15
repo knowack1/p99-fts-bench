@@ -62,9 +62,9 @@ USAGE
 # rather than ${VAR:-...}: fleet_env.sh exports it EMPTY on purpose, because the
 # generator is isolated by being on another machine, and `taskset -c ""` fails.
 CORPUS="${CORPUS:-data/corpus.jsonl}"
-OS_URL="${OS_URL:-http://localhost:9200}"
+OS_URL="${OS_URL:-http://127.0.0.1:9200}"
 OS_INDEX="${OS_INDEX:-wiki-articles}"
-VS_URL="${VS_URL:-http://localhost:16080}"
+VS_URL="${VS_URL:-http://127.0.0.1:16080}"
 SCYLLA_HOSTS="${SCYLLA_HOSTS:-127.0.0.1}"
 SCYLLA_PORT="${SCYLLA_PORT:-19042}"
 KEYSPACE="${KEYSPACE:-wiki}"
@@ -215,12 +215,12 @@ mark_log_window() {
 }
 
 # On the fleet the probe reads the SUT's cgroups, so it runs there and addresses
-# the engines on localhost; sut_probe.sh copies the series back.
+# the engines on 127.0.0.1; sut_probe.sh copies the series back.
 probe_target_args() {
   local os_url="$OS_URL" vs_url="$VS_URL"
   if [[ -n "${SUT_IP:-}" ]]; then
-    os_url="http://localhost:9200"
-    vs_url="http://localhost:16080"
+    os_url="http://127.0.0.1:9200"
+    vs_url="http://127.0.0.1:16080"
   fi
   case "$TARGET_ENGINE" in
     opensearch)

@@ -3,7 +3,7 @@
 #
 # The probe reads /sys/fs/cgroup locally, which DOCKER_HOST=ssh:// cannot
 # carry across, so it is the one campaign component that must execute on the
-# SUT itself. Engine URLs it polls for index size are localhost there.
+# SUT itself. Engine URLs it polls for index size are 127.0.0.1 there.
 #
 #   tools/sut_probe.sh start <local-output.jsonl> <probe args...>
 #   tools/sut_probe.sh stop  <local-output.jsonl>

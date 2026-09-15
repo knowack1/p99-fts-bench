@@ -68,9 +68,9 @@ def parse_args_from(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--label", default="", help="free-form run label recorded in the header")
     parser.add_argument("--cache-state", default="unspecified",
                         help="cold|warm|unspecified — recorded for the chart footer")
-    parser.add_argument("--url", default="http://localhost:9200", help="OpenSearch URL")
+    parser.add_argument("--url", default="http://127.0.0.1:9200", help="OpenSearch URL")
     parser.add_argument("--index", default="wiki-articles", help="OpenSearch index")
-    parser.add_argument("--vs-url", default="http://localhost:6080",
+    parser.add_argument("--vs-url", default="http://127.0.0.1:6080",
                         help="vector-store base URL")
     parser.add_argument("--keyspace", default="wiki")
     # The series is the only artifact for C1 and C2, and a build series that

@@ -102,7 +102,7 @@ run_rep() {
     --engine scylladb \
     --containers fts-bench-scylla:scylladb \
     --containers fts-bench-vector-store:vector-store \
-    --vs-url http://localhost:16080 --keyspace wiki \
+    --vs-url http://127.0.0.1:16080 --keyspace wiki \
     --vs-index articles_body_fts \
     --interval 1 --duration 0 --label "$tag"
 

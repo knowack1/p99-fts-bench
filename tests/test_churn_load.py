@@ -76,7 +76,7 @@ def churn_args(concurrency: int, batch_size: int, **overrides):
         target_rate=0.0, latency_log=None, label="", cache_state="warm",
         max_docs=0, rate=1000.0, duration=1.0, ring=4,
         sample_docs=len(DOCUMENTS), output="unused",
-        url="http://localhost:9200", index="wiki-articles",
+        url="http://127.0.0.1:9200", index="wiki-articles",
         hosts="127.0.0.1", port=9042, keyspace="wiki",
         target_flag="--opensearch-disk-store-refresh3", config=None,
         engine="opensearch",

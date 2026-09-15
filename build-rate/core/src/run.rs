@@ -12,12 +12,27 @@ use crate::notes::note;
 use crate::report::{summary_table, PointResult};
 use crate::sweep::Cancel;
 
+/// Tokio's own ceiling is 512, which an endpoint given as a hostname reaches:
+/// the HTTP client resolves through a blocking `getaddrinfo`, one pool thread
+/// per in-flight lookup, so a concurrency ladder against `http://localhost:9200`
+/// has been measured at 408 threads for 8 workers' worth of CPU.
+///
+/// The floor is 2, and it is not a matter of taste. Two things want this pool:
+/// the corpus producer, which `sweep::measure_at_concurrency` hands to
+/// `spawn_blocking` for a whole level and which parks inside it on a full
+/// channel, and DNS. At 1 the producer takes the only slot, every lookup queues
+/// behind it, the channel never drains and the level never ends. 16 leaves the
+/// producer one slot and resolution fifteen. It is not tied to `--tokio-workers`
+/// because none of this work is CPU-bound.
+const MAX_BLOCKING_THREADS: usize = 16;
+
 /// The knob this tool exists to expose: how many cores tokio may use to serve
 /// the in-flight requests. It is orthogonal to `--concurrency`, which says how
 /// many requests are outstanding at once.
 pub fn build_runtime(workers: usize) -> Result<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
+        .max_blocking_threads(MAX_BLOCKING_THREADS)
         .enable_all()
         .build()
         .with_context(|| format!("cannot start a tokio runtime with {workers} workers"))

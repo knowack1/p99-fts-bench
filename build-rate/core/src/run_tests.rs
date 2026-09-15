@@ -113,3 +113,36 @@ fn a_fresh_interrupt_watch_has_not_fired() {
     let cancel = runtime.block_on(async { watch_for_interrupt() });
     assert!(!cancel.is_set());
 }
+
+/// The floor named in `MAX_BLOCKING_THREADS`' comment, asserted rather than
+/// trusted: the corpus producer holds a slot for a whole level, so a pool of 1
+/// leaves DNS nothing to run on.
+#[test]
+fn the_blocking_pool_has_room_for_the_corpus_producer_and_something_else() {
+    assert!(MAX_BLOCKING_THREADS >= 2, "{MAX_BLOCKING_THREADS}");
+}
+
+/// The shape `sweep::measure_at_concurrency` really creates: one blocking task
+/// parked for the level's duration while other blocking work still has to
+/// finish. At a pool of 1 this hangs instead of failing, so it is bounded.
+#[test]
+fn a_parked_blocking_task_does_not_starve_the_rest_of_the_pool() {
+    let runtime = build_runtime(2).unwrap();
+    let (release, parked) = std::sync::mpsc::channel::<()>();
+
+    runtime.block_on(async move {
+        let producer = tokio::task::spawn_blocking(move || {
+            let _ = parked.recv();
+        });
+        let other = tokio::task::spawn_blocking(|| 7);
+
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(10), other)
+            .await
+            .expect("a second blocking task never ran: the pool is too small")
+            .unwrap();
+        assert_eq!(answer, 7);
+
+        drop(release);
+        producer.await.unwrap();
+    });
+}

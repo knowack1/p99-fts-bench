@@ -62,7 +62,7 @@ def dispatch_with_fake_transport(monkeypatch, corpus: str, batch_size: int,
                         lambda *a, **k: argparse.Namespace(version=lambda: "test"))
     args = loader_args(corpus, batch_size)
     args.concurrency = concurrency
-    load_driver.run(args, opensearch_load.build_loader(args, "http://localhost:9200"))
+    load_driver.run(args, opensearch_load.build_loader(args, "http://127.0.0.1:9200"))
     return sent
 
 

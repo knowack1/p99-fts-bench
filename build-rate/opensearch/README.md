@@ -127,7 +127,7 @@ binary that reaches `http://` endpoints only; the header says `tls=off`.
 doing before it does anything:
 
 ```text
-index reset ON: DELETING INDEX wiki-articles before every level at http://localhost:9200, recreated from ramindex
+index reset ON: DELETING INDEX wiki-articles before every level at http://127.0.0.1:9200, recreated from ramindex
 ```
 
 It exists because `_id` is the page id. Without a reset the second level
@@ -196,7 +196,7 @@ With `--no-reset` the index must already exist (apply
     --corpus ../data/corpus.jsonl \
     --concurrency 24,24,48,96,192,384 \
     --batch-size 512 \
-    --url http://localhost:9200 \
+    --url http://127.0.0.1:9200 \
     --tokio-workers 8 \
     --out sweep.csv
 ```
@@ -211,7 +211,7 @@ row before plotting.
 | `--concurrency` | required | comma-separated levels of in-flight bulks |
 | `--batch-size` | 512 | documents per `_bulk`; the campaign's `OS_BATCH` |
 | `--max-docs` | 0 | documents per point; 0 loads the whole corpus |
-| `--url` | `$OS_URL` or `http://localhost:9200` | the same variable the repo's shell scripts export |
+| `--url` | `$OS_URL` or `http://127.0.0.1:9200` | the same variable the repo's shell scripts export |
 | `--index` | `wiki-articles` | |
 | `--request-timeout` | 120.0 | seconds; `opensearch_load.BULK_TIMEOUT_S` |
 | `--queue-depth` | 10 | batches buffered per worker; see "Memory" |

@@ -96,7 +96,7 @@ def test_manifest_probes_the_remapped_host_ports():
     for a healthy run, quietly emptying the campaign's provenance records."""
     from ftsbench import run_manifest
     assert run_manifest.default_scylla_port() == 19042
-    assert run_manifest.default_vs_url() == "http://localhost:16080"
+    assert run_manifest.default_vs_url() == "http://127.0.0.1:16080"
 
 
 def test_manifest_accepts_every_campaign_configuration():

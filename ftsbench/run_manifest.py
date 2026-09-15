@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
                         help="documents per loader operation")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_FILE),
                         help="compose env file the image pins are read from")
-    parser.add_argument("--os-url", default="http://localhost:9200")
+    parser.add_argument("--os-url", default="http://127.0.0.1:9200")
     parser.add_argument("--vs-url", default=default_vs_url())
     parser.add_argument("--scylla-hosts", default="127.0.0.1",
                         help="comma-separated contact points")
@@ -115,7 +115,7 @@ def default_vs_url() -> str:
         port = int(raw)
     except ValueError:
         port = 6080
-    return f"http://localhost:{port}"
+    return f"http://127.0.0.1:{port}"
 
 
 def probe_opensearch(url: str) -> dict:

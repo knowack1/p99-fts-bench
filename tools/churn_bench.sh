@@ -35,7 +35,7 @@ CHURN_CONCURRENCY="${CHURN_CONCURRENCY:-16}"
 CORPUS="${CORPUS:-data/corpus.jsonl}"
 PYTHON="${PYTHON:-.venv/bin/python3}"
 
-OS_URL="${OS_URL:-http://localhost:9200}"
+OS_URL="${OS_URL:-http://127.0.0.1:9200}"
 SCYLLA_HOSTS="${SCYLLA_HOSTS:-127.0.0.1}"
 SCYLLA_PORT="${SCYLLA_PORT:-9042}"
 

@@ -19,7 +19,7 @@ CREATE CUSTOM INDEX IF NOT EXISTS articles_body_fts
 one call creates index, analyzer, and mappings together:
 
 ```bash
-curl -fsS -X PUT "http://localhost:9200/wiki-articles" \
+curl -fsS -X PUT "http://127.0.0.1:9200/wiki-articles" \
   -H 'Content-Type: application/json' \
   --data-binary "@index-config.json"
 ```

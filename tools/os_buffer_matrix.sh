@@ -35,7 +35,7 @@ run_point() {
   # surviving index would also carry the previous run's segments.
   make os-reset >/dev/null 2>&1 || true
   step "up" make os-up || return 1
-  until curl -fsS "http://localhost:9200" >/dev/null 2>&1; do sleep 3; done
+  until curl -fsS "http://127.0.0.1:9200" >/dev/null 2>&1; do sleep 3; done
   step "watermarks" make os-relax-watermarks || return 1
   step "index" make os-index OS_REFRESH=3s || return 1
 
@@ -47,7 +47,7 @@ run_point() {
     "C1_OS_SERIES=$series" "C1_OS_MANIFEST=$OUT_DIR/manifest-$name-$rep.json" \
     >"$OUT_DIR/load-$name-$rep.log" 2>&1 || rc=1
 
-  curl -s "http://localhost:9200/wiki-articles/_stats/merges,segments,store" \
+  curl -s "http://127.0.0.1:9200/wiki-articles/_stats/merges,segments,store" \
     > "$OUT_DIR/stats-$name-$rep.json" 2>/dev/null || true
   [ -s "$series" ] || return 1
   return $rc

@@ -20,7 +20,7 @@
 # so; see TUNING.md.
 set -euo pipefail
 
-OS_URL="${OS_URL:-http://localhost:9200}"
+OS_URL="${OS_URL:-http://127.0.0.1:9200}"
 LOW="${OS_WATERMARK_LOW:-97%}"
 HIGH="${OS_WATERMARK_HIGH:-98%}"
 FLOOD="${OS_WATERMARK_FLOOD:-99%}"

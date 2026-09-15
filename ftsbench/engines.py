@@ -29,10 +29,10 @@ import requests
 
 DEFAULT_LIMIT = 10
 SEARCH_TIMEOUT_S = 30
-DEFAULT_OS_URL = "http://localhost:9200"
+DEFAULT_OS_URL = "http://127.0.0.1:9200"
 DEFAULT_OS_INDEX = "wiki-articles"
 DEFAULT_SCYLLA_HOSTS = "127.0.0.1"
-DEFAULT_VS_URL = "http://localhost:16080"
+DEFAULT_VS_URL = "http://127.0.0.1:16080"
 DEFAULT_VS_INDEX = "articles_body_fts"
 # The bench stack publishes ScyllaDB on 19042; 9042 stays the default so this
 # matches scylla_load.py, and every caller passes --port explicitly.

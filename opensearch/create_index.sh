@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create the analyzer-parity index from index-config.json.
-# Usage: OS_URL=http://localhost:9200 create_index.sh [index] [--recreate]
+# Usage: OS_URL=http://127.0.0.1:9200 create_index.sh [index] [--recreate]
 #
 # OS_REFRESH_INTERVAL overrides the refresh_interval in the config. The campaign
 # runs OpenSearch twice, at 1s and at 30s, because 30s is a real throughput
@@ -9,7 +9,7 @@
 # there is no window in which documents were indexed under the other value.
 set -euo pipefail
 
-OS_URL="${OS_URL:-http://localhost:9200}"
+OS_URL="${OS_URL:-http://127.0.0.1:9200}"
 INDEX="${1:-wiki-articles}"
 RECREATE="${2:-}"
 OS_REFRESH_INTERVAL="${OS_REFRESH_INTERVAL:-}"

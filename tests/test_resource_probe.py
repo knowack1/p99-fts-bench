@@ -207,7 +207,7 @@ def test_an_opensearch_run_without_an_index_endpoint_says_unmeasured():
 
 def test_an_opensearch_run_with_an_index_endpoint_names_the_field():
     source = resource_probe.index_size_source(
-        index_size_args("opensearch", "http://localhost:9200"))
+        index_size_args("opensearch", "http://127.0.0.1:9200"))
     assert "store.size_in_bytes" in source
 
 

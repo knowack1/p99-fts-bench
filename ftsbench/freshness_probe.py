@@ -409,7 +409,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label", default="", help="free-form run label")
     parser.add_argument("--cache-state", default="unspecified")
     parser.add_argument("--corpus", default="", help="corpus path, recorded")
-    parser.add_argument("--vs-url", default="http://localhost:16080",
+    parser.add_argument("--vs-url", default="http://127.0.0.1:16080",
                         help="vector-store URL, for the recorded engine version")
     parser.add_argument("--vs-index", default="articles_body_fts")
     add_connection_args(parser)
