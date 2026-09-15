@@ -98,22 +98,27 @@ ever have been a loop window inside the client — `../BUILD-RATE-MATRIX-PLAN.md
 removed the flag from the Python loader for the same reason. The absence of a
 second ScyllaDB batch line is a statement, and the footer says so.
 
-**R8 is owed an image and two lines of compose.** The knob exists in the
-vector-store fork — `VECTOR_STORE_FTS_INDEX_DIR`, read in `config_manager.rs`,
-honoured in `fts_index/tantivy.rs` (`create_in_dir` under that root instead of
-`create_in_ram`; the directory is cleared at create and removed on drop, never
-reopened) — but as of 2026-09-15 it is **uncommitted** in
-`~/Projects/Scylla/vector-store` on top of `282d9efc`, which is the commit the
-SUT image was built from. Before R8 can run: the change is committed and the
-image rebuilt and loaded from that commit (the manifest records the commit, not
-the `0.0.0-dev` version string); `docker/docker-compose.scylla.yml` gains
-`VECTOR_STORE_FTS_INDEX_DIR${VS_FTS_INDEX_DIR:+=${VS_FTS_INDEX_DIR}}` in the
-vector-store's environment, in the same drop-when-unset form every other FTS
-knob uses, plus a named volume at that path so the segments land on the
-instance-store NVMe where docker's `data-root` already is. Until both are done
-R8 is a row in this table and not a line on a chart. The startup line that
-proves the arm took is `ingest tuning for …: … index=disk:/var/lib/vector-store/fts`
-against `index=ram` on every other ScyllaDB arm.
+**R8's knob is in place; only the image rebuild is outstanding.** The
+vector-store's `VECTOR_STORE_FTS_INDEX_DIR` landed in the fork at **`94a23ef2`**
+(on top of `282d9efc`): unset keeps `Index::create_in_ram`, set gives each index
+its own subdirectory under the root backed by `MmapDirectory`, wiped at create
+and removed on drop with no reopen path. `docker/docker-compose.scylla.yml`
+passes it through in the same drop-when-unset form every other FTS knob uses and
+mounts the `vector-store-fts` volume at `/var/lib/vector-store/fts`
+unconditionally; `docker/.env.sut` carries the variable commented out, because
+R8 is the only arm that sets it.
+
+What is left is not campaign work: **the SUT image must be rebuilt from
+`94a23ef2`** rather than `282d9efc`, which happens on the harness during fleet
+re-entry anyway (the image is in no registry and the instance store takes it on
+every stop). The manifest records the commit, not the binary's `0.0.0-dev`
+version string.
+
+**An image built before `94a23ef2` ignores the variable in silence** — which is
+the exact failure that already cost S11–S15 once — so R8's gate is the
+vector-store's own startup line, `ingest tuning for …: … index=disk:/var/lib/vector-store/fts`
+against `index=ram` on every other ScyllaDB arm. Read the line; do not trust
+the environment.
 
 **Framing guard, mandatory.** R1 → R2 is a 42% tuning delta on our own side,
 and it is on the same axis as OpenSearch because that is what was asked for.
@@ -255,8 +260,9 @@ this campaign additionally depends on:
 - **The vector-store image must be rebuilt and loaded.** `daemon.json` points
   docker's `data-root` at the instance store, so every image goes with the
   stop. The two public images re-pull; the vector-store is in no registry and
-  is built from the fork and `docker save | ssh … docker load`ed (for R8, from
-  the commit that carries `VECTOR_STORE_FTS_INDEX_DIR`).
+  is built from the fork and `docker save | ssh … docker load`ed — from
+  **`94a23ef2`**, the commit that carries `VECTOR_STORE_FTS_INDEX_DIR`, which
+  every arm can run because the knob is inert unless set.
 - **`/mnt/nvme` is re-made and re-mounted on both boxes**, docker restarted.
 - **The corpus restages on the harness** — see the next section.
 
@@ -380,11 +386,13 @@ probe is the one thing `DOCKER_HOST` cannot carry — it reads `/sys/fs/cgroup`
 where it runs — so `tools/sut_probe.sh start/stop` runs it on the SUT.
 
 **Images.** `scylladb/scylla:2026.3.0-rc2`; `opensearchproject/opensearch:3.8.0`;
-`vector-store` built from `knowack1/vector-store` @ `282d9efc` (R8: from the
-commit that adds `VECTOR_STORE_FTS_INDEX_DIR`, see above) and `docker save |
-ssh … docker load`ed onto the SUT. It is in no registry, and the instance
-store takes it with every stop — fleet re-entry is as
-`../BUILD-RATE-MATRIX-PLAN.md` describes it.
+`vector-store` built from `knowack1/vector-store` @ **`94a23ef2`** and
+`docker save | ssh … docker load`ed onto the SUT. That commit supersedes
+`282d9efc` for this campaign and is a strict superset of it: the one added
+knob, `VECTOR_STORE_FTS_INDEX_DIR`, defaults to unset, and with it unset the
+index path is byte-for-byte the previous behaviour — so R1–R7 measure the same
+image R8 does, and no arm pays for the knob's existence. It is in no registry,
+and the instance store takes it with every stop.
 
 **The 50/50 cgroup split** — `docker/.env.sut`, applied by compose as
 `mem_limit` / `cpus` / `cpuset` on each service:
@@ -624,9 +632,10 @@ ScyllaDB side, where the 30 s cadence sets the budget for everyone.
    contrasts, so the eight-arm series set is rendered from real CSVs before
    fleet time is spent: eight arm directories, the `--series` command above,
    sixteen lines, footer intact. **No number from it is an engine number.**
-2. Commit the `VECTOR_STORE_FTS_INDEX_DIR` change in the vector-store fork,
-   rebuild the image from that commit, add the compose passthrough and volume
-   for R8.
+2. Build the vector-store image from **`94a23ef2`** on the harness and load it
+   onto the SUT — part of re-entry, not extra work. The compose passthrough
+   and the `vector-store-fts` volume are already in the tree; `VS_FTS_INDEX_DIR`
+   is set for R8's arm only.
 3. **"The results directory"**, then **"Start the boxes"**, then **"Fleet
    re-entry"** — `$R` and its nine arm subdirectories on the laptop first,
    both boxes started from the console with the tab kept alive, SSH
