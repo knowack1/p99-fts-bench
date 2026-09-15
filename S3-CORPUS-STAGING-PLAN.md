@@ -42,7 +42,7 @@ Rejected on the way, with reasons, so they are not re-proposed:
 The EBS volume is bigger; **Linux does not notice on its own.**
 
 > **Identify the root device first — do not assume.** On this Nitro box
-> `HARNESS-AWS-RUNBOOK.md:232` formats **`/dev/nvme0n1` as the instance
+> `build-rate/HARNESS-AWS-RUNBOOK.md:232` formats **`/dev/nvme0n1` as the instance
 > store**, so the EBS root is a *different* nvme device. Running `growpart`
 > against the instance-store device would be destructive. Check with
 > `findmnt -no SOURCE /` and `lsblk` before touching anything.
@@ -164,7 +164,7 @@ check is what makes an S3 restage as trustworthy as a mirror download.
 
 ## Step 1 — bucket (console, S3)
 
-There is no AWS CLI credential on the laptop (`HARNESS-AWS-RUNBOOK.md:64`), so
+There is no AWS CLI credential on the laptop (`build-rate/HARNESS-AWS-RUNBOOK.md:64`), so
 creation is console-only.
 
 1. S3 → **Create bucket**
@@ -321,7 +321,7 @@ the compressed prepared corpus is ~7x cheaper; that line needs updating.
   **does not exist in `tools/`**; fix or drop the reference
 - `HARDWARE.md:177` — $1.73/75 GB → ~$0.24/10 GB compressed
 - `AWS-RUN-PLAN.md:93` — uncompressed `aws s3 cp` line → the key layout above
-- `HARNESS-AWS-RUNBOOK.md` Phase 2 (fleet re-entry) — add the restage step
+- `build-rate/HARNESS-AWS-RUNBOOK.md` Phase 2 (fleet re-entry) — add the restage step
 - `BUILD-RATE-MATRIX-PLAN.md:423` ("Fleet re-entry, every time") — same
 - `FREEZE.md` — add the S3 URIs as a second retrieval path beside the mirror
 
