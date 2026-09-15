@@ -141,14 +141,14 @@ So every arm's points go in their own directory and the chart is drawn with
 
 ```bash
 .venv/bin/python3 build-rate/charts/rate_vs_concurrency.py --keep-warmup \
-    --series 'R1 scylla-buf15=$R/r1/scylla/points/*.csv' \
-    --series 'R2 scylla-buf376=$R/r2/scylla/points/*.csv' \
-    --series 'R3 scylla-buf376-commit30=$R/r3/scylla/points/*.csv' \
-    --series 'R8 scylla-buf376-disk=$R/r8/scylla/points/*.csv' \
-    --series 'R4 os-ramindex-refresh3=$R/r4/opensearch/points/*.csv' \
-    --series 'R5 os-ramindex-refresh30=$R/r5/opensearch/points/*.csv' \
-    --series 'R6 os-ramindex-b128=$R/r6/opensearch/points/*.csv' \
-    --series 'R7 os-ramindex-b1=$R/r7/opensearch/points/*.csv' \
+    --series "R1 scylla-buf15=$R/r1/scylla/points/*.csv" \
+    --series "R2 scylla-buf376=$R/r2/scylla/points/*.csv" \
+    --series "R3 scylla-buf376-commit30=$R/r3/scylla/points/*.csv" \
+    --series "R8 scylla-buf376-disk=$R/r8/scylla/points/*.csv" \
+    --series "R4 os-ramindex-refresh3=$R/r4/opensearch/points/*.csv" \
+    --series "R5 os-ramindex-refresh30=$R/r5/opensearch/points/*.csv" \
+    --series "R6 os-ramindex-b128=$R/r6/opensearch/points/*.csv" \
+    --series "R7 os-ramindex-b1=$R/r7/opensearch/points/*.csv" \
     --title "Index rate against concurrency — eight arms, submitted and indexed" \
     --output "$R/index-rate-vs-concurrency.png" \
     --table  "$R/index-rate-vs-concurrency.csv"
@@ -177,64 +177,106 @@ lines.
   so there is no false comparison available to draw, and the 1.42x result gets
   the chart it can be quoted from.
 
-## Starting and stopping the fleet
+## The fleet
 
-**There is no AWS CLI credential on this laptop.** The EC2 console in Chrome is
-the only way to start and stop the boxes, and that makes the lifecycle a
-manual step at both ends of the session rather than something a script can be
-trusted with.
-
-| Alias | Instance | Role here |
+| Alias | Instance | Role in this campaign |
 |---|---|---|
-| `fts-harness` | `i-08d8d2505e16683f7` · `k-nowacki-fts-benchmark-harness` | runs `scyllarate` / `osrate` |
+| `fts-harness` | `i-08d8d2505e16683f7` · `k-nowacki-fts-benchmark-harness` | runs `scyllarate` and `osrate` |
 | `fts-sut` | `i-0e3e4b6b02e654b7f` · `k-nowacki-fts-benchmark-sut` | runs the engine stack under test |
 
-**Start.** Open the instance list filtered to this fleet — do not type into the
-filter box, the `search=` in the URL is the filter:
+Both `i8g.2xlarge` (8 vCPU Graviton4, 61 GiB, aarch64), `eu-north-1b`, Amazon
+Linux 2023, user `ec2-user`, key `~/.ssh/KarolNowackiAws.pem`.
+
+There is no AWS CLI credential on this laptop — the console in Chrome is the
+only way to start and stop the boxes. Instructions for that are in "Start the
+boxes" and "Stop the boxes" below, and they are `HARNESS-AWS-RUNBOOK.md`'s
+Phase 1 and Phase 7 unchanged.
+
+### The results directory — fix it first, on the laptop
+
+Everything on the fleet is ephemeral: `/mnt/nvme` is destroyed on every stop,
+so **the laptop is the only place results survive**. Create the directory
+before touching a single instance, and give every arm its own subdirectory —
+`--series` names a line by where its rows came from, so the layout *is* the
+chart's series set:
+
+```bash
+# Run this ONCE, at the very start of the session, and keep the shell.
+export RUN_ID="index-rate-matrix-$(date -u +%Y-%m-%dT%H%MZ)"
+export R="$HOME/Projects/Scylla/p99/bench/results/$RUN_ID"
+for arm in r1 r2 r3 r8; do mkdir -p "$R/$arm"/scylla/{points,samples,logs}; done
+for arm in r4 r5 r6 r7 osdisk; do mkdir -p "$R/$arm"/opensearch/{points,samples,logs}; done
+mkdir -p "$R"/{env,scripts,sut}
+printf '%s\n' "$RUN_ID" > "$R/RUN_ID"
+echo "results -> $R"
+```
+
+### Start the boxes
+
+In Chrome, open the EC2 instance list filtered to this fleet:
 
 ```
 https://eu-north-1.console.aws.amazon.com/ec2/home?region=eu-north-1#Instances:search=k-nowacki;v=3
 ```
 
-Select both rows with the header checkbox → **Instance state → Start
-instance**; wait for `Running` and `3/3 checks passed`.
+Do not type into the filter box — it opens an "API filters" dropdown and
+swallows the text. The `search=k-nowacki` in the URL is the filter.
 
-**Keep the console tab alive for the whole session** — click the refresh icon
-next to "Last updated" every few minutes. If the session expires you cannot
-stop the boxes from here and they bill until someone else does. At ~6.6 h of
-measurement this campaign is long enough for that to happen twice over.
+Select both rows with the header checkbox → **Instance state → Start instance**.
+Wait for `Running` and `3/3 checks passed`.
 
-**Results live on the laptop, not on the fleet.** `/mnt/nvme` is destroyed on
-every stop, so `$R` is created on the laptop before a single instance is
-started and every artifact is pulled home as it is produced.
+**Keep the console tab alive for the whole session.** Click the refresh icon
+next to "Last updated" every few minutes. If the console session expires you
+cannot stop the boxes from here, and they bill until someone else does. At
+~6.6 h this campaign is long enough for that to happen more than once.
 
-**Re-entry, on every start** — the full procedure is
-`HARNESS-AWS-RUNBOOK.md` Phase 2 and is not restated here. What this campaign
-depends on: public IPs are reassigned on every start and private IPs are not,
-so `~/.ssh/config`'s two `HostName` entries are re-pointed and the private IPs
-are *confirmed* rather than assumed — `172.31.47.166` is the SUT, and it is
-hard-coded in `docker/.env.sut` as `SCYLLA_BROADCAST_RPC` and `SCYLLA_VS_URI`,
-so a changed private IP silently breaks both CQL routing and BM25. `/mnt/nvme`
-is re-made and re-mounted on both boxes, docker restarted, the two public
-images re-pulled, and **the vector-store image rebuilt and loaded** — the
-instance store takes docker's whole image store with it, and that image is in
-no registry. Corpus restage is a local `pzstd -d` from the grown EBS root,
-~1.5–2 min (it is no longer the 36 min mirror download
-`../BUILD-RATE-MATRIX-PLAN.md` describes); `../FREEZE.md`'s sha256 is what
-proves the bytes.
+### Fleet re-entry
 
-**Stop, and confirm it.** Same console tab: select both rows → **Instance state
-→ Stop instance** → check the dialog names **both** instances, leave "Skip OS
-shutdown" unchecked → **Stop**. Then refresh and confirm both rows read
-`Stopped` with no public IP. "I initiated the stop" is not the same as "they
-are stopped", and the write-up says which. The `~/.ssh/config` entries now
-point at released IPs.
+Every stop wipes the instance store, so this runs on **every** start. The full
+procedure is `HARNESS-AWS-RUNBOOK.md` Phase 2 and is not restated here; what
+this campaign additionally depends on:
 
-**Do not stop the boxes mid-campaign.** Every stop costs a re-entry: the image
-rebuild, the corpus restage and the mounts, before any arm can run. If the
-campaign is split across sessions, split it at an arm boundary and record which
-arms were measured in which session — a re-entry between two arms of the same
-comparison is a provenance difference the footer has to carry.
+- **Public IPs are reassigned on every start; private IPs are not.** Re-point
+  both `HostName` entries in `~/.ssh/config`, accept the new host keys, and
+  then **confirm** the private IPs rather than assuming them:
+  `172.31.38.237` is the harness, `172.31.47.166` the SUT. That second one is
+  hard-coded in `docker/.env.sut` as `SCYLLA_BROADCAST_RPC` and
+  `SCYLLA_VS_URI`, so a changed private IP breaks off-box CQL and BM25 routing
+  at once, and the `.env.sut` edit is part of re-entry when it changes.
+- **The vector-store image must be rebuilt and loaded.** `daemon.json` points
+  docker's `data-root` at the instance store, so every image goes with the
+  stop. The two public images re-pull; the vector-store is in no registry and
+  is built from the fork and `docker save | ssh … docker load`ed (for R8, from
+  the commit that carries `VECTOR_STORE_FTS_INDEX_DIR`).
+- **`/mnt/nvme` is re-made and re-mounted on both boxes**, docker restarted.
+- **The corpus restages in ~1.5–2 min**, a local `pzstd -d -p 8` from the grown
+  EBS root — not the 36 min mirror download `../BUILD-RATE-MATRIX-PLAN.md`
+  describes. `../FREEZE.md`'s sha256 of the prepared corpus is what proves the
+  bytes.
+
+**Do not stop the boxes mid-campaign.** Every stop costs a full re-entry before
+any arm can run. If the campaign is split across sessions, split it at an arm
+boundary and record which arms were measured in which session — a re-entry
+between two arms of the same comparison is a provenance difference the footer
+has to carry.
+
+### Stop the boxes
+
+Same console tab. Select both rows → **Instance state → Stop instance** → check
+the dialog names **both** `k-nowacki-fts-benchmark-harness` and
+`k-nowacki-fts-benchmark-sut`, leave "Skip OS shutdown" unchecked → **Stop**.
+
+Then refresh and **confirm both rows read `Stopped` with no public IP**. Say so
+explicitly in the report; "I initiated the stop" is not the same as "they are
+stopped".
+
+The `~/.ssh/config` entries now point at released IPs and must be re-pointed on
+the next start.
+
+Before stopping: **every artifact is on the laptop**, because `/mnt/nvme` is
+about to be destroyed. That is every arm's `points/`, `samples/` and logs, the
+SUT's resource-probe JSONL, and the vector-store startup lines that prove each
+arm took its tuning.
 
 ## How the engines are deployed on the SUT
 
@@ -501,12 +543,12 @@ ScyllaDB side, where the 30 s cadence sets the budget for everyone.
 2. Commit the `VECTOR_STORE_FTS_INDEX_DIR` change in the vector-store fork,
    rebuild the image from that commit, add the compose passthrough and volume
    for R8.
-3. **Start the fleet** and re-enter it, per "Starting and stopping the fleet"
-   above: `$R` created on the laptop first, both boxes started from the
-   console, the console tab kept alive, SSH re-pointed, private IPs confirmed
-   against `.env.sut`, `/mnt/nvme` re-made, images re-pulled and the
-   vector-store image rebuilt, corpus restaged and verified against
-   `../FREEZE.md`.
+3. **"The results directory"**, then **"Start the boxes"**, then **"Fleet
+   re-entry"** — `$R` and its nine arm subdirectories on the laptop first,
+   both boxes started from the console with the tab kept alive, SSH
+   re-pointed, private IPs confirmed against `.env.sut`, `/mnt/nvme` re-made,
+   images re-pulled and the vector-store image rebuilt, corpus restaged and
+   verified against `../FREEZE.md`.
 4. **Smoke**: 2 rungs × all nine arms at a 20k cap. Gates: every point
    complete, every arm's startup lines match, R3 does not end unsettled, R8's
    line says `index=disk:`, the ramindex arms do not hit ENOSPC.
@@ -515,8 +557,9 @@ ScyllaDB side, where the 30 s cadence sets the budget for everyone.
 6. **The ladders**, one arm at a time in table order, stack recreated between
    arms: R1, R2, R3, R8, then R4, R5, R6, R7, then `os-disk-refresh3`. A
    surprise in R2 can still change the plan before the OpenSearch arms run.
-7. **Stop the fleet** from the console and confirm both rows read `Stopped`
-   with no public IP. Everything after this is laptop work.
+7. Pull every artifact home, then **"Stop the boxes"**: both rows confirmed
+   `Stopped` with no public IP, said so explicitly. Everything after this is
+   laptop work.
 8. Render the primary chart and S2a–S2c; `--table` for each; record each arm's
    ceiling and `c_sat` in `../TUNING.md` with the run that produced it.
 
