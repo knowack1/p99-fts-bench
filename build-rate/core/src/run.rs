@@ -26,6 +26,11 @@ use crate::sweep::Cancel;
 /// because none of this work is CPU-bound.
 const MAX_BLOCKING_THREADS: usize = 16;
 
+/// The floor, enforced at compile time rather than left to a comment: below 2
+/// the corpus producer starves DNS and a level hangs instead of failing, which
+/// is the one way this is expensive to diagnose.
+const _: () = assert!(MAX_BLOCKING_THREADS >= 2);
+
 /// The knob this tool exists to expose: how many cores tokio may use to serve
 /// the in-flight requests. It is orthogonal to `--concurrency`, which says how
 /// many requests are outstanding at once.

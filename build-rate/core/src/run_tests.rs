@@ -114,14 +114,6 @@ fn a_fresh_interrupt_watch_has_not_fired() {
     assert!(!cancel.is_set());
 }
 
-/// The floor named in `MAX_BLOCKING_THREADS`' comment, asserted rather than
-/// trusted: the corpus producer holds a slot for a whole level, so a pool of 1
-/// leaves DNS nothing to run on.
-#[test]
-fn the_blocking_pool_has_room_for_the_corpus_producer_and_something_else() {
-    assert!(MAX_BLOCKING_THREADS >= 2, "{MAX_BLOCKING_THREADS}");
-}
-
 /// The shape `sweep::measure_at_concurrency` really creates: one blocking task
 /// parked for the level's duration while other blocking work still has to
 /// finish. At a pool of 1 this hangs instead of failing, so it is bounded.
