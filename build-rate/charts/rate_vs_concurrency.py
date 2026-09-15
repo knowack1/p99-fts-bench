@@ -27,6 +27,19 @@ continuously. On the OpenSearch half it is refresh-gated visibility, which
 advances in steps and has a floor of `refresh_interval x docs_per_s` however
 fast the engine indexes. Read them against their own solid line, not against
 each other.
+
+**`--series LABEL=GLOB` names a line by where its rows came from.** The
+engine-flag naming above reads a series off the row — engine and batch size —
+which is all the CSV carries. Arms that differ by an engine knob (a writer
+buffer, a commit interval, a refresh interval) write identical rows and would
+collapse onto one line. `--series` is repeatable, each one is its own line
+with exactly the label given, and named series are drawn first in the order
+given, ahead of anything collected by `--scylla`/`--opensearch`:
+
+    build-rate/charts/rate_vs_concurrency.py \\
+        --series 'R2 scylla-buf376=<R>/r2/scylla/points/*.csv' \\
+        --series 'R4 os-ramindex-refresh3=<R>/r4/opensearch/points/*.csv' \\
+        --output <R>/index-rate-vs-concurrency.png
 """
 from __future__ import annotations
 
@@ -71,6 +84,10 @@ def parse_args() -> argparse.Namespace:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scylla", default="", help="glob of scyllarate point CSVs")
     parser.add_argument("--opensearch", default="", help="glob of osrate point CSVs")
+    parser.add_argument("--series", action="append", default=[], metavar="LABEL=GLOB",
+                        help="a line named LABEL from the point CSVs matching GLOB; "
+                             "repeatable, drawn first in the order given. For arms "
+                             "that differ by an engine knob the rows do not carry")
     parser.add_argument("--output", required=True, help="PNG path")
     parser.add_argument("--table", default="", help="also write every plotted point as CSV")
     parser.add_argument("--submitted-only", action="store_true",
@@ -98,19 +115,52 @@ def rate_of(row: dict, metric: str) -> float | None:
     return float(value) if value else None
 
 
+def points_of(row: dict, config: str,
+              metrics: tuple[str, ...]) -> list[tuple[str, str, int, float, float]]:
+    return [
+        (config, metric, int(row["concurrency"]), rate, float(row["wall_s"]))
+        for metric in metrics
+        for rate in [rate_of(row, metric)]
+        if rate is not None
+    ]
+
+
 def collect(pattern: str, keep_warmup: bool, engine: str,
             metrics: tuple[str, ...]) -> list[tuple[str, str, int, float, float]]:
     out = []
     for name in sorted(glob.glob(pattern)):
         for row in grid.read_points(Path(name), keep_warmup):
-            config = grid.series_of(row, engine)
-            for metric in metrics:
-                rate = rate_of(row, metric)
-                if rate is None:
-                    continue
-                out.append((config, metric, int(row["concurrency"]), rate,
-                            float(row["wall_s"])))
+            out += points_of(row, grid.series_of(row, engine), metrics)
     return out
+
+
+def collect_named(label: str, pattern: str, keep_warmup: bool,
+                  metrics: tuple[str, ...]) -> list[tuple[str, str, int, float, float]]:
+    """Every row under the glob lands on the line called `label`, whatever its
+    engine or batch column says: the arm is known from where the files are,
+    not from what they contain."""
+    out = []
+    for name in sorted(glob.glob(pattern)):
+        for row in grid.read_points(Path(name), keep_warmup):
+            out += points_of(row, label, metrics)
+    return out
+
+
+def parse_series(argument: str) -> tuple[str, str]:
+    label, seam, pattern = argument.partition("=")
+    if not seam or not label or not pattern:
+        raise SystemExit(f"--series wants LABEL=GLOB, got {argument!r}")
+    return label, pattern
+
+
+def series_order(table: dict[str, dict[str, dict[int, dict]]],
+                 named: list[str]) -> list[str]:
+    """Named series first, as given; then whatever the engine flags collected,
+    in the sibling chart's order. A label is never parsed for a batch size."""
+    leading = [label for label in named if label in table]
+    rest = {config: levels for config, levels in table.items()
+            if config not in leading}
+    return leading + config_order(rest)
 
 
 def aggregate(points: list[tuple[str, str, int, float, float]]) -> dict[str, dict[str, dict[int, dict]]]:
@@ -236,18 +286,21 @@ def main() -> int:
     from matplotlib.ticker import FuncFormatter
 
     metrics = (SUBMITTED,) if args.submitted_only else METRICS
+    named = [parse_series(argument) for argument in args.series]
     points = []
+    for label, pattern in named:
+        points += collect_named(label, pattern, args.keep_warmup, metrics)
     if args.scylla:
         points += collect(args.scylla, args.keep_warmup, SCYLLA_ENGINE, metrics)
     if args.opensearch:
         points += collect(args.opensearch, args.keep_warmup, OPENSEARCH_ENGINE,
                           metrics)
     if not points:
-        print("no points matched --scylla / --opensearch")
+        print("no points matched --series / --scylla / --opensearch")
         return 1
 
     table = aggregate(points)
-    order = config_order(table)
+    order = series_order(table, [label for label, _ in named])
     warm = colours(len([name for name in order if name != SCYLLA_SERIES]))
 
     figure, axes = plt.subplots(figsize=(args.width, args.height), dpi=args.dpi)

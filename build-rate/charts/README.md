@@ -1,11 +1,11 @@
-# charts — the two images a local engine run ends in
+# charts — the two images a local build-rate run ends in
 
 Two renderers for `HARNESS-LOCAL-RUNBOOK.md`, reading the CSVs the binaries in
 `../scylla` and `../opensearch` already write. Nothing here is a deck chart.
 
 | Script | Question | X | Y |
 |---|---|---|---|
-| [`rate_vs_concurrency.py`](rate_vs_concurrency.py) | what did the client offer, and what did the engine index | concurrency (log2) | docs/s |
+| [`rate_vs_concurrency.py`](rate_vs_concurrency.py) | what did the client offer, and what did the engine (or the sink modelling one) index | concurrency (log2) | docs/s |
 | [`rate_vs_index_size.py`](rate_vs_index_size.py) | what did one build do while it was happening | documents in the index | documents indexed per second |
 
 ```bash
@@ -27,7 +27,7 @@ evidence.
 ## Why these are here and not in `../../tools`
 
 `tools/plot_harness_grid.py` and `tools/plot_build_growth.py` are the
-**null-sink** charts `../../HARNESS-AWS-RUNBOOK.md` ends in: no engine runs
+**null-sink** charts `../HARNESS-AWS-RUNBOOK.md` ends in: no engine runs
 there, so the submit rate is the whole story and a series is named by its
 harness alone. These two are the **engine** charts. They ask different questions
 of the same columns and they would have had to grow flags that change what the
@@ -49,6 +49,15 @@ colour, because they are one configuration seen twice and the gap between them
 is the chart. A blank `index_docs_per_s` is a level that ran unwatched and is
 dropped, never read as a zero that would draw an engine indexing nothing.
 `--submitted-only` gives back the sibling's single family.
+
+**`--series 'LABEL=GLOB'` names a line by where its rows came from.** The
+engine-flag naming reads a series off the row — engine, and batch size where
+there is one — which is all the CSV carries. Arms that differ by an engine knob
+(a writer buffer, a commit interval, a refresh interval) write identical rows
+and would collapse onto one line. Repeatable; named series are drawn first in
+the order given, ahead of anything `--scylla`/`--opensearch` collected, and a
+label is never parsed for a batch size. `INDEX-RATE-MATRIX-PLAN.md` is the
+campaign it exists for, and carries the full eight-arm command.
 
 **`rate_vs_index_size.py` puts the engine on the series name.** Both halves
 write `c32-1.csv` into their own samples directory, so globbed onto one axis

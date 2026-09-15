@@ -185,3 +185,41 @@ def test_the_footer_does_not_claim_a_warm_up_drop_that_did_not_happen():
     assert "EVERY row is plotted" in kept
     assert "warm-up row is dropped" not in kept
     assert "warm-up row is dropped" in dropped
+
+
+def test_a_named_series_is_its_own_line_whatever_the_csv_says(tmp_path):
+    """Two ScyllaDB arms differ by an engine knob the CSV does not carry, so
+    named by their rows alone they collapse onto one line. `--series` names
+    the line by the glob instead, and the label is the whole of the name."""
+    buf15 = write_points(tmp_path / "buf15.csv", [(8, 500.0, 400.0, "scylladb", 1)])
+    buf376 = write_points(tmp_path / "buf376.csv", [(8, 700.0, 600.0, "scylladb", 1)])
+
+    points = (CHART.collect_named("R1 scylla-buf15", str(buf15), True, CHART.METRICS)
+              + CHART.collect_named("R2 scylla-buf376", str(buf376), True, CHART.METRICS))
+    table = CHART.aggregate(points)
+
+    assert list(table) == ["R1 scylla-buf15", "R2 scylla-buf376"]
+    assert table["R1 scylla-buf15"][CHART.INDEXED][8]["median"] == 400.0
+    assert table["R2 scylla-buf376"][CHART.INDEXED][8]["median"] == 600.0
+
+
+def test_named_series_keep_their_command_line_order_ahead_of_the_rest(tmp_path):
+    """The run table's order is the chart's order: named series come first as
+    given, and anything collected by engine flag follows in the sibling's
+    order. A named label is never parsed for a batch size."""
+    named = write_points(tmp_path / "r4.csv", [(8, 9000.0, 8000.0, "opensearch", 512)])
+    flagged = write_points(tmp_path / "os.csv", [(8, 9000.0, 8000.0, "opensearch", 128)])
+
+    points = (CHART.collect_named("R4 os-ramindex-refresh3", str(named), True, CHART.METRICS)
+              + CHART.collect(str(flagged), True, CHART.OPENSEARCH_ENGINE, CHART.METRICS))
+    order = CHART.series_order(CHART.aggregate(points), ["R4 os-ramindex-refresh3"])
+
+    assert order == ["R4 os-ramindex-refresh3", "osrate batch=128"]
+
+
+def test_a_series_argument_is_split_at_its_first_equals_sign_only():
+    """A glob may carry `=` of its own; the label may not, so the first one
+    is the seam."""
+    assert CHART.parse_series("R5 os-refresh30=out/r5/points/*.csv") == \
+        ("R5 os-refresh30", "out/r5/points/*.csv")
+    assert CHART.parse_series("R7 b1=out/b=1/*.csv") == ("R7 b1", "out/b=1/*.csv")
