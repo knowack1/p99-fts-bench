@@ -1,0 +1,38 @@
+[package]
+name = "scyllasearch"
+version = "0.1.0"
+edition = "2021"
+description = "Search-latency matrix for ScyllaDB FTS: p50/p90/p99 and q/s per concurrency and query class"
+publish = false
+
+[[bin]]
+name = "scyllasearch"
+path = "src/main.rs"
+
+[dependencies]
+build-rate-core = { path = "../../build-rate/core" }
+search-latency-core = { path = "../core" }
+# The loader that fills the index before the first query is measured is the one
+# `build-rate` measures — the reset, its two gates and the prepared INSERT, all
+# of it. Reimplementing it here would make "the index was complete" a second
+# claim that could drift from the first.
+scyllarate = { path = "../../build-rate/scylla" }
+anyhow = "1.0.100"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+# The vector-store's BM25 endpoint and its status endpoint. No TLS: the
+# endpoint is plain http on a benchmark network, and a TLS stack in the
+# dependency tree is a stack that can move underneath a recorded run.
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+scylla = "1.8.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1.18.1", features = ["serde", "v5"] }
+
+[dev-dependencies]
+search-latency-core = { path = "../core", features = ["test-support"] }
+build-rate-core = { path = "../../build-rate/core", features = ["test-support"] }
+tempfile = "3.24.0"
+
+[profile.release]
+debug = false

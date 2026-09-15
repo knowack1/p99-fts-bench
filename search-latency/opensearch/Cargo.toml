@@ -1,0 +1,42 @@
+[package]
+name = "ossearch"
+version = "0.1.0"
+edition = "2021"
+description = "Search-latency matrix for OpenSearch: p50/p90/p99 and q/s per concurrency and query class"
+publish = false
+
+[[bin]]
+name = "ossearch"
+path = "src/main.rs"
+
+[dependencies]
+build-rate-core = { path = "../../build-rate/core" }
+search-latency-core = { path = "../core" }
+# The loader that fills the index before the first query is measured is the one
+# `build-rate` measures — the delete-and-create, its two gates, the analyzer
+# probe and the `_bulk`. Reimplementing it here would make "the index was
+# complete, and analyzed the way the other engine analyzes" a second claim that
+# could drift from the first.
+osrate = { path = "../../build-rate/opensearch" }
+anyhow = "1.0.100"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+opensearch = { version = "2.4.0", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+search-latency-core = { path = "../core", features = ["test-support"] }
+build-rate-core = { path = "../../build-rate/core", features = ["test-support"] }
+tempfile = "3.24.0"
+
+[features]
+default = ["tls"]
+# An `https://` endpoint. Pure-Rust TLS rather than the crate's own default,
+# which is native-tls: a run must not depend on the box's OpenSSL. The bench's
+# own compose files publish plain HTTP, so `--no-default-features` builds a
+# smaller binary that reaches them and nothing else.
+tls = ["opensearch/rustls-tls", "osrate/tls"]
+
+[profile.release]
+debug = false

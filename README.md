@@ -166,6 +166,7 @@ FTS-enabled cluster, which stock images do not provide.
 | `AWS-RUN-PLAN.md` | Runbook for the enwiki/AWS measurement: what to finish on the laptop first, phase order, per-repetition gates, cost control |
 | `LAPTOP-RUN-PLAN.md` | The $0 laptop campaign this repo already executed — harness build, verification, and the C1-C8 pass over simplewiki |
 | `build-rate/` | The Rust build-rate harness: `core/` (the sweep, the watch and the report both halves share), `scylla/` (`scyllarate`) and `opensearch/` (`osrate`). One CSV schema, one `engine` column, three Cargo locks — see [`build-rate/README.md`](build-rate/README.md) |
+| `search-latency/` | The Rust search-latency harness: `core/` (the query set, the closed loop and the cell CSV both halves share), `scylla/` (`scyllasearch`, over CQL or the vector-store's `/bm25`) and `opensearch/` (`ossearch`). One CSV schema, an `engine` and an `interface` column, and an index it builds first if it is not already complete — with `build-rate`'s own loader, so "the index was complete" is one claim. See [`search-latency/README.md`](search-latency/README.md) |
 | `tantivy-ram/` | Standalone harness replicating the vector-store Tantivy schema, used to measure index RAM footprint |
 | `feature-mapping.md` | ScyllaDB M1 ↔ OpenSearch counterpart for every query class, analyzer parity, M2/M3 preview, open verification items |
 | `tools/download_wikipedia.sh` | Downloads all content shards for a wiki from a pinned `cirrus_search_index` dump date, verifies `_SUCCESS`, records sha256 checksums |

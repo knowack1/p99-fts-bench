@@ -1,0 +1,41 @@
+[package]
+name = "search-latency-core"
+version = "0.1.0"
+edition = "2021"
+description = "The query loop and measurement both search-latency harnesses share"
+publish = false
+
+[lib]
+name = "search_latency_core"
+path = "src/lib.rs"
+
+# Caret requirements only, never `=`. Each binary crate resolves these in its
+# own lock, for the reason `../../build-rate/scylla/README.md` gives: pinning
+# here would drag one engine's tree when the other was upgraded.
+[dependencies]
+anyhow = "1"
+# The index this harness searches is built by the loader `build-rate` measures,
+# and read through the same `IndexProbe`. Depending on that crate is what keeps
+# "the index was complete before the first query" one claim rather than two
+# implementations of it.
+build-rate-core = { path = "../../build-rate/core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+
+[features]
+# Doubles the two binary crates test against. Never enabled for a release
+# build: each binary asks for it under [dev-dependencies] only.
+test-support = []
+
+[dev-dependencies]
+build-rate-core = { path = "../../build-rate/core", features = ["test-support"] }
+# Its own doubles, for `tests/` — an integration test links the crate as a
+# consumer would, without `cfg(test)`, so the feature has to be asked for the
+# way the binary crates ask for it.
+search-latency-core = { path = ".", features = ["test-support"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[profile.release]
+debug = false
