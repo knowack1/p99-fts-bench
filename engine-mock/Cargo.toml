@@ -1,0 +1,31 @@
+[package]
+name = "engine-mock"
+version = "0.1.0"
+edition = "2021"
+description = "Accept-and-discard OpenSearch and ScyllaDB endpoints: the instrument a client ceiling is measured against"
+publish = false
+
+[[bin]]
+name = "engine-mock"
+path = "src/main.rs"
+
+[lib]
+name = "engine_mock"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+md-5 = "0.10.6"
+regex = "1.13.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+socket2 = { version = "0.6.5", features = ["all"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"
+
+[profile.release]
+debug = false
