@@ -60,10 +60,22 @@ THE SEAM — an engine supplies four things, core owns the rest
   Two counts, because on one engine they genuinely differ: docs is
   what a search would find, accepted is what the engine took in.
 
-THE SWEEP — closed loop, one CSV row per concurrency level
-  N requests in flight: a bounded async channel, N tokio tasks,
-  each awaiting its reply before taking the next item. Documents
-  in flight is concurrency * batch_size — say it out loud.
+THE SWEEP — one CSV row per rung, on exactly one of two ladders
+  --concurrency is a list: CLOSED LOOP, N requests in flight, a
+  bounded async channel, N tokio tasks, each awaiting its reply
+  before taking the next item. Documents in flight is
+  concurrency * batch_size — say it out loud.
+  --target-rate is a list of docs/s: OPEN LOOP, and then
+  --concurrency is ONE number and it is a cap. The producer, which
+  already runs on spawn_blocking, releases document i at
+  origin + i/rate; behind schedule it never skips, because the
+  backlog is the finding. Closed loop is the same path with no due
+  time, so the request's own start stands in and latency collapses
+  to service time — one expression, not a second path. Both
+  ladders at once is refused: a matrix costs their product and
+  reconfounds the axis.
+  Concurrency is not a shared unit across a bulk API and a per-row
+  one; a document per second is. That is why the rate axis exists.
   Capacity is queue_depth * concurrency requests (10 by default),
   so the producer cannot pull the corpus into memory ahead of the
   workers. The producer runs on spawn_blocking; the workers live
@@ -103,10 +115,20 @@ THE WATCH — the number this harness exists for
   is a floor — say so on stderr and in the row.
 
 OUTPUT — one schema, both engines, blank cells never zeros
-  17 columns: concurrency,docs,errors,wall_s,docs_per_s,p50_ms,
+  22 columns: concurrency,docs,errors,wall_s,docs_per_s,p50_ms,
   p99_ms,batch_size,requests,failed_requests,index_docs,
   index_docs_per_s,index_lag_docs,index_settle_s,index_settled,
-  index_status,engine
+  index_status,engine,target_docs_per_s,achieved_offered_ratio,
+  queue_p99_ms,in_flight_peak,generator_saturated
+  The last five are the rate ladder's and are BLANK on a
+  concurrency-ladder row — a zero offered rate would plot at the
+  origin of an axis it is absent from. in_flight_peak is the one
+  that separates "the engine could not keep up" from "the cap
+  bound": short with the peak at --concurrency is the harness, and
+  the point is void. What p50_ms/p99_ms are measured FROM changes
+  with the ladder, which redefines columns rather than adding
+  them, so it is a header fact: latency_basis=intended_start on a
+  rate ladder, service on a concurrency one.
   --samples-dir adds the per-second series behind those averages,
   one file per level, c<conc>-<n>.csv, repeats never overwriting:
   level,concurrency,t_s,docs_submitted,submit_docs_per_s,
