@@ -11,8 +11,8 @@ session, off one corpus:
 
 | Part | Harness | Binary | Sink | Extra axis |
 |---|---|---|---|---|
-| **A** | `bench/build-rate/scylla` | `scyllarate` | `null_sink --mode cql` (+ its vector-store port) | — |
-| **B** | `bench/build-rate/opensearch` | `osrate` | `null_sink --mode http` | **`--batch-size 1` only** |
+| **A** | `bench/build-rate/scylla` | `scyllarate` | `engine-mock --mode cql` (+ its vector-store port) | — |
+| **B** | `bench/build-rate/opensearch` | `osrate` | `engine-mock --mode http` | **`--batch-size 1` only** |
 
 On the OpenSearch side one request can carry many documents, so batch size is a
 knob Part A does not have. **This campaign pins it at 1** — one document per
@@ -26,23 +26,60 @@ one chart as its own line.
 Run Part A first. It is the simpler instrument and it establishes the corpus,
 the samplers and the box's CPU baseline that Part B is read against.
 
+## The instrument is `engine-mock`, not `ftsbench.null_sink`
+
+Every recorded run in this file's history was measured against
+`ftsbench.null_sink`, which served every connection from one asyncio loop on one
+thread. **This campaign runs `bench/engine-mock` instead** — the same wire
+protocols, the same routes, the same flag names and defaults, a tokio task per
+connection. `../engine-mock/README.md` is the authority on what it does; its own
+"Two things in the runbooks must change before they launch this" section is what
+this file now implements.
+
+Three consequences run through everything below, and skipping any of them
+produces a run that looks clean and measures the wrong thing:
+
+1. **The sink's own CPU is no longer a one-core budget.** Gate C's threshold
+   moves from "0.85 of a core" to a budget computed per half — Phase 8.
+2. **The pid must be found with `pgrep`, not `$!`.** `setsid … & echo $!`
+   records a wrapper that exits, and a CPU sampler pointed at a dead pid reports
+   a sink that used no CPU — which reads as `ok` on every level.
+3. **The client gets faster, so the document budgets may no longer buy a
+   measurable point.** `--max-docs` is the only budget these loaders have, and
+   the corpus is its ceiling — Phase 0 and Phase 5.
+
+**No number recorded against the Python sink carries over.** They are in
+"Recorded results" for provenance, not for comparison, and the `≥266,578 docs/s`
+floor quoted throughout this file is one of them.
+
 ## What this measures, and what it is not
 
 The subject is **the loader**, not an engine. `scyllarate`
-(`bench/build-rate/scylla`) pushes prepared `INSERT`s at `ftsbench.null_sink
---mode cql`, which answers the CQL wire and discards every row. What comes back
-is what the *client* can offer on a given box, in the shape the engine campaign
-loads in: **one process against one endpoint**.
+(`bench/build-rate/scylla`) pushes prepared `INSERT`s at `engine-mock --mode
+cql`, which answers the CQL wire and discards every row. What comes back is what
+the *client* can offer on a given box, in the shape the engine campaign loads
+in: **one process against one endpoint**.
 
-**It produces a floor, not a ceiling, and that is the deliverable.** The sink is
-single-threaded, so a plateau here is the sink's number and the harness's own
-limit is somewhere above it, unmeasured. That is enough: the campaign only has
-to know the client offers far more than an engine can absorb.
-`../BUILD-RATE-MATRIX-PLAN.md`'s G7 gate asks for **2x**, and the recorded floor
-of `≥266,578 docs/s` against a ~12.2k docs/s ScyllaDB build rate is ~22x. Every
-number here is therefore written `≥`, and the day an engine number comes within
-~2x of one, the floor stops settling the question — see "There is no N-process
-arm" in Phase 5.
+**It still produces a floor, not a ceiling — but the two halves now reach that
+floor for different reasons, and the difference is the whole reading.**
+
+- **Part B.** `osrate` posts through reqwest's default pool, which gives every
+  in-flight `_bulk` its own socket, so at `c=64` the mock is answering on 64
+  tasks across every core it has. The instrument is no longer the wall by
+  construction. A Part B plateau is the **client's** until the sink CPU column
+  says otherwise — which is the reading this half has never had.
+- **Part A.** The mock advertises no shard extension and an empty
+  `system.peers` (trap 1), so the driver still opens **one** connection, and one
+  connection is one task. The mock has more cores but this half cannot use them:
+  roughly one core is still all there is to give. A Part A plateau is still
+  likely the instrument's, and the gate that says so now compares against one
+  core rather than against eight — Phase 8.
+
+Everything is therefore still written `≥`, and the campaign only has to know the
+client offers far more than an engine can absorb.
+`../BUILD-RATE-MATRIX-PLAN.md`'s G7 gate asks for **2x**. The day an engine
+number comes within ~2x of a floor, the floor stops settling the question — see
+"There is no N-process arm" in Phase 5.
 
 **No number from this runbook is an engine number and none belongs in the deck.**
 
@@ -54,6 +91,7 @@ Not to be confused with:
 | `../BUILD-RATE-MATRIX-PLAN.md` § "P0 — client calibration" | the same idea for the **Python** loaders, and the constants they feed |
 | `../TUNING.md` § "Per-process client ceilings" | where measured ceilings get recorded |
 | `../HARDWARE.md` | why the fleet is shaped the way it is, and what it costs |
+| `../engine-mock/README.md` | the instrument: what it serves, what it deliberately refuses, and what it does not model |
 
 This runbook supersedes the AWS mechanics in all of them **for harness runs
 only**. When it produces a floor, record it in `../TUNING.md` with the run that
@@ -90,7 +128,7 @@ export RUN_ID="harness-aws-runbook-$(date -u +%Y-%m-%dT%H%MZ)"
 export R="$HOME/Projects/Scylla/p99/bench/results/$RUN_ID"
 mkdir -p "$R"/{env,corpus,scripts}
 mkdir -p "$R"/scylla/{points,samples,logs,sinks}
-mkdir -p "$R"/opensearch/{points,logs,batch,sinks}
+mkdir -p "$R"/opensearch/{points,samples,logs,batch,sinks}
 printf '%s\n' "$RUN_ID" > "$R/RUN_ID"
 ln -sfn "$RUN_ID" "$(dirname "$R")/harness-aws-latest"
 echo "results -> $R"
@@ -170,7 +208,8 @@ sweep, `1250000` for the high one, for `scyllarate` and `osrate` alike. The
 budget decides how many documents a point averages over and how much of its
 wall clock is the per-level reset, so a series measured on a different budget is
 not the same measurement drawn on the same axis. Change it for one arm and you
-change it for all four.
+change it for all four. **Those two numbers are now a starting point rather than
+a constant** — see "The budgets were sized against the Python sink" below.
 
 **The grid stops at 128, and that is a decision about the box.** The loader box
 is an `i8g.2xlarge` — `nproc` 8, measured (`../HARDWARE.md`). Concurrency here is
@@ -209,6 +248,45 @@ each sweep's budget so **every level in it runs ≥5 s**, and overlap the two
 sweeps at one level (`32` above). If the overlap level disagrees between sweeps
 by more than the rep spread, the budgets are distorting the measurement — say so
 rather than averaging them.
+
+### The budgets were sized against the Python sink, and `engine-mock` outruns them
+
+`400000` and `1250000` were chosen so that every level cleared 5 s against an
+instrument that flattened at one core. They are the one thing in the matrix the
+swap can invalidate, and it invalidates them in the direction that is hardest to
+see: **a point that got faster gets shorter**, and a short point is not a
+measurement.
+
+**This is not a projection — the last fleet pass already breached the floor.**
+`results/harness-aws-runbook-2026-09-15T1740Z`, against the *Python* sink, at
+these exact budgets:
+
+| Sweep | Level | `wall_s`, N=3 | |
+|---|---|---|---|
+| `default-low` @ `400000` | `c=32` | **2.7 / 3.1 / 3.3 s** | under the 5 s floor, one rep 0.3 s off the **3 s hard gate** in B5 |
+| `default-low` @ `400000` | `c=16` | 4.4 / 4.4 / 4.5 s | under the floor |
+| `default-high` @ `1250000` | `c=128` | 5.7 / 5.8 / 5.9 s | barely over |
+
+The low sweep's overlap level was already not a measurement, and the high
+sweep's top rung had ~15% of margin. Now apply the swap: the local port
+comparison (`../engine-mock/README.md`) puts the CQL half 1.13–1.23× ahead and
+the HTTP half at `batch=1` 1.8–4.6× ahead. At the low end of that, `c=128` lands
+near 4.8 s and `c=32` near 2.3 s; at the high end Part B's levels go under the
+hard gate outright.
+
+Sizing `c=32` to 8 s at its recorded 145,723 docs/s already asks for
+**~1.2 M documents in the low sweep alone** — which is the whole of the old
+corpus, for the sweep that used to take a third of it.
+
+**`--max-docs` is the only budget these loaders have** — there is no
+`--duration`, and `core/src/corpus.rs` does not cycle the file, so a `--max-docs`
+above the corpus's line count silently runs a **shorter** level instead of a
+longer one. The budget's real ceiling is the corpus, which is why Phase 4 now
+generates one with headroom and Phase 5 opens with a calibration rep rather than
+committing three.
+
+**Do not guess a new number here.** Phase 5 measures the rate and computes the
+budget from it, once, and applies the same answer to both halves.
 
 ### Document size is part of the answer
 
@@ -295,13 +373,19 @@ ssh fts-harness 'set -e
   curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
   . "$HOME/.cargo/env" && rustc --version'
 
-# --- sink box: ftsbench, on python3.12 ---
-# The system python3 is 3.9 and ftsbench.runmeta needs 3.10+ syntax.
-# Use python3.12 explicitly for everything on this box.
-cd <repo>/bench && tar czf - --exclude=__pycache__ ftsbench \
-  | ssh fts-sut 'mkdir -p ~/sink-work && tar xzf - -C ~/sink-work'
-ssh fts-sut 'cd ~/sink-work && python3.12 -c "import ftsbench.null_sink; print(\"ok\")"'
+# --- sink box: nothing but a directory ---
+# engine-mock is a static-enough Rust binary, built on the loader box in the
+# next block and copied here. The SUT no longer needs Python, ftsbench, or a
+# toolchain of its own -- which also keeps its ~4 GB of free root space free
+# (trap 9).
+ssh fts-sut 'mkdir -p ~/sink-work'
 ```
+
+**The mock is built once, on the loader box, and copied.** The two instances are
+the same type, the same architecture and the same AMI, so one build serves both
+and the SUT never gets a toolchain. If that stops being true — a different AMI
+on one box, say — build it on the SUT instead and record which box built it;
+what must not happen is two builds from two trees.
 
 Root volumes differ between the boxes as of **2026-09-11**: the **harness**
 root (`vol-0a789d6c4317a2b7d`) was grown **8 GiB -> 32 GiB** gp3 so the
@@ -312,22 +396,56 @@ belongs on the harness root is `corpus.jsonl.zst` — see Phase 2.
 
 ### Build the harness, then freeze it
 
+`engine-mock` lives at `bench/engine-mock`, beside `build-rate` rather than
+inside it, so it has to be named in the tar or the sink never gets built.
+
 ```bash
-cd <repo>/bench && tar czf - --exclude=target build-rate \
+cd <repo>/bench && tar czf - --exclude=target build-rate engine-mock \
   | ssh fts-harness 'mkdir -p /mnt/nvme/work && tar xzf - -C /mnt/nvme/work'
 
 ssh fts-harness 'cd /mnt/nvme/work/build-rate/scylla && . "$HOME/.cargo/env" \
   && CARGO_TARGET_DIR=/mnt/nvme/work/target cargo build --release --locked'
+
+# the instrument, on its own target dir so neither harness binary is disturbed
+ssh fts-harness 'cd /mnt/nvme/work/engine-mock && . "$HOME/.cargo/env" \
+  && CARGO_TARGET_DIR=/mnt/nvme/work/target-mock cargo build --release --locked'
 ```
+
+Then put it on the sink box and check it runs there before anything depends on
+it:
+
+```bash
+scp fts-harness:/mnt/nvme/work/target-mock/release/engine-mock /tmp/engine-mock
+scp /tmp/engine-mock fts-sut:~/sink-work/engine-mock
+ssh fts-sut 'chmod +x ~/sink-work/engine-mock && ~/sink-work/engine-mock --help | head -3'
+
+ssh fts-harness 'sha256sum /mnt/nvme/work/target-mock/release/engine-mock'
+ssh fts-sut     'sha256sum ~/sink-work/engine-mock'
+```
+
+The two checksums must match. Record both, and the mock's crate commit, into
+`$R/env/` — **the mock's own `--stats-out` JSON will report `git_commit:
+unknown`**, because the tar excludes `.git` and the binary asks git about the
+build-time source directory. That is expected; it is not a broken artifact, and
+the commit has to come from the laptop instead.
 
 Record, into `$R/env/`, **before** measuring:
 
 ```bash
-ssh fts-harness 'cd /mnt/nvme/work/build-rate && find . -type f \
-  \( -name "*.rs" -o -name "Cargo.*" \) | sort | xargs sha256sum | sha256sum'
+# one digest per crate tree: the two harnesses and the instrument
+ssh fts-harness 'for tree in build-rate engine-mock; do
+  printf "%s " "$tree"
+  cd "/mnt/nvme/work/$tree" && find . -type f \
+    \( -name "*.rs" -o -name "Cargo.*" \) | sort | xargs sha256sum | sha256sum
+  cd - >/dev/null
+done'
 git -C <repo>/bench log -1 --format='%H %s'
-git -C <repo>/bench status --short build-rate
+git -C <repo>/bench status --short build-rate engine-mock
 ```
+
+The instrument is frozen for the same reason the harnesses are, and for one
+more: a mid-session rebuild of the sink changes what every arm before it was
+measured against, and nothing in the artifacts would say so.
 
 **Do not rebuild once an arm has run.** The working tree may move under you
 mid-session — it did on 2026-09-10, and `--no-write-coalescing` was removed from
@@ -346,46 +464,87 @@ Also verify the source snapshot carries the flags the matrix wants —
 
 **One sink, because there is one loader process.** The launcher still takes a
 port list — it is what a restored N-process arm would need — but this campaign
-starts a single sink and gives it the box to itself, which also keeps three idle
-Python processes off the SUT's 8 cores while an arm runs.
+starts a single sink and gives it the box to itself, so the mock has all 8 cores
+and `--tokio-workers` is left at its default of every core the box reports.
+
+**The pid comes from `pgrep`, not from `$!`.** The wrapper `setsid … &` records
+exits, and a sampler pointed at its pid finds no `/proc` entry, skips the sink
+every second, and leaves a file that reads as a sink that used no CPU — which
+Phase 8 would classify `ok` on every level. `pgrep -f` is safe **inside a script
+on the box**; from an `ssh` one-liner it matches the ssh command itself, which is
+trap 7 in another costume.
 
 ```bash
 ssh fts-sut 'cat > ~/start-sinks.sh << "EOF"
 #!/bin/bash
-# One sink per loader process; this campaign runs one. A sink is single-threaded
-# and sits behind a single driver connection, so a second loader process would
-# need a second sink on its own port rather than sharing this one.
+# One mock per loader process; this campaign runs one. Each gets its own port
+# and its own vector-store port, so a restored N-process arm needs no other
+# change here.
 cd ~/sink-work
 : > /tmp/sinks.pids
-# Each sink also serves the vector-store index-status endpoint `scyllarate`
-# gates every level on, at CQL port + 7000 so the two never collide.
+# Each mock also serves the vector-store index-status endpoint `scyllarate`
+# gates every level on, at CQL port + 7000 so the two never collide. --mode cql
+# would bring one up on 6080 unasked; the explicit port is what keeps N of them
+# from colliding on it.
 for port in "$@"; do
-    setsid python3.12 -m ftsbench.null_sink \
+    setsid ./engine-mock \
         --mode cql --host 0.0.0.0 --port "$port" \
         --vs-port "$((port + 7000))" \
         --label "harness-$port" --report-interval 30 \
         --stats-out "/tmp/sink-$port.json" \
         < /dev/null > "/tmp/sink-$port.log" 2>&1 &
-    echo "$port $!" >> /tmp/sinks.pids
     disown
+done
+# The pid of the process that is actually serving, not of the wrapper that
+# started it. Wait for the readiness line the mock prints rather than for a
+# fixed sleep, so a mock that failed to bind is an error here and not a sampler
+# file full of nothing.
+# NB: no apostrophes in this script -- it is delivered inside a single-quoted
+# ssh argument, and one would close the quote.
+for port in "$@"; do
+    for _ in $(seq 1 100); do
+        grep -q "engine mock ready" "/tmp/sink-$port.log" && break
+        sleep 0.1
+    done
+    pid=$(pgrep -f "engine-mock --mode cql --host 0.0.0.0 --port $port" | head -1)
+    [ -n "$pid" ] || { echo "no engine-mock on $port -- see /tmp/sink-$port.log" >&2; exit 1; }
+    echo "$port $pid" >> /tmp/sinks.pids
 done
 EOF
 chmod +x ~/start-sinks.sh'
 
 ssh fts-sut '~/start-sinks.sh 9042'
-ssh fts-sut 'cat /tmp/sinks.pids; ss -ltn | grep -E "9042"'
+ssh fts-sut 'cat /tmp/sinks.pids; ss -ltn | grep -E "9042|16042"'
 ```
+
+**Read the readiness line before running anything against it.** The mock prints
+one per endpoint, and it names the ports it actually bound and the worker count
+the gate in Phase 8 is computed from:
+
+```bash
+ssh fts-sut 'grep -h "engine mock ready" /tmp/sink-90*.log'
+# engine mock ready: cql on 0.0.0.0:9042, vector-store wiki/articles_body_fts
+#                    on 0.0.0.0:16042, 8 tokio workers
+```
+
+Record that worker count. `tokio_workers` is also in the `--stats-out` JSON, and
+Phase 8's gate is a fraction of it.
 
 ### Start the CPU samplers — both boxes
 
 These are what make a number defensible. Without them a plateau has no
 attribution and cannot be quoted.
 
+`/proc/<pid>/stat`'s `utime`+`stime` are summed over every thread in the group,
+so the sampler below needs no change to follow a multi-threaded mock — it
+reports the whole process, which is exactly what Phase 8's budget is a fraction
+of. What it does need is a live pid, which is what the `pgrep` above is for.
+
 ```bash
 # --- sink box: per-sink CPU at 1 Hz ---
 ssh fts-sut 'cat > ~/sample-sinks-cpu.sh << "EOF"
 #!/bin/bash
-# 1 Hz CPU per sink: epoch, port, utime+stime ticks.
+# 1 Hz CPU per sink: epoch, port, utime+stime ticks summed over all its threads.
 # APPENDS. Never truncate: the sinks get replaced mid-session and truncating
 # destroys the record for every arm already measured. Sink generations are told
 # apart by the tick counter resetting; a consumer drops negative deltas.
@@ -426,9 +585,10 @@ box's clock line up with samples taken on the other. Check it once:
 
 ### Killing things on these boxes
 
-`pkill -f "ftsbench.null_sink"` from inside an `ssh` one-liner **kills the ssh
+`pkill -f "engine-mock"` from inside an `ssh` one-liner **kills the ssh
 session**, because the wrapper's own command line contains the pattern. Put any
-`pkill` inside a script on the box and run the script.
+`pkill` — and any `pgrep -f`, which matches the same way and would hand back the
+ssh wrapper's pid — inside a script on the box and run the script.
 
 ---
 
@@ -437,6 +597,14 @@ session**, because the wrapper's own command line contains the pattern. Put any
 Synthetic, generated on the loader box. The client does not read the words: its
 per-document cost is a function of size and shape only, so staging the frozen
 enwiki corpus would cost fleet hours and change nothing.
+
+**Generate it with headroom: `2500000`, not `1250000`.** The corpus is the hard
+ceiling on `--max-docs` — `core/src/corpus.rs` opens the file fresh per level
+and stops at EOF, so a budget above the line count quietly produces a *shorter*
+level — and the budget is the one number the swap to `engine-mock` can force up
+(Phase 0). Generating twice as much costs ~12 more minutes once; discovering
+mid-session that the budget cannot be raised costs a regeneration plus every arm
+already measured at the old one.
 
 ```bash
 ssh fts-harness 'cat > ~/gen-corpus.sh << "EOF"
@@ -456,12 +624,12 @@ echo GEN_DONE
 EOF
 chmod +x ~/gen-corpus.sh'
 
-# ftsbench must be on the loader box too, for the generator
+# ftsbench is still needed on the LOADER box, for the corpus generator only
 cd <repo>/bench && tar czf - --exclude=__pycache__ ftsbench \
   | ssh fts-harness 'mkdir -p /mnt/nvme/work/gen && tar xzf - -C /mnt/nvme/work/gen'
 
-ssh fts-harness 'setsid ~/gen-corpus.sh 1250000 3948 0.6 </dev/null >/tmp/gen.log 2>&1 & disown'
-# ~12 min for 1.25 M x 3,948 B (4.9 GB). Poll for GEN_DONE.
+ssh fts-harness 'setsid ~/gen-corpus.sh 2500000 3948 0.6 </dev/null >/tmp/gen.log 2>&1 & disown'
+# ~24 min for 2.5 M x 3,948 B (9.9 GB) on /mnt/nvme. Poll for GEN_DONE.
 ```
 
 Then **warm the page cache once**, so the reps are comparable and the first one
@@ -488,8 +656,10 @@ ssh fts-harness 'cat > ~/run-arm.sh << "SCRIPT"
 # stderr is timestamped per line. The tool announces each level as it starts it,
 # so the log carries the exact wall-clock window of every point and the sink CPU
 # sampler on the other box can be cut to that window rather than to the whole
-# sweep. A point whose sink sat near a full core is the sink ceiling being
-# reported as the client ceiling, which is the one way this instrument lies.
+# sweep. A point whose sink sat at its CPU budget (Phase 8) is the sink ceiling
+# being reported as the client ceiling, which is the one way this instrument
+# lies -- and on this half the budget is ONE core however many the mock has,
+# because one driver connection is one task.
 set -u
 ARM="$1"; shift
 REPS="${REPS:-3}"
@@ -530,11 +700,56 @@ SCRIPT
 chmod +x ~/run-arm.sh'
 ```
 
-Run the default matrix:
+### First, one rep, to size the budgets
+
+`400000` and `1250000` were sized against the Python sink and `engine-mock`
+outruns them (Phase 0). **Run `REPS=1` of each sweep before committing three**,
+read the fastest level's wall clock out of the CSV, and only then fix the budget
+for the campaign:
+
+An `awk` program does not survive an `ssh` one-liner — the remote shell expands
+`$1` before `awk` ever sees it — so this goes in a script on the box like
+everything else here. It serves both halves and gets used again in Phase 6:
 
 ```bash
-ssh fts-harness 'REPS=3 LADDER=4,8,16,32 MAX_DOCS=400000  ~/run-arm.sh default-low'
-ssh fts-harness 'REPS=3 LADDER=32,64,128 MAX_DOCS=1250000 ~/run-arm.sh default-high'
+ssh fts-harness 'cat > ~/level-times.sh << "EOF"
+#!/bin/bash
+# Per point: concurrency (col 1), wall_s (col 4), docs_per_s (col 5).
+# The SHORTEST level is what sizes the budget; the floor is 5 s.
+awk -F, '"'"'!/^#/ && $1!="concurrency" {
+    printf "c=%-5s %7.1fs %11.0f docs/s  %s\n", $1, $4, $5, FILENAME
+}'"'"' "$@" | sort -k2 -n
+EOF
+chmod +x ~/level-times.sh'
+
+ssh fts-harness 'REPS=1 LADDER=4,8,16,32 MAX_DOCS=400000  ~/run-arm.sh calib-low'
+ssh fts-harness 'REPS=1 LADDER=32,64,128 MAX_DOCS=1250000 ~/run-arm.sh calib-high'
+ssh fts-harness '~/level-times.sh /mnt/nvme/work/results/calib-*.csv'
+```
+
+Then, for each sweep, `MAX_DOCS = ceil(fastest level's docs_per_s x 8)` rounded
+up to something legible — 8 s, so the ≥5 s floor survives the spread between
+reps and the faster of the two halves. Three rules on the answer:
+
+- **One number per sweep, shared by both halves.** Part B's rate at `batch=1` is
+  the lower of the two, so run its calibration rep as well (B4) and take the
+  **larger** requirement of the two. A budget applied to one half alone is the
+  thing the shared grid exists to prevent.
+- **It cannot exceed the corpus**, which is why Phase 4 generates 2.5 M. If the
+  arithmetic asks for more, the honest report is "corpus-bound at N documents",
+  not a level quietly run short.
+- **The calibration CSVs are not data.** They are `calib-*` so the matrix's own
+  glob (`default-*`) and the chart commands do not pick them up. Keep them in
+  `$R` anyway — they are how the chosen budget is justified.
+
+### Then the default matrix
+
+Substitute the budgets the calibration produced; `400000`/`1250000` below are
+the pre-swap starting point, not the answer.
+
+```bash
+ssh fts-harness 'REPS=3 LADDER=4,8,16,32 MAX_DOCS=<low>  ~/run-arm.sh default-low'
+ssh fts-harness 'REPS=3 LADDER=32,64,128 MAX_DOCS=<high> ~/run-arm.sh default-high'
 ```
 
 The old `4…512` ladder took 80–100 s per rep; these are shorter, and each
@@ -547,10 +762,20 @@ The campaign runs **one** `scyllarate` process against **one** sink, and that is
 the only shape measured here.
 
 A previous pass ran `nproc1/2/4` — N loader processes, each against its own sink
-on its own port, all at one concurrency — because the sink is single-threaded
-behind one driver connection, so multiplying the instrument was the only way to
-see past one core. It reached ~378,400 docs/s ≈ 1.49 GB/s at 2 processes and
-nothing more at 4.
+on its own port, all at one concurrency — because the Python sink was
+single-threaded behind one driver connection, so multiplying the instrument was
+the only way to see past one core. It reached ~378,400 docs/s ≈ 1.49 GB/s at 2
+processes and nothing more at 4.
+
+**`engine-mock` does not retire that arm, and on this half it barely moves it.**
+The mock spreads across every core it has, but only across *connections*, and
+the driver still opens one: no shard extension is advertised and `system.peers`
+comes back empty (trap 1), so one task answers every insert and about one core
+is still the ceiling on the instrument side. The local port comparison
+(`../engine-mock/README.md`) measures exactly that — 1.13–1.23× on the CQL half
+against 1.8–4.6× on the HTTP half, where reqwest gives each in-flight bulk its
+own socket. The N-process arm remains the only way to see past one connection
+here.
 
 **That number has no consumer.** The engine campaign loads through a single
 process against a single endpoint, and against a real ScyllaDB the sink's
@@ -566,8 +791,9 @@ sufficient while that margin holds. Two things would end that:
 
 - **An engine number within ~2x of the floor.** Then the floor stops settling
   the question and the harness's real ceiling has to be measured — either by
-  making one sink reach more than one core (the `system.peers` route in trap 3,
-  a change to the frozen harness) or by bringing the N-process arm back.
+  making one driver connection reach more than one of the mock's cores (the
+  `system.peers` route in trap 3, a change to the frozen instrument) or by
+  bringing the N-process arm back.
 - **A different document size or box pair.** The floor is 8.2 µs/doc +
   2.3 ns/byte on this instance pair in this AZ; it does not transfer to a
   different corpus line length or a different network path.
@@ -604,7 +830,9 @@ mv $R/scylla/points/*.stderr.tsv $R/scylla/logs/ 2>/dev/null
 ```
 
 Stop the sinks with **SIGTERM** so each writes its `--stats-out` JSON, then take
-those too:
+those too. The mock ends its connection tasks with the runtime rather than
+waiting for them to close, so the JSON is written even if the loader left a
+socket open — but give it the moment it needs to write and rename the file:
 
 ```bash
 ssh fts-sut 'cat > ~/stop-sinks.sh << "EOF"
@@ -612,6 +840,9 @@ ssh fts-sut 'cat > ~/stop-sinks.sh << "EOF"
 pkill -f "sample-sinks-cpu"
 while read -r port pid; do kill -TERM "$pid" 2>/dev/null; done < /tmp/sinks.pids
 sleep 4
+while read -r port pid; do
+    [ -s "/tmp/sink-$port.json" ] || echo "no witness for $port" >&2
+done < /tmp/sinks.pids
 EOF
 chmod +x ~/stop-sinks.sh; setsid ~/stop-sinks.sh </dev/null >/dev/null 2>&1'
 scp 'fts-sut:/tmp/sink-90*.json' $R/scylla/sinks/
@@ -638,6 +869,49 @@ head -2 $R/scylla/logs/box-cpu.tsv; tail -1 $R/scylla/logs/box-cpu.tsv; cat $R/s
 # the analysis reproduces from the downloaded tree alone
 ```
 
+**Then reconcile against the instrument's own witness.** This is the gate the
+Python sink could not offer and it is the cheapest real check in the runbook:
+the mock counted what it accepted, independently of what the loader believes it
+sent.
+
+```bash
+# 1. docs_accepted >= the sum of the CSVs' docs column (col 2).
+#    A shortfall is documents the loader counted and the mock never saw.
+python3 - "$R/scylla" << 'EOF'
+import glob, json, sys, csv, os
+root = sys.argv[1]
+sent = 0
+for path in glob.glob(f"{root}/points/*.csv"):
+    for row in csv.reader(l for l in open(path) if not l.startswith(("#", "concurrency"))):
+        sent += int(row[1])
+seen = sum(json.load(open(p))["docs_accepted"] for p in glob.glob(f"{root}/sinks/*.json"))
+print(f"csv docs={sent}  mock docs_accepted={seen}  delta={seen - sent}")
+EOF
+
+# 2. the CQL mock must have seen NO unexpected route. scyllarate makes no
+#    request this mock does not answer, so anything here is a real divergence.
+python3 -c 'import json,glob,sys; [print(p, json.load(open(p))["unexpected_requests"]) for p in glob.glob(sys.argv[1])]' \
+  "$R/scylla/sinks/*.json"
+# expect: {}
+
+# 3. index_adds_while_absent is 0. Anything else is a loader/mock lifecycle
+#    disagreement -- documents offered while no index existed.
+python3 -c 'import json,glob,sys; [print(p, json.load(open(p))["index_adds_while_absent"]) for p in glob.glob(sys.argv[1])]' \
+  "$R/scylla/sinks/*.json"
+```
+
+A `delta` of 0 is the clean case, and it is reachable: the glob covers the
+calibration CSVs too, so everything pushed at a mock that was not restarted is
+on both sides of the subtraction.
+
+- **Positive** — the mock accepted documents no collected CSV accounts for. A
+  rep that was not copied back, or a run made against the mock outside the arms.
+  Find which; do not wave it through. The same check over
+  `results/harness-aws-runbook-2026-09-15T1740Z` returns `delta=20000`, so a
+  small positive delta is a thing that happens and has never been explained.
+- **Negative** — documents the loader counted and the mock never saw. A real
+  shortfall, and it blocks the run.
+
 Once the boxes stop, `/mnt/nvme` is gone. Anything not copied is lost.
 
 ---
@@ -662,19 +936,50 @@ the next start.
 Per measured point, join the CSV row to what both boxes were doing over **that
 point's own window**, cut from the timestamped stderr log:
 
-- `sink_cores` — busiest sink's CPU out of its one core, median and peak
+- `sink_cores` — the mock's whole-process CPU (all threads), median and peak
 - `box_cores` — loader box CPU out of 8, median and peak
+
+### The sink's CPU budget is not one core any more, and it is not eight either
+
+The Python sink had exactly one core to give, so `0.85` of it was the threshold
+on both halves. `engine-mock` runs a tokio task per connection across
+`tokio_workers` threads, so the budget is **the cores this half can actually
+reach**:
+
+```
+sink_budget_cores = 0.85 x min(tokio_workers, connections the loader held)
+```
+
+| Half | `connections` | Where it comes from | Budget on an 8-core SUT |
+|---|---|---|---|
+| **A** `scyllarate` | **1** | the CSV header's `connections=` — one, because the mock advertises no shard extension and an empty `system.peers` (trap 1) | `0.85` cores |
+| **B** `osrate` | the level's `concurrency` | reqwest's default pool gives every in-flight `_bulk` its own socket | `0.85 x min(8, c)` cores |
+
+Both terms are already in the artifacts: `tokio_workers` is in the mock's
+`--stats-out` JSON and on its readiness line, `connections=` is in the
+`scyllarate` CSV header, and `concurrency` is column 1.
+
+**Neither end of that `min` can be dropped.** Take `0.85 x tokio_workers` alone
+and Part A's gate can never fire — one task cannot use 6.8 cores, so a sink
+pegged on its single connection reads `ok`. Take `0.85` of one core alone and
+Part B's gate fires on every level above `c=2`, which is the state the mock was
+written to escape.
 
 Then classify every level with a **three-state** gate, never pass/fail:
 
 | | meaning |
 |---|---|
-| `ok` | a sink series exists and it stayed under 0.85 of a core |
-| `SINK` | the sink reached ≥0.85 of a core — the level is a **lower bound** on the harness |
+| `ok` | a sink series exists and it stayed under `sink_budget_cores` |
+| `SINK` | the sink reached ≥`sink_budget_cores` — the level is a **lower bound** on the harness |
 | `?` | **no sink series for this level. Not a pass.** |
 
 An unmeasured gate must never render as a passed gate, the same way an
-unmeasured latency is a blank cell and never `0`.
+unmeasured latency is a blank cell and never `0`. **A sink series of all zeros is
+a `?`, not an `ok`** — that is what a sampler pointed at the wrapper pid
+produces, and it is the failure the `pgrep` in Phase 3 exists to prevent.
+
+The reference implementations below encode the old one-core threshold and have
+to be adjusted before they are used.
 
 Reference implementations, ~350 lines total, ready to copy:
 `results/fleet-rust-harness-null-sink-2026-09-10/{summarize,summarize-nproc,aggregate-contended}.py`
@@ -793,40 +1098,75 @@ ssh fts-harness 'cd /mnt/nvme/work/build-rate/opensearch && . "$HOME/.cargo/env"
 Record its provenance into `$R/env/` exactly as in Phase 2, and freeze it for
 the same reason. A separate `CARGO_TARGET_DIR` keeps Part A's binary untouched.
 
+**`engine-mock` is not rebuilt here.** It was built and copied to the SUT in
+Phase 2 and it serves both halves from one binary; the only thing that changes
+between the parts is which mode it is started in.
+
 ## B2 — the HTTP sink
 
 Same launcher, `--mode http`, port 9200. One sink, one `osrate` process. Start
 it **fresh** for Part B and note the time; the CQL sink from Part A can be left
 running or stopped, they are on different ports either way.
 
+**No `--vs-port`, and that is the default doing the right thing.** `--mode cql`
+brings a vector-store endpoint up on 6080 unasked because `scyllarate` gates
+every level on it; `--mode http` brings none up, because there is nothing there
+for `osrate` to read and a fixed default would make the second of N HTTP mocks
+fail to bind. Do not add one.
+
 ```bash
 ssh fts-sut 'cat > ~/start-http-sinks.sh << "EOF"
 #!/bin/bash
-# One HTTP sink per loader process, on 9200+; this campaign runs one. Same
-# one-core-per-sink limit as the CQL side: the sink scans every _bulk body to
-# count its actions, so its cost is per document and it is the first thing to
-# saturate -- at batch=1 especially, which is the only batch size measured.
+# One HTTP mock per loader process, on 9200+; this campaign runs one. Unlike the
+# CQL side this half can use the box: reqwest gives every in-flight _bulk its
+# own socket, so at c=64 the mock answers on 64 tasks across all its workers.
+# It still scans every _bulk body to count its actions, so the cost is per
+# document -- it is just no longer per document ON ONE THREAD.
 cd ~/sink-work
 : > /tmp/sinks.pids
 for port in "$@"; do
-    setsid python3.12 -m ftsbench.null_sink \
+    setsid ./engine-mock \
         --mode http --host 0.0.0.0 --port "$port" \
         --label "osrate-$port" --report-interval 30 \
         --stats-out "/tmp/sink-$port.json" \
         < /dev/null > "/tmp/sink-$port.log" 2>&1 &
-    echo "$port $!" >> /tmp/sinks.pids
     disown
+done
+# Same as the CQL launcher: wait for the readiness line, then read the pid of
+# the process that is serving rather than the pid of the wrapper that started it.
+for port in "$@"; do
+    for _ in $(seq 1 100); do
+        grep -q "engine mock ready" "/tmp/sink-$port.log" && break
+        sleep 0.1
+    done
+    pid=$(pgrep -f "engine-mock --mode http --host 0.0.0.0 --port $port" | head -1)
+    [ -n "$pid" ] || { echo "no engine-mock on $port -- see /tmp/sink-$port.log" >&2; exit 1; }
+    echo "$port $pid" >> /tmp/sinks.pids
 done
 EOF
 chmod +x ~/start-http-sinks.sh'
 
 ssh fts-sut '~/start-http-sinks.sh 9200'
 ssh fts-sut 'cat /tmp/sinks.pids; ss -ltn | grep -E "9200"'
+ssh fts-sut 'grep -h "engine mock ready" /tmp/sink-92*.log'
 ```
 
-The CPU sampler from Phase 3 reads `/tmp/sinks.pids` and needs no change — but
-it appends to the same file, so **record the wall-clock time Part B's sinks
-started** and cut Part B's windows after it.
+The CPU sampler from Phase 3 reads `/tmp/sinks.pids` and needs no change — the
+launcher above rewrites that file with the HTTP mock's pid and the sampler picks
+it up on its next tick. It appends to the same output file, so **record the
+wall-clock time Part B's sinks started** and cut Part B's windows after it.
+
+**Restart the sampler if Phase 6 already stopped it.** `stop-sinks.sh` kills
+`sample-sinks-cpu` along with the mocks, and a Part B measured with no sampler
+is a whole half of `?` in Phase 8's gate — which, on the half where the gate is
+now the only thing between a sink ceiling and a client number, is the run
+failing quietly:
+
+```bash
+ssh fts-sut 'pgrep -f sample-sinks-cpu >/dev/null \
+  || setsid ~/sample-sinks-cpu.sh /tmp/sinks-cpu.tsv </dev/null >/dev/null 2>&1 & disown'
+ssh fts-sut 'sleep 3; tail -3 /tmp/sinks-cpu.tsv'   # the new pid's ticks, rising
+```
 
 ### Part B resets per level, exactly as Part A does
 
@@ -838,38 +1178,53 @@ recreates the index before every level by the same default. Leaving that default
 alone on both halves is what keeps their per-level overhead comparable, which is
 the whole basis on which the two are drawn on one chart.
 
-Against a null sink the reset does not change what is measured — nothing is
-stored, so there is no second level rewriting the first's documents and no
-Lucene update path to fall into. What it changes is the **cost inside the
+Against an accept-and-discard mock the reset does not change what is measured —
+nothing is stored, so there is no second level rewriting the first's documents
+and no Lucene update path to fall into. What it changes is the **cost inside the
 ladder**: a `DELETE`, a `PUT` and two gate polls per level, now paid on both
 sides rather than on one.
 
-**The sink answers all of it.** `ftsbench/null_sink_http.py` serves the index
+**The mock answers all of it.** `engine-mock --mode http` serves the index
 lifecycle (`PUT`/`DELETE` on an index path), `HEAD` presence for the first reset
 gate, and `_count`/`_stats` with the 404-when-absent and 503-while-unallocated
-answers the second gate reads — the two states its own docstring names as "the
-two states `osrate`'s reset gates exist to tell apart". An earlier revision of
-this runbook said the sink could not answer a reset run; that is no longer true
-and was the reason `--no-reset` was passed.
+answers the second gate reads — the two states `osrate`'s reset gates exist to
+tell apart, modelled on one index shared with the CQL half. An earlier revision
+of this runbook said the sink could not answer a reset run; that is no longer
+true and was the reason `--no-reset` was passed.
 
 **One probe still has to be suppressed.** A reset run sends `_analyze` once
 before the first document to verify the analyzer, and that is the one route the
-sink does not answer — it 404s, and unlike the header fields it does not degrade,
-it fails the run. It is not bound to the reset: `checks_analyzer()` is
+mock does not answer — it 404s, and unlike the header fields it does not degrade,
+it fails the run. `engine-mock` refuses it deliberately and **records it**, so
+`POST /<index>/_analyze` appearing in `unexpected_requests` is precisely the
+signal that this flag was dropped. It is not bound to the reset: `checks_analyzer()` is
 `resets() && !no_analyzer_check` (`opensearch/src/cli.rs`), so
 `run-os-arm.sh` passes **`--no-analyzer-check`** and nothing else. `RESET_FLAGS`
 overrides it for a run against a real OpenSearch, where the analyzer check is
 exactly what you want and the flag should be empty.
 
-### The header will say `unknown`, and that is correct
+### The header will say `unknown`, and that is correct — and now it is checkable
 
 `osrate` reads index settings, mappings and the node thread pool for its header.
-The sink answers the index lifecycle, `HEAD`, `_count`/`_stats`, `_refresh`,
-`GET /` and `_bulk`, but not `GET /<index>/_settings`. The crate falls back to `unknown` per field by
+The mock answers the index lifecycle, `HEAD`, `_count`/`_stats`, `_refresh`,
+`GET /` and `_bulk`, but not `GET /<index>/_settings` and not
+`GET /<index>/_mapping`. The crate falls back to `unknown` per field by
 design rather than failing the run. So expect `index_shards=unknown`,
-`refresh_interval=unknown`, `write_pool=unknown`. **That is the sink being
+`refresh_interval=unknown`, `write_pool=unknown`. **That is the mock being
 honest, not a fault — do not report it as one, and do not "fix" it by pointing
 the run at a real OpenSearch.**
+
+Refusing those two routes is a **gate**, not a gap: the mock records every route
+it refuses, so a correct Part B run leaves `unexpected_requests` containing
+exactly
+
+```
+GET /<index>/_settings
+GET /<index>/_mapping
+```
+
+and nothing else. Anything more is a setup call that changed; anything less is a
+header read-back that stopped arriving. B5 checks it.
 
 ## B3 — memory, before you launch anything
 
@@ -922,8 +1277,10 @@ Locates the knee, and is the direct counterpart of Part A's ladder. It is the
 ssh fts-harness 'cat > ~/run-os-arm.sh << "SCRIPT"
 #!/bin/bash
 # One osrate arm: a concurrency ladder at ONE batch size, N times, against the
-# HTTP sink on fts-sut. stderr is timestamped per line so each point's window
-# can be cut out of the CPU samplers, exactly as on the ScyllaDB side.
+# HTTP mock on fts-sut. stderr is timestamped per line so the window of each
+# point can be cut out of the CPU samplers, exactly as on the ScyllaDB side.
+# NB: no apostrophes in this script -- it is delivered inside a single-quoted
+# ssh argument, and one would close the quote.
 set -u
 ARM="$1"; shift
 REPS="${REPS:-3}"
@@ -963,12 +1320,41 @@ for rep in $(seq 1 "$REPS"); do
 done
 SCRIPT
 chmod +x ~/run-os-arm.sh'
-
-ssh fts-harness 'REPS=3 BATCH=1 LADDER=4,8,16,32 MAX_DOCS=400000  ~/run-os-arm.sh os-conc-low'
-ssh fts-harness 'REPS=3 BATCH=1 LADDER=32,64,128 MAX_DOCS=1250000 ~/run-os-arm.sh os-conc-high'
 ```
 
-**The budgets are Part A's, deliberately: `400000` low and `1250000` high.**
+**Calibrate first, exactly as Part A does — but expect Part A to set the
+number.** The budget has to make the *fastest* level reach 5 s, so the faster
+half is the one that needs the bigger budget, and at `batch=1` that is Part A. A
+budget that satisfies Part A satisfies this half automatically; its levels
+simply run longer. What Part B's calibration is for is the **other** end: it
+says what the shared budget costs in wall time here, which is the session's
+largest single line item.
+
+Grounding, from the last fleet pass at the old budgets: Part B's `c=128` ran
+**21.5 s** at `1250000` while Part A's ran **5.8 s** at the same budget. Raise
+the budget for Part A's sake and this half pays about four times the increase —
+less, by however much `engine-mock` speeds it up, which is the quantity nobody
+has measured on the fleet yet.
+
+Run `REPS=1` of each sweep, then take the **larger** of the two halves'
+requirements as the budget for both:
+
+```bash
+ssh fts-harness 'REPS=1 BATCH=1 LADDER=4,8,16,32 MAX_DOCS=400000  ~/run-os-arm.sh calib-os-low'
+ssh fts-harness 'REPS=1 BATCH=1 LADDER=32,64,128 MAX_DOCS=1250000 ~/run-os-arm.sh calib-os-high'
+ssh fts-harness '~/level-times.sh /mnt/nvme/work/results-os/calib-os-*.csv'
+```
+
+Then the measuring arms, at the budgets the calibration fixed:
+
+```bash
+ssh fts-harness 'REPS=3 BATCH=1 LADDER=4,8,16,32 MAX_DOCS=<low>  ~/run-os-arm.sh os-conc-low'
+ssh fts-harness 'REPS=3 BATCH=1 LADDER=32,64,128 MAX_DOCS=<high> ~/run-os-arm.sh os-conc-high'
+```
+
+**The budgets are Part A's, deliberately — `400000` low and `1250000` high were
+the pre-swap pair, and whatever the calibration replaces them with is shared the
+same way.**
 A point's `--max-docs` is how many documents that level pushed, so two halves on
 different budgets compare a `scyllarate` point measured over 1.25 M documents
 against an `osrate` point measured over 300 k — different amounts of the corpus,
@@ -996,8 +1382,9 @@ ssh fts-harness 'REPS=3 BATCH=1 LADDER=8,16,32 MAX_DOCS=400000 \
 ```
 
 Read its `index_docs_per_s` with the refresh caveats under "The growth chart"
-below — on this half that column is gated by `refresh_interval`, and against the
-null sink it is gated by `--os-refresh-interval-ms`.
+below — on this half that column is gated by `refresh_interval`, and against
+`engine-mock` it is gated by `--os-refresh-interval-ms`, which these arms leave
+at its default of 0 (publish immediately).
 
 ### There is no batch sweep — `batch=1` only
 
@@ -1076,32 +1463,65 @@ awk -F, '!/^#/ && $1!="concurrency" && $4+0<3 \
   $R/opensearch/points/*.csv
 ```
 
+And the instrument's own witness, as in Phase 6 — with one addition this half
+has that Part A does not:
+
+```bash
+# the HTTP mock must have seen EXACTLY the two header read-backs it refuses.
+# More is a setup call that changed; less is one that stopped arriving;
+# "POST /<index>/_analyze" means --no-analyzer-check was dropped (B2).
+python3 - "$R/opensearch/sinks" << 'EOF'
+import glob, json, sys
+expected = {"GET /wiki-articles/_settings", "GET /wiki-articles/_mapping"}
+for path in glob.glob(f"{sys.argv[1]}/*.json"):
+    seen = set(json.load(open(path))["unexpected_requests"])
+    verdict = "OK" if seen == expected else "BLAD"
+    print(f"  {verdict} {path}: extra={sorted(seen - expected)} missing={sorted(expected - seen)}")
+EOF
+
+# and docs_accepted against the CSVs, as in Phase 6
+```
+
+Substitute the real index name if `INDEX` was changed from `wiki-articles`.
+
 ---
 
 ## Traps, all of them met in practice
 
-1. **One sink is one core, and that is the wall.** The sink advertises neither
-   the shard extension nor a populated `system.peers`, so the driver opens
-   **one** connection (`connections=1`, `shard_aware=false` in every header) and
-   all traffic funnels into one Python process. It costs ~3.6 µs of CPU per
-   insert, so it saturates near 230–280k inserts/s — which this harness reaches
-   on its own. **The single-process plateau is the sink's number, not the
-   harness's.** Check `sink_cores` before quoting anything.
+1. **One connection is one task, and on the CQL half that is still the wall.**
+   The mock advertises neither the shard extension nor a populated
+   `system.peers`, so the driver opens **one** connection (`connections=1`,
+   `shard_aware=false` in every header). `engine-mock` spreads across cores by
+   *connection*, so one connection reaches one of them however many
+   `tokio_workers` it was given. What changed against the Python sink is the
+   cost per insert, not the number of cores this half can use — measured at
+   1.13–1.23× (`../engine-mock/README.md`), not 4×. **A Part A plateau is still
+   the instrument's until `sink_cores` says otherwise**, and the threshold it is
+   checked against is `0.85` of ONE core (Phase 8), not of eight.
 
-2. **The sink degrades as it runs.** The same ladder, same box, same corpus,
-   13 minutes later: plateau down from ~227k to ~198k docs/s at unchanged sink
-   CPU. Restart the sinks between arms whose numbers will be compared, and note
-   in the write-up when each arm's sinks were started.
+   *On the HTTP half this trap is retired:* reqwest opens a socket per in-flight
+   bulk, so the mock answers on `c` tasks across every worker.
 
-3. **There is no single-process window where the harness's own ceiling shows.**
-   `c=4…8` is bounded by RTT (`in-flight / 0.133 ms`), `c≥96` by the sink, and
-   the middle is a transition. A hard single-process ceiling needs the sink
-   changed so one driver connection can reach more than one core — advertising
-   the sibling sinks in `system.peers` is the obvious route. **Not done, and
-   deliberately so**: the campaign needs a floor, not a ceiling, and the
-   single-process figure is that floor. It is a lower bound and must be written
-   `≥`. Revisit only when an engine number comes within ~2x of it — the change
-   is to the frozen harness and needs a decision, not a drive-by patch.
+2. **The Python sink degraded as it ran.** The same ladder, same box, same
+   corpus, 13 minutes later: plateau down from ~227k to ~198k docs/s at
+   unchanged sink CPU. **Whether `engine-mock` does this is unmeasured** — it
+   allocates nothing on the per-document path, which is the likeliest cause
+   ruled out, but no session has checked. Keep the hygiene either way: restart
+   the mock between arms whose numbers will be compared, note when each arm's
+   mock was started, and — since the mock's `docs_accepted` is cumulative across
+   an arm — restarting is also what keeps the Phase 6 reconciliation readable.
+
+3. **There is no single-process window where the harness's own ceiling shows on
+   the CQL half.** `c=4…8` is bounded by RTT (`in-flight / 0.142 ms`), the top
+   of the ladder by the one connection's one task, and the middle is a
+   transition. A hard single-process ceiling needs the mock changed so one
+   driver connection can reach more than one core — advertising the sibling
+   mocks in `system.peers` is the obvious route, and `engine-mock` answers
+   `system.peers` from a real column set, so it is a smaller change than it was.
+   **Not done, and deliberately so**: the campaign needs a floor, not a ceiling.
+   It is a lower bound and must be written `≥`. Revisit only when an engine
+   number comes within ~2x of it — the change is to the frozen instrument and
+   needs a decision, not a drive-by patch.
 
 4. **Do not skip `c=4` and `c=8`.** They are cheap, they are what the crate's own
    usage line documents, and they are the only levels where the sink is far from
@@ -1123,8 +1543,10 @@ awk -F, '!/^#/ && $1!="concurrency" && $4+0<3 \
 7. **`pkill -f` inside an ssh one-liner kills the ssh session.** Put it in a
    script on the box.
 
-8. **The system `python3` on both boxes is 3.9 and cannot import `ftsbench`.**
-   Use `python3.12`.
+8. **The system `python3` on the loader box is 3.9 and cannot import
+   `ftsbench`.** Use `python3.12` for the corpus generator. The **SUT** no
+   longer runs Python at all — `engine-mock` replaced `ftsbench.null_sink`, so
+   nothing on that box needs a Python, an ftsbench or a toolchain.
 
 9. **Root volume free space is asymmetric since 2026-09-11.** The harness
    root is 32 GiB (holds `corpus.jsonl.zst`, ~10.2 GB); the SUT root is still
@@ -1176,11 +1598,17 @@ awk -F, '!/^#/ && $1!="concurrency" && $4+0<3 \
     per level, and dropping one half's reset is what would make the two
     incomparable.
 
-16. **The HTTP sink saturates earlier than the CQL one at small batches**, since
-    it pays a full request parse per document there. `batch=1` — the only level
-    this campaign runs — should be expected to come back sink-bound, and it is
-    quoted as a lower bound. That is the deliverable, not a failure: compare it
-    against the engine number and say the sink pegged.
+16. **The HTTP mock still pays a full request parse per document at
+    `batch=1` — but no longer on one thread.** Against `ftsbench.null_sink` that
+    made `batch=1` sink-bound by construction and every plateau a lower bound.
+    Against `engine-mock` the parse is spread across a task per socket and costs
+    roughly half as much per document, which is why the local port comparison
+    shows this half gaining 1.8–4.6× while the CQL half gains ~1.2×. **So do not
+    assume this half is sink-bound any more — check `sink_cores` against
+    `0.85 x min(tokio_workers, c)` and let the gate say.** An `ok` here is the
+    first real client number Part B has produced, and it is also the one result
+    most likely to overturn what was recorded before: the 3.5× CQL-vs-HTTP gap
+    from the Python-sink fleet pass is a gap between two sinks, not two clients.
 
 ---
 
@@ -1190,12 +1618,28 @@ Two `i8g.2xlarge` on-demand in `eu-north-1`.
 
 | | wall |
 |---|---|
-| bring-up, toolchain, both builds | ~18 min |
-| corpus generation (once, serves both parts) | ~12 min |
+| bring-up, toolchain, both harness builds | ~18 min |
+| `engine-mock` build + copy to the SUT | ~3 min |
+| corpus generation (once, serves both parts, now 2.5 M) | ~24 min |
+| calibration reps (`REPS=1` per sweep, both halves) | ~5 min |
 | Part A measurement (two sweeps, N=3, one process) | ~10 min |
 | Part B: one concurrency ladder at `batch=1`, N=3, reset per level | ~20-25 min |
 | collect, verify, stop | ~5 min |
-| **both parts, one session** | **~1 h 30 min – 1 h 50 min** |
+| **both parts, one session** | **~1 h 45 min – 2 h 10 min** |
+
+**Three rows are new or changed, and all three are the cost of the instrument
+swap.** The mock's build is ~3 min of `cargo build --release` for a small crate
+on 8 Graviton4 cores (untimed on the fleet). The corpus doubled because the
+budget's ceiling is the corpus and the faster client may need a bigger budget
+(Phase 0). The calibration reps are what stop a whole N=3 sweep being paid for
+at a budget that turns out to be too small — they are cheaper than the sweep
+they protect, and they are the only way to size a budget without guessing.
+
+The two measurement rows may well come **down** against these estimates: the
+instrument getting out of the way makes the client faster, and a faster client
+spends the same document budget sooner. Whether that happens depends on what the
+calibration picks, which is the point of running it. **Time the real numbers and
+write them here.**
 
 Both measurement rows are estimates until a session times them. They are well
 below what the same rows used to say, for three reasons that all landed at once:
@@ -1228,9 +1672,16 @@ Cutting the corpus (fewer documents, or 400 B lines) is the other lever.
 
 ## Recorded results
 
-| Run | What it established |
-|---|---|
-| `results/fleet-rust-harness-null-sink-2026-09-10` | single-process default ≥266,578 docs/s (sink-bound); aggregate ceiling ~378,400 docs/s ≈ 1.49 GB/s at 3,948 B, reached at 2 processes; ~756,700 docs/s at 400 B; cost model 8.2 µs/doc + 2.3 ns/byte. Missing `c=4`/`c=8`. |
+**Everything in this table was measured against `ftsbench.null_sink`.** It is
+provenance, not a baseline: the instrument has changed, and a run against
+`engine-mock` does not compare against any of it point for point. The cost model
+is the one line that survives, because it describes the *loader* rather than the
+instrument.
+
+| Run | Instrument | What it established |
+|---|---|---|
+| `results/fleet-rust-harness-null-sink-2026-09-10` | `ftsbench.null_sink` | single-process default ≥266,578 docs/s (sink-bound); aggregate ceiling ~378,400 docs/s ≈ 1.49 GB/s at 3,948 B, reached at 2 processes; ~756,700 docs/s at 400 B; cost model 8.2 µs/doc + 2.3 ns/byte. Missing `c=4`/`c=8`. |
+| `results/harness-aws-runbook-2026-09-15T1740Z` | `ftsbench.null_sink` | `scyllarate` ≥214,139 vs `osrate batch=1` ≥61,124 docs/s — a 3.5× gap its own write-up hedged as "sink-bound at every level but one". **Do not quote that gap.** Its `osrate` curve is flat — 61,124 at `c=32`, 60,280 at `c=64`, 58,256 at `c=128`, *falling* as concurrency quadruples — which is a saturated single thread, not a client ceiling. A local run against `engine-mock` put `osrate` at 58/83/87% of `scyllarate` across `c=4/8/16` and still converging. Re-measuring it is what this campaign is for. |
 
 # The charts — run these last, after the boxes are stopped
 
@@ -1248,14 +1699,20 @@ an ssh, something was not collected and Phase 6's gate was skipped.
 **X is concurrency, Y is docs/s, and every harness-and-batch combination is a
 series on it.**
 
+**Pass `--title` explicitly.** Both renderers default to a title naming "the
+null sink", which on these artifacts would credit the Python sink for a run it
+did not serve. The globs also have to exclude the calibration reps — `default-*`
+and `os-conc-*` do that; `os-*` would not.
+
 ```
 .venv/bin/python3 tools/plot_harness_grid.py \
     --keep-warmup \
     --scylla     "$R/scylla/points/default-*-rep*.csv" \
-    --opensearch "$R/opensearch/points/os-*-rep*.csv" \
+    --opensearch "$R/opensearch/points/os-conc-*-rep*.csv" \
     --output     "$R/harness-grid.png" \
     --table      "$R/harness-grid.csv" \
-    --subtitle   "$RUN_ID · i8g.2xlarge · null sink · N=3"
+    --title      "Harness submit rate against engine-mock" \
+    --subtitle   "$RUN_ID · i8g.2xlarge · engine-mock · N=3"
 ```
 
 Two series off the default matrix:
@@ -1301,7 +1758,8 @@ The footer states this on the image, and it is the one thing to get right:
 - **`batch=1` is the only level where the two x axes are the same shape**, and
   therefore the only place a `scyllarate`-vs-`osrate` gap is about the clients
   rather than about framing.
-- **Nothing on it is an engine number.** Null sink only.
+- **Nothing on it is an engine number.** `engine-mock` only — it answers the
+  wire and stores nothing.
 - A point is the **median** of its repetitions; the bar is min..max.
 - Every ladder row is a measured point: the ladders carry no throwaway first
   level, which is why the render passes `--keep-warmup`.
@@ -1309,10 +1767,14 @@ The footer states this on the image, and it is the one thing to get right:
 ## Read it in this order
 
 1. **Sink CPU first, then the curve.** Cross-check every plateau against
-   `SUMMARY.txt` / the sink columns: a series that flattened with its sink at
-   ≥0.85 of a core flattened on the *instrument*. On the 2026-09-10 pass every
-   `scyllarate` point above c≈96 was in that state. Such a plateau is a **lower
-   bound** and must be described as `≥`, whatever the chart looks like.
+   `SUMMARY.txt` / the sink columns: a series that flattened with its sink at or
+   above `0.85 x min(tokio_workers, connections)` flattened on the *instrument*.
+   That denominator is **one core on the `scyllarate` series and `min(8, c)` on
+   the `osrate` one** — Phase 8 — and using the wrong one makes the ScyllaDB
+   line's gate unfireable or the OpenSearch line's gate permanent. On the
+   2026-09-10 pass, against the Python sink, every `scyllarate` point above
+   c≈96 was in that state. Such a plateau is a **lower bound** and must be
+   described as `≥`, whatever the chart looks like.
 2. **Then the batch spacing.** The gap between adjacent batch series is what
    bulking bought. If `batch=128`, `256`, `512` and `1024` lie on top of each
    other, that is the result: bulking buys nothing past ~128 for this client on
@@ -1324,21 +1786,34 @@ The footer states this on the image, and it is the one thing to get right:
 
 ## Expect to be surprised in one specific way
 
-**`batch=1` is the level most likely to be measuring the sink, and it is now
-the only level there is.** The HTTP sink scans every bulk body to count its
-actions, so its cost is per *request* — and at one document per request Part B
-pays that cost in full on every document. The batch fan used to expose this by
-contrast; with one level, a plateau has nothing to be compared against.
+**The surprise has moved halves.** Against `ftsbench.null_sink`, `batch=1` was
+the level most likely to be measuring the instrument: one asyncio thread scanned
+every bulk body to count its actions, so the cost was per *request* and at one
+document per request Part B paid it in full on every document, on one core.
+Against `engine-mock` the same parse runs on a task per socket, and the local
+port comparison puts this half 1.8–4.6× ahead as a result.
 
-So on this half, treat a plateau as the instrument's until proven otherwise:
+So the expectation inverts, and **Part A is now the half more likely to be
+reporting the instrument**: one driver connection is one task, so the CQL mock
+has about one core to give however many workers it was started with, while the
+HTTP mock has all of them.
 
-- **Sink CPU is the primary evidence.** Cut the sampler to each level's window.
-  A level whose sink sat at ≥0.85 of a core is a **lower bound** on the client
-  and must be written `≥`, not reported as a ceiling.
-- **Nothing here breaks the tie, and nothing needs to.** Seeing past one sink's
-  one core would take N processes on N sinks, which this campaign does not run.
-  A flattened level is reported `≥` and compared against the engine number; it
-  only becomes a problem if an engine number approaches it.
+- **Sink CPU is still the primary evidence, and now it needs the right
+  denominator.** Cut the sampler to each level's window and compare against
+  `0.85 x min(tokio_workers, connections)` — one core on Part A, `min(8, c)` on
+  Part B (Phase 8). Using eight cores as Part A's denominator is a gate that
+  cannot fire; using one as Part B's is a gate that always does.
+- **Nothing here breaks the tie on the CQL half, and nothing needs to.** Seeing
+  past one connection's one task would take N processes on N mocks, which this
+  campaign does not run. A flattened level is reported `≥` and compared against
+  the engine number; it only becomes a problem if an engine number approaches
+  it.
+- **Expect the recorded CQL-vs-HTTP gap to shrink, possibly a lot.** The
+  Python-sink fleet pass recorded 3.5× and hedged it as a comparison of two
+  sinks; a local `engine-mock` run had `osrate` at 58/83/87% of `scyllarate`
+  across `c=4/8/16` and still converging. If this campaign reproduces that, the
+  finding is that the gap was the instrument — **report it, do not reconcile it
+  with the old number.**
 - **Some of the per-request cost is the harness's own.** A worker builds its
   NDJSON before it posts and the clock starts before the encode, deliberately.
   That serialization is the honest answer to "what does the harness do" — not an
@@ -1362,7 +1837,8 @@ below; for Part B pass `--samples "$R/opensearch/samples/*/c*.csv"` and its own
     --samples  "$R/scylla/samples/default-high-rep*/c*.csv" \
     --output   "$R/build-growth.png" \
     --table    "$R/build-growth.csv" \
-    --subtitle "$RUN_ID · i8g.2xlarge · null sink · N=3"
+    --title    "Build rate as the index grows (harness, engine-mock)" \
+    --subtitle "$RUN_ID · i8g.2xlarge · engine-mock · N=3"
 ```
 
 One glob covering both is mechanically fine — the series carry their batch size
@@ -1383,11 +1859,11 @@ chart that answers questions the grid cannot:
   skipped by name — which is the same signal as the grid's short-point warning,
   read from the other side.
 
-Against the CQL null sink both series move together by construction: the sink
-counts a document into its modelled index as it accepts it, so the two lines lie
-on top of each other and any gap between them is the harness's own. **That is
-the point of running it here** — it is the zero reading the engine campaign's
-version of this chart is read against.
+Against `engine-mock --mode cql` both series move together by construction: the
+mock counts a document into its modelled index as it accepts it, so the two
+lines lie on top of each other and any gap between them is the harness's own.
+**That is the point of running it here** — it is the zero reading the engine
+campaign's version of this chart is read against.
 
 **On the OpenSearch half they do not, and that is not the harness.** A searchable
 count only advances when the index refreshes, so `docs_indexed` climbs in steps
@@ -1410,10 +1886,11 @@ numbers:
   policy would have delivered — at `refresh_interval: -1`, nothing.
   `--no-index-final-refresh` turns it off and the level reports the policy.
 
-The null sink can produce all of this: `--os-refresh-interval-ms 3000` models a
-3s refresh, and `=-1` models an index that never publishes on a timer. Its
-default of 0 publishes immediately, which is the behaviour every recorded run
-measured.
+`engine-mock` can produce all of this, under the same flag names the Python sink
+used: `--os-refresh-interval-ms 3000` models a 3s refresh, and `=-1` models an
+index that never publishes on a timer. Its default of 0 publishes immediately,
+which is the behaviour every recorded run measured — and the arms here leave it
+at the default.
 
 ## Then write it down
 
