@@ -73,3 +73,18 @@ def test_both_halves_keep_their_own_line_when_both_globs_are_given():
     osrate = GRID.series_of(a_row(batch_size="1", engine="opensearch"),
                             GRID.OPENSEARCH_ENGINE)
     assert scylla != osrate
+
+
+def test_footer_says_the_warmup_row_was_kept_when_it_was_kept():
+    """The footer is the one thing the runbook says to get right, and every
+    chart command in HARNESS-AWS-RUNBOOK.md passes --keep-warmup because those
+    ladders carry no throwaway first level. A hardcoded "dropped" sentence tells
+    the reader c=4 is missing when c=4 is plotted."""
+    kept = " ".join(GRID.footer_lines({}, [], keep_warmup=True))
+    assert "warm-up row is dropped" not in kept
+    assert "Every ladder row is a measured point" in kept
+
+
+def test_footer_still_says_dropped_when_the_row_was_dropped():
+    dropped = " ".join(GRID.footer_lines({}, [], keep_warmup=False))
+    assert "leading warm-up row is dropped" in dropped

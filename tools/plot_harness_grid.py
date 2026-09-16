@@ -142,16 +142,24 @@ def draw_series(axes, name: str, levels: dict[int, dict], colour, marker) -> tup
     return (xs[-1], ys[-1], name, colour)
 
 
-def footer_lines(table: dict[str, dict[int, dict]], short: list[str]) -> list[str]:
+def warmup_sentence(keep_warmup: bool) -> str:
+    if keep_warmup:
+        return ("Every ladder row is a measured point: the ladder carries no "
+                "throwaway first level.")
+    return "The ladder's leading warm-up row is dropped."
+
+
+def footer_lines(table: dict[str, dict[int, dict]], short: list[str],
+                 keep_warmup: bool = False) -> list[str]:
     lines = [
         "x is a CLIENT knob and does not mean the same thing on both engines: one "
         "scyllarate unit is one in-flight prepared INSERT carrying ONE document, "
         "one osrate unit is one in-flight _bulk carrying batch_size of them.",
         "Documents in flight is concurrency x batch_size. batch=1 is the only "
         "level where the two engines' x axes are the same shape.",
-        "Point is the median of the repetitions, bar is min..max. The ladder's "
-        "leading warm-up row is dropped. Null sink only - no engine ran, so no "
-        "number here is an engine number.",
+        "Point is the median of the repetitions, bar is min..max. "
+        + warmup_sentence(keep_warmup)
+        + " Null sink only - no engine ran, so no number here is an engine number.",
     ]
     if short:
         shown = "; ".join(short[:6])
@@ -228,7 +236,7 @@ def main() -> int:
     axes.legend(fontsize=8, ncol=2, loc="upper left", framealpha=0.9)
     label_right_edge(axes, ends)
     figure.subplots_adjust(right=0.78, bottom=0.30)
-    draw_footer(figure, footer_lines(table, short_points(table)))
+    draw_footer(figure, footer_lines(table, short_points(table), args.keep_warmup))
     figure.savefig(args.output)
     print(f"wrote {args.output}")
     if args.table:
