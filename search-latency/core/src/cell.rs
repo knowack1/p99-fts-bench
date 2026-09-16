@@ -37,6 +37,20 @@ pub struct CellSettings {
     pub duration: Duration,
 }
 
+/// One request's timing: when it started, relative to the cell's own clock,
+/// and how long it took.
+///
+/// The elapsed side is what lets a reader recover the time series after the
+/// samples have been sorted by latency for percentiles — sort a copy of these
+/// by `elapsed_s` instead of `latency_ms` and the arrival order comes back,
+/// including across concurrent workers, which plain append order cannot give
+/// back once more than one worker is in flight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sample {
+    pub elapsed_s: f64,
+    pub latency_ms: f64,
+}
+
 /// What the workers of one cell counted, merged.
 #[derive(Debug, Default)]
 pub struct Counters {
@@ -44,7 +58,7 @@ pub struct Counters {
     pub errors: u64,
     pub hits: u64,
     pub zero_hit_queries: u64,
-    pub latencies_ms: Vec<f64>,
+    pub samples: Vec<Sample>,
     first_error: Option<(Instant, String)>,
 }
 
@@ -53,13 +67,16 @@ impl Counters {
     /// hits is a real answer and a real cost. It is counted separately instead,
     /// because a class that matches nothing is timing an empty result set and
     /// the cell has to be able to say so.
-    pub fn record(&mut self, found: Found, latency_ms: f64) {
+    pub fn record(&mut self, found: Found, elapsed_s: f64, latency_ms: f64) {
         self.queries += 1;
         self.hits += found.hits as u64;
         if found.is_empty() {
             self.zero_hit_queries += 1;
         }
-        self.latencies_ms.push(latency_ms);
+        self.samples.push(Sample {
+            elapsed_s,
+            latency_ms,
+        });
     }
 
     /// A request that failed contributes no latency. Its time was spent on
@@ -81,7 +98,7 @@ impl Counters {
         self.errors += other.errors;
         self.hits += other.hits;
         self.zero_hit_queries += other.zero_hit_queries;
-        self.latencies_ms.extend(other.latencies_ms);
+        self.samples.extend(other.samples);
         if let Some((at, text)) = other.first_error {
             self.remember_first_error(at, text);
         }
@@ -103,15 +120,18 @@ pub struct Measured {
 
 impl Measured {
     /// Sorted once, because the percentiles and the optional per-cell dump are
-    /// the same values seen twice.
+    /// the same values seen twice. Sorted by `latency_ms`, same as before —
+    /// each `Sample` still carries its own `elapsed_s`, so a consumer wanting
+    /// the time series instead re-sorts by that field rather than losing it.
     pub fn into_report(
         self,
         shape: &Shape,
         class: &QueryClass,
         concurrency: usize,
-    ) -> (CellResult, Vec<f64>) {
-        let mut latencies = self.counters.latencies_ms;
-        latencies.sort_by(f64::total_cmp);
+    ) -> (CellResult, Vec<Sample>) {
+        let mut samples = self.counters.samples;
+        samples.sort_by(|a, b| a.latency_ms.total_cmp(&b.latency_ms));
+        let latencies: Vec<f64> = samples.iter().map(|sample| sample.latency_ms).collect();
         let result = CellResult::new(
             shape,
             concurrency,
@@ -125,7 +145,7 @@ impl Measured {
             },
             &latencies,
         );
-        (result, latencies)
+        (result, samples)
     }
 }
 
@@ -184,12 +204,14 @@ async fn drive(
     window: Duration,
 ) -> Result<Counters> {
     let rotation = Arc::new(class.rotation());
-    let deadline = Instant::now() + window;
+    let cell_started = Instant::now();
+    let deadline = cell_started + window;
     let mut workers = JoinSet::new();
     for _ in 0..concurrency {
         workers.spawn(ask_until(
             Arc::clone(searcher),
             Arc::clone(&rotation),
+            cell_started,
             deadline,
         ));
     }
@@ -203,19 +225,40 @@ async fn drive(
 async fn ask_until(
     searcher: Arc<dyn Searcher>,
     rotation: Arc<Rotation>,
+    cell_started: Instant,
     deadline: Instant,
 ) -> Counters {
     let mut counters = Counters::default();
     while Instant::now() < deadline {
-        ask_once(searcher.as_ref(), rotation.next(), &mut counters).await;
+        ask_once(
+            searcher.as_ref(),
+            rotation.next(),
+            cell_started,
+            &mut counters,
+        )
+        .await;
     }
     counters
 }
 
-async fn ask_once(searcher: &dyn Searcher, query: &str, counters: &mut Counters) {
+/// `elapsed_s` is measured from when this request left the worker, which is
+/// what makes it comparable across workers: every worker shares the same
+/// `cell_started`, so the samples can be re-sorted into one arrival-order
+/// timeline for the whole cell even though the workers ran concurrently and
+/// `merge` does not interleave them itself.
+async fn ask_once(
+    searcher: &dyn Searcher,
+    query: &str,
+    cell_started: Instant,
+    counters: &mut Counters,
+) {
     let started = Instant::now();
     match searcher.search(query).await {
-        Ok(found) => counters.record(found, started.elapsed().as_secs_f64() * 1000.0),
+        Ok(found) => counters.record(
+            found,
+            started.duration_since(cell_started).as_secs_f64(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        ),
         Err(exc) => counters.record_failure(exc),
     }
 }

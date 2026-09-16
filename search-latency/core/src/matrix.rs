@@ -18,7 +18,7 @@ use build_rate_core::notes::Notes;
 use build_rate_core::report::latency_text;
 use build_rate_core::sweep::Cancel;
 
-use crate::cell::{measure_cell, CellSettings, Measured};
+use crate::cell::{measure_cell, CellSettings, Measured, Sample};
 use crate::latencies::LatencyFiles;
 use crate::queries::QueryClass;
 use crate::report::{CellResult, Shape};
@@ -92,8 +92,8 @@ async fn run_cell(runner: &Runner<'_>, cell: &Cell, cancel: &Cancel) -> Result<C
     )
     .await?;
     warn_about_errors(runner.notes, &measured);
-    let (result, latencies) = measured.into_report(&runner.shape, &cell.class, cell.concurrency);
-    write_distribution(runner, cell, &latencies)?;
+    let (result, samples) = measured.into_report(&runner.shape, &cell.class, cell.concurrency);
+    write_distribution(runner, cell, &samples)?;
     Ok(result)
 }
 
@@ -111,11 +111,11 @@ fn warn_about_errors(notes: &Notes, measured: &Measured) {
 
 /// A cell that cannot write the distribution the operator asked for is a
 /// failure, not a warning: finding out at the end of a matrix costs the matrix.
-fn write_distribution(runner: &Runner<'_>, cell: &Cell, latencies: &[f64]) -> Result<()> {
+fn write_distribution(runner: &Runner<'_>, cell: &Cell, samples: &[Sample]) -> Result<()> {
     let Some(files) = runner.latencies else {
         return Ok(());
     };
-    files.write_cell(cell.class.name(), cell.concurrency, latencies)?;
+    files.write_cell(cell.class.name(), cell.concurrency, samples)?;
     Ok(())
 }
 

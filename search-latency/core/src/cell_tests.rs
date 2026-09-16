@@ -104,7 +104,7 @@ async fn a_failed_query_is_counted_but_never_timed() {
 
     assert!(measured.counters.errors > 0);
     assert_eq!(
-        measured.counters.latencies_ms.len() as u64,
+        measured.counters.samples.len() as u64,
         measured.counters.queries
     );
     assert!(measured.counters.first_error().unwrap().contains("fail"));
@@ -172,8 +172,8 @@ fn merging_keeps_the_earliest_failure_by_clock_not_by_join_order() {
 #[test]
 fn a_report_carries_the_percentiles_of_the_window_it_measured() {
     let mut counters = Counters::default();
-    for latency in [9.0, 1.0, 5.0, 3.0, 7.0] {
-        counters.record(Found::new(2), latency);
+    for (elapsed_s, latency) in [(4.0, 9.0), (0.0, 1.0), (2.0, 5.0), (1.0, 3.0), (3.0, 7.0)] {
+        counters.record(Found::new(2), elapsed_s, latency);
     }
     let measured = Measured {
         counters,
@@ -182,7 +182,10 @@ fn a_report_carries_the_percentiles_of_the_window_it_measured() {
 
     let (result, sorted) = measured.into_report(&a_shape(), &a_class("rare_term", &["k"]), 4);
 
-    assert_eq!(sorted, [1.0, 3.0, 5.0, 7.0, 9.0]);
+    let sorted_latencies: Vec<f64> = sorted.iter().map(|sample| sample.latency_ms).collect();
+    assert_eq!(sorted_latencies, [1.0, 3.0, 5.0, 7.0, 9.0]);
+    let sorted_elapsed: Vec<f64> = sorted.iter().map(|sample| sample.elapsed_s).collect();
+    assert_eq!(sorted_elapsed, [0.0, 1.0, 2.0, 3.0, 4.0]);
     assert_eq!(result.p50_ms, Some(5.0));
     assert_eq!(result.p90_ms, Some(9.0));
     assert_eq!(result.max_ms, Some(9.0));

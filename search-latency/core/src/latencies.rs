@@ -7,17 +7,22 @@
 //! repeats, or draw a full latency curve rather than three points off it, needs
 //! these files; one that only wants the four charts does not.
 //!
-//! Ascending, not chronological. The cell already sorted the values to take its
-//! percentiles, and what is written is the distribution rather than a time
-//! series — there are no timestamps here and a reader must not infer drift from
-//! the order.
+//! Rows are ordered ascending by `latency_ms`, the order the cell already
+//! sorted them in to take its percentiles — not chronological, and a reader
+//! must not infer drift from row order. The `elapsed_s` column carries the
+//! time series instead: it is seconds since the cell's own measured window
+//! started, so sorting a copy of the rows by that column recovers arrival
+//! order, including across concurrent workers, without re-running anything.
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::cell::Sample;
+
 pub const LATENCY_COLUMN: &str = "latency_ms";
+pub const ELAPSED_COLUMN: &str = "elapsed_s";
 
 /// Where the distributions go, or nothing at all when the flag was absent.
 pub struct LatencyFiles {
@@ -46,16 +51,16 @@ impl LatencyFiles {
         &self,
         class: &str,
         concurrency: usize,
-        sorted_latencies: &[f64],
+        samples: &[Sample],
     ) -> io::Result<PathBuf> {
         let path = self.dir.join(self.name_for(class, concurrency));
         let mut sink = BufWriter::new(File::create(&path)?);
         for line in &self.preamble {
             writeln!(sink, "{line}")?;
         }
-        writeln!(sink, "{LATENCY_COLUMN}")?;
-        for latency in sorted_latencies {
-            writeln!(sink, "{latency:.3}")?;
+        writeln!(sink, "{LATENCY_COLUMN},{ELAPSED_COLUMN}")?;
+        for sample in samples {
+            writeln!(sink, "{:.3},{:.3}", sample.latency_ms, sample.elapsed_s)?;
         }
         sink.flush()?;
         Ok(path)

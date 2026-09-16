@@ -7,6 +7,8 @@ Two binaries asking one question of three interfaces, over a crate they share.
 | [`core/`](core) | `search-latency-core`: the query set, the closed loop, the percentiles, the matrix, the CSV, and the refusal to measure a partial index. Every part that does not depend on which interface is underneath. Not a binary, and not a workspace member. |
 | [`scylla/`](scylla/README.md) | `scyllasearch`: `BM25()` over CQL, or the vector-store's `/bm25` endpoint with ScyllaDB out of the path. |
 | [`opensearch/`](opensearch/README.md) | `ossearch`: `query_string` over `_search`. |
+| [`SEARCH-LATENCY-DISK-RUNBOOK.md`](SEARCH-LATENCY-DISK-RUNBOOK.md) | The short campaign: both engines with the index **on disk**, top-k 100, all six classes, one session of ~5 h. Holds the storage tier fixed, so a gap it measures is an engine difference — at the cost of not measuring ScyllaDB the way it ships, which is from RAM. |
+| [`SEARCH-LATENCY-AWS-RUNBOOK.md`](SEARCH-LATENCY-AWS-RUNBOOK.md) | The full fleet campaign: six arms — both interfaces × both ScyllaDB index locations, plus OpenSearch on disk and on tmpfs — over the whole enwiki corpus, every concurrency level × every query class × top-k 10/100/1000. Four SUT configurations, four index builds, ~23 h across four sessions. |
 | [`HARNESS-AWS-RUNBOOK.md`](HARNESS-AWS-RUNBOOK.md) | The fleet campaign that measures **this harness** rather than an engine: its throughput floor, the service-time constant it adds to every engine number, and whether the closed loop is closed at fleet concurrency. Blocked on `engine-mock` learning to answer a search — its Phase 0 says exactly what that means. |
 
 Both write **the same seventeen-column cell CSV**. Columns 16 and 17 are
@@ -87,7 +89,7 @@ renderer is a separate script written against them.
 
 ```text
 points.csv                        one row per cell, the seventeen columns above
-latencies/<class>-c<level>-<n>.csv   every latency of that cell, ascending
+latencies/<class>-c<level>-<n>.csv   every latency of that cell, ascending, plus elapsed_s
 ```
 
 The second is off unless `--latencies-dir` is given, and is worth giving
@@ -95,6 +97,12 @@ whenever a run will be repeated: **percentiles do not average**. Three repeats
 of a cell give three p99s, and the p99 of the three together can only be
 computed from the samples. A consumer that only wants the four charts does not
 need it.
+
+Rows are ordered ascending by `latency_ms`, not chronologically — do not infer
+drift from row order. Each row's `elapsed_s` is seconds since the cell's own
+measured window started; sort a copy of the rows by that column instead to
+recover arrival order (this holds across concurrent workers too, since they
+all share the same cell start).
 
 Both carry the same `# key=value` preamble — engine build, driver version,
 analyzer, the index count the run measured against, and every flag the run was
