@@ -11,6 +11,7 @@ Two binaries asking one question of two engines, over a crate they share.
 | [`INDEX-RATE-MATRIX-PLAN.md`](INDEX-RATE-MATRIX-PLAN.md) | The engine campaign for the indexed axis: which arms become lines on "indexed docs/s against concurrency", how each is deployed on the SUT, the shared grid, the timeouts, the gates. Nothing in it has been measured. |
 | [`INDEX-RATE-SCYLLA-RUNBOOK.md`](INDEX-RATE-SCYLLA-RUNBOOK.md) | The plan above, cut into something runnable: the ScyllaDB half (R1, R2, R8) end to end, from starting the boxes to stopping them. |
 | [`INDEX-RATE-OPENSEARCH-RUNBOOK.md`](INDEX-RATE-OPENSEARCH-RUNBOOK.md) | The same, for the OpenSearch half (R4, `os-disk-refresh3`). Both runbooks must write into one results directory — the campaign's only cross-engine read spans them. |
+| [`RATE-HARNESS-AWS-RUNBOOK.md`](RATE-HARNESS-AWS-RUNBOOK.md) | The harness on the **offered-rate** axis against `../engine-mock`: can one loader process actually *offer* rate X, and up to what rate. Produces the pacing ceiling the index-rate campaign's grid must stay under. |
 
 Both write **the same twenty-two-column point CSV** and, with `--samples-dir`,
 the same ten-column per-second series. Column 17 is `engine`, which is how a
@@ -49,8 +50,12 @@ Against the **null sink**, both halves are driven by
 [`HARNESS-LOCAL-RUNBOOK.md`](HARNESS-LOCAL-RUNBOOK.md) on a laptop — a short
 proving pass over the pipeline — and by
 [`HARNESS-AWS-RUNBOOK.md`](HARNESS-AWS-RUNBOOK.md) on the fleet, which is
-where the client ceiling is actually measured. Neither produces an engine
-number: the sink stores nothing. The **real engines** are driven by
+where the client ceiling is actually measured. Its sibling
+[`RATE-HARNESS-AWS-RUNBOOK.md`](RATE-HARNESS-AWS-RUNBOOK.md) runs the same fleet
+on the rate ladder instead, and measures the other ceiling — the highest rate
+the client can *offer* faithfully, which is what bounds every grid above. None
+of the three produces an engine number: the sink stores nothing. The **real
+engines** are driven by
 [`../AWS-RUN-PLAN.md`](../AWS-RUN-PLAN.md).
 
 ## What belongs to an engine, and what does not
