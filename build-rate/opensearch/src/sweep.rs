@@ -1,8 +1,8 @@
 //! One bounded channel, N worker tasks, one point per concurrency level.
 //! Shared: see `build_rate_core::sweep`.
 pub use build_rate_core::sweep::{
-    measure_at_concurrency, run_sweep, summarize, Accepted, BoxFuture, Cancel, Counters, Inserter,
-    LevelSource, Loader, OnPoint, Point, SameInserter, Shape, Source, Watchers, WorkItem,
+    measure_at_rung, run_sweep, summarize, Accepted, BoxFuture, Cancel, Counters, Inserter,
+    LevelSource, Loader, OnPoint, Point, Rung, SameInserter, Shape, Source, Watchers, WorkItem,
     QUEUE_DEPTH_PER_WORKER,
 };
 

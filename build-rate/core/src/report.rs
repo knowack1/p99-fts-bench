@@ -17,10 +17,20 @@
 //! request carries `batch_size` of them. `batch_size` is a column and
 //! `latency_unit` is a header fact so that a chart cannot mix the two without
 //! showing it, but a reader still can.
+//!
+//! **What those two latencies are measured *from* depends on the ladder**, and
+//! that is a header fact rather than a column because it redefines columns that
+//! already exist. Under a rate ladder they run from the moment a request was
+//! *due*, so a stall shows up at full size; under a concurrency ladder there is
+//! no schedule to be due against and they are service times.
+//! `latency_basis=intended_start|service` says which, and it is what stops two
+//! CSVs that look compatible from being pooled. `queue_p99_ms` beside them is
+//! the producer's own lateness, which is how a reader checks that the harness
+//! was not the thing being measured.
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
-pub const CSV_COLUMNS: [&str; 17] = [
+pub const CSV_COLUMNS: [&str; 22] = [
     "concurrency",
     "docs",
     "errors",
@@ -38,9 +48,33 @@ pub const CSV_COLUMNS: [&str; 17] = [
     "index_settled",
     "index_status",
     "engine",
+    "target_docs_per_s",
+    "achieved_offered_ratio",
+    "queue_p99_ms",
+    "in_flight_peak",
+    "generator_saturated",
 ];
 pub const INDEX_COLUMNS: usize = 6;
 pub const STDOUT: &str = "-";
+
+/// What `p50_ms` and `p99_ms` are measured *from*.
+///
+/// A header fact rather than a column because it redefines two columns that
+/// already exist rather than adding one, which the append-only rule does not
+/// cover. Under a rate ladder a request's clock starts when it was *due*, so a
+/// stall lands on everything queued behind it; under a concurrency ladder there
+/// is no schedule to be due against and the clock starts when the request was
+/// sent. Pooling the two would average a latency with a service time.
+pub const LATENCY_BASIS_INTENDED: &str = "intended_start";
+pub const LATENCY_BASIS_SERVICE: &str = "service";
+
+pub fn latency_basis(paced: bool) -> &'static str {
+    if paced {
+        LATENCY_BASIS_INTENDED
+    } else {
+        LATENCY_BASIS_SERVICE
+    }
+}
 
 /// Which engine produced the row.
 ///
@@ -82,6 +116,22 @@ pub struct PointResult {
     /// `None` when the index was not watched. Blank cells, never zeros: a zero
     /// build rate is a finding, and an unwatched level is not one.
     pub index: Option<IndexBuild>,
+    /// What the client was told to offer. `None` on a concurrency ladder, where
+    /// nothing was offered — blank rather than zero, because a zero offered rate
+    /// would plot at the origin of the axis it is absent from.
+    pub target_docs_per_s: Option<u64>,
+    /// Achieved over offered. The single number that says whether the x value
+    /// on a rate chart is the rate the engine actually saw.
+    pub achieved_offered_ratio: Option<f64>,
+    /// The producer's own lateness at p99.
+    pub queue_p99_ms: Option<f64>,
+    /// The most requests outstanding at once. Read against `--concurrency`: a
+    /// short rung whose peak sat at the cap measured the harness, not the
+    /// engine.
+    pub in_flight_peak: u64,
+    /// `None` on a concurrency ladder, which cannot fall short of an offer it
+    /// never made.
+    pub saturated: Option<bool>,
 }
 
 impl PointResult {
@@ -169,7 +219,7 @@ fn open_writer(destination: &str) -> io::Result<Box<dyn Write + Send>> {
 
 fn csv_row(result: &PointResult) -> String {
     format!(
-        "{},{},{},{:.3},{:.1},{},{},{},{},{},{},{}",
+        "{},{},{},{:.3},{:.1},{},{},{},{},{},{},{},{},{},{},{},{}",
         result.concurrency,
         result.docs,
         result.errors,
@@ -181,8 +231,24 @@ fn csv_row(result: &PointResult) -> String {
         result.requests,
         result.failed_requests,
         csv_index(result.index.as_ref()),
-        result.engine
+        result.engine,
+        csv_blank(result.target_docs_per_s),
+        csv_ratio(result.achieved_offered_ratio),
+        csv_latency(result.queue_p99_ms),
+        result.in_flight_peak,
+        csv_blank(result.saturated)
     )
+}
+
+/// Blank, never a stand-in value: every one of these columns is absent under a
+/// concurrency ladder, and `0` or `false` would each read as a measurement that
+/// was taken and came back unremarkable.
+fn csv_blank<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or_else(String::new, |value| value.to_string())
+}
+
+fn csv_ratio(value: Option<f64>) -> String {
+    value.map_or_else(String::new, |ratio| format!("{ratio:.4}"))
 }
 
 fn csv_index(build: Option<&IndexBuild>) -> String {

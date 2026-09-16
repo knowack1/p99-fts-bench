@@ -19,6 +19,7 @@ pub mod corpus;
 pub mod gate;
 pub mod index;
 pub mod notes;
+pub mod pacer;
 pub mod report;
 pub mod run;
 pub mod samples;

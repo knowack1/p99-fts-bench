@@ -36,7 +36,7 @@ use osrate::insert::BulkInserter;
 use osrate::notes::Notes;
 use osrate::report::PointResult;
 use osrate::reset::{GateTiming, IndexConfig, IndexReset, ResettingInserter, DEFAULT_INDEX_CONFIG};
-use osrate::sweep::{self, Cancel, Inserter, SameInserter, Watchers};
+use osrate::sweep::{self, Cancel, Inserter, Rung, SameInserter, Watchers};
 
 const BENCH_ROOT: &str = "../..";
 const VENV_PYTHON: &str = ".venv/bin/python3";
@@ -217,7 +217,7 @@ async fn the_endpoint_counts_exactly_the_documents_that_were_offered() {
     sweep::run_sweep(
         &SameInserter(Arc::clone(&inserter)),
         || corpus::batches(&source, BATCH),
-        &[4],
+        &[Rung::closed_loop(4)],
         a_loader(),
         &Watchers {
             index: &index,
@@ -250,7 +250,7 @@ async fn a_whole_ladder_runs_against_a_live_endpoint() {
         sweep::run_sweep(
             &SameInserter(Arc::new(an_inserter(&sink).await)),
             || corpus::batches(&source, BATCH),
-            &[4, 16],
+            &[Rung::closed_loop(4), Rung::closed_loop(16)],
             a_loader(),
             &Watchers {
                 index: &index,
@@ -314,7 +314,7 @@ async fn a_reset_empties_the_index_over_a_live_endpoint() {
     sweep::run_sweep(
         &SameInserter(Arc::clone(&inserter)),
         || corpus::batches(&source, BATCH),
-        &[4],
+        &[Rung::closed_loop(4)],
         a_loader(),
         &Watchers {
             index: &index,
@@ -358,7 +358,11 @@ async fn every_level_of_a_reset_ladder_builds_from_zero() {
         sweep::run_sweep(
             &ResettingInserter::new(Arc::clone(&inserter), Some(reset)),
             || corpus::batches(&source, BATCH),
-            &[4, 8, 16],
+            &[
+                Rung::closed_loop(4),
+                Rung::closed_loop(8),
+                Rung::closed_loop(16),
+            ],
             a_loader(),
             &Watchers {
                 index: &index,

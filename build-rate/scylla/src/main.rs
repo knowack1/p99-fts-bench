@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 
 use scyllarate::build_rate::IndexWatch;
@@ -20,7 +20,7 @@ use scyllarate::run::{
 };
 use scyllarate::samples::SampleFiles;
 use scyllarate::session::{self, Topology};
-use scyllarate::sweep::{self, Watchers};
+use scyllarate::sweep::{self, Rung, Watchers};
 use scyllarate::vstore::{IndexProbe, VectorStoreProbe};
 
 fn main() -> ExitCode {
@@ -34,11 +34,12 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<ExitCode> {
+    let rungs = args.rungs().map_err(|why| anyhow!(why))?;
     let workers = args.tokio_workers();
-    build_runtime(workers)?.block_on(measure(args, workers))
+    build_runtime(workers)?.block_on(measure(args, rungs, workers))
 }
 
-async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
+async fn measure(args: Args, rungs: Vec<Rung>, workers: usize) -> Result<ExitCode> {
     let session = Arc::new(session::connect(&args.connect_options()).await?);
     let topology = session::read_topology(&session, &args.keyspace, workers).await?;
     describe(&topology);
@@ -49,7 +50,8 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
     let mut sink = CsvSink::open(&args.out)?;
     sink.write_preamble(&report::header_lines(&topology, &settings))?;
     let samples = open_samples(&args, &topology, &settings)?;
-    let (results, aborted) = sweep_levels(&args, session, probe, &mut sink, samples.as_ref()).await;
+    let (results, aborted) =
+        sweep_levels(&args, &rungs, session, probe, &mut sink, samples.as_ref()).await;
 
     echo_summary(&results);
     Ok(exit_code(&results, aborted))
@@ -125,6 +127,7 @@ async fn settings_with_index(
 
 async fn sweep_levels(
     args: &Args,
+    rungs: &[Rung],
     session: Arc<scylla::client::session::Session>,
     probe: Option<Arc<VectorStoreProbe>>,
     sink: &mut CsvSink,
@@ -158,7 +161,7 @@ async fn sweep_levels(
         sweep::run_sweep(
             &inserters,
             || corpus::rows(&source),
-            &args.concurrency.0,
+            rungs,
             sweep::loader(),
             &watchers,
             &cancel,

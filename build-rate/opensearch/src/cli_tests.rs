@@ -470,3 +470,70 @@ fn a_runtime_with_workers_is_taken_as_given() {
     let args = parse(&[a_minimal_command(), vec!["--tokio-workers", "3"]].concat());
     assert_eq!(args.tokio_workers(), 3);
 }
+
+// --- which ladder is the axis ---------------------------------------------
+
+#[test]
+fn without_a_target_rate_the_run_is_the_closed_loop_it_has_always_been() {
+    let args = parse(&["--corpus", "c.jsonl", "--concurrency", "4,8,16"]);
+    let rungs = args.rungs().unwrap();
+
+    assert!(!args.is_paced());
+    assert_eq!(rungs.len(), 3);
+    assert!(rungs.iter().all(|rung| rung.target_docs_per_s.is_none()));
+}
+
+#[test]
+fn a_target_rate_makes_the_rate_the_ladder_and_the_concurrency_a_cap() {
+    let args = parse(&[
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "512",
+        "--target-rate",
+        "20000,40000,60000",
+    ]);
+    let rungs = args.rungs().unwrap();
+
+    assert!(args.is_paced());
+    assert_eq!(rungs.len(), 3);
+    assert!(rungs.iter().all(|rung| rung.concurrency == 512));
+    assert_eq!(rungs[2].target_docs_per_s, Some(60_000));
+}
+
+/// Both ladders at once is a cross product: the cost of the two multiplied, and
+/// a point that moved for two reasons at once.
+#[test]
+fn asking_for_both_ladders_is_refused_before_anything_connects() {
+    let args = parse(&[
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "4,8",
+        "--target-rate",
+        "20000",
+    ]);
+
+    let refused = args.rungs().unwrap_err();
+    assert!(refused.contains("single in-flight cap"), "{refused}");
+}
+
+/// Two CSVs that look compatible are not: one column pair is a latency and the
+/// other is a service time.
+#[test]
+fn the_header_says_what_the_latency_columns_are_measured_from() {
+    let closed = parse(&a_minimal_command());
+    let paced = parse(&[
+        "--corpus",
+        "c.jsonl",
+        "--concurrency",
+        "512",
+        "--target-rate",
+        "20000",
+    ]);
+
+    assert!(setting(&closed, "latency_basis") == "service");
+    assert!(setting(&paced, "latency_basis") == "intended_start");
+    assert_eq!(setting(&closed, "target_rate_docs_per_s"), "off");
+    assert_eq!(setting(&paced, "target_rate_docs_per_s"), "20000");
+}

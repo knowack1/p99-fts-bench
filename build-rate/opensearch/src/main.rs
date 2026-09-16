@@ -11,7 +11,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use opensearch::OpenSearch;
 
@@ -27,7 +27,7 @@ use osrate::run::{
     build_runtime, echo_summary, exit_code, report_outcome, say_each, watch_for_interrupt,
 };
 use osrate::samples::SampleFiles;
-use osrate::sweep::{self, Watchers};
+use osrate::sweep::{self, Rung, Watchers};
 use osrate::vstore::StatsProbe;
 
 fn main() -> ExitCode {
@@ -41,11 +41,12 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<ExitCode> {
+    let rungs = args.rungs().map_err(|why| anyhow!(why))?;
     let workers = args.tokio_workers();
-    build_runtime(workers)?.block_on(measure(args, workers))
+    build_runtime(workers)?.block_on(measure(args, rungs, workers))
 }
 
-async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
+async fn measure(args: Args, rungs: Vec<Rung>, workers: usize) -> Result<ExitCode> {
     let client = client::connect(&args.connect_options()).await?;
     let notes = Notes::stderr();
     announce_reset(&args);
@@ -60,8 +61,16 @@ async fn measure(args: Args, workers: usize) -> Result<ExitCode> {
     let preamble = report::header_lines(&cluster, &args.settings());
     sink.write_preamble(&preamble)?;
     let samples = open_samples(&args, &preamble)?;
-    let (results, aborted) =
-        sweep_levels(&args, client, reset, &notes, &mut sink, samples.as_ref()).await;
+    let (results, aborted) = sweep_levels(
+        &args,
+        &rungs,
+        client,
+        reset,
+        &notes,
+        &mut sink,
+        samples.as_ref(),
+    )
+    .await;
 
     echo_summary(&results);
     Ok(exit_code(&results, aborted))
@@ -172,6 +181,7 @@ fn reset_line(args: &Args) -> String {
 
 async fn sweep_levels(
     args: &Args,
+    rungs: &[Rung],
     client: OpenSearch,
     reset: Option<Box<IndexReset>>,
     notes: &Notes,
@@ -194,7 +204,7 @@ async fn sweep_levels(
         sweep::run_sweep(
             &inserters,
             || corpus::batches(&source, args.batch_size),
-            &args.concurrency.0,
+            rungs,
             sweep::loader(args.batch_size, args.queue_depth),
             &Watchers {
                 index: &index,

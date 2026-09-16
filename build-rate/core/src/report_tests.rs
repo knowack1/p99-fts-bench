@@ -16,6 +16,11 @@ fn a_point(concurrency: usize) -> PointResult {
         p50_ms: Some(4.0),
         p99_ms: Some(9.0),
         index: None,
+        target_docs_per_s: None,
+        achieved_offered_ratio: None,
+        queue_p99_ms: None,
+        in_flight_peak: 0,
+        saturated: None,
     }
 }
 
@@ -135,7 +140,9 @@ fn both_engines_write_the_same_columns_in_the_same_order() {
         "concurrency,docs,errors,wall_s,docs_per_s,p50_ms,p99_ms,\
          batch_size,requests,failed_requests,\
          index_docs,index_docs_per_s,index_lag_docs,index_settle_s,\
-         index_settled,index_status,engine"
+         index_settled,index_status,engine,\
+         target_docs_per_s,achieved_offered_ratio,queue_p99_ms,\
+         in_flight_peak,generator_saturated"
     );
     assert_eq!(rows.len(), 3);
     assert_eq!(
@@ -316,4 +323,64 @@ fn an_unwatched_level_reads_as_a_dash_in_the_summary() {
     let row: Vec<&str> = table.lines().nth(1).unwrap().split_whitespace().collect();
 
     assert_eq!(&row[9..11], ["-", "-"]);
+}
+
+/// Columns are appended, never inserted: an `awk` field index written against
+/// the seventeen-column schema still points at the same column.
+#[test]
+fn the_rate_ladder_columns_were_appended_behind_the_ones_that_existed() {
+    assert_eq!(
+        CSV_COLUMNS[..17],
+        [
+            "concurrency",
+            "docs",
+            "errors",
+            "wall_s",
+            "docs_per_s",
+            "p50_ms",
+            "p99_ms",
+            "batch_size",
+            "requests",
+            "failed_requests",
+            "index_docs",
+            "index_docs_per_s",
+            "index_lag_docs",
+            "index_settle_s",
+            "index_settled",
+            "index_status",
+            "engine",
+        ]
+    );
+}
+
+/// A concurrency-ladder row offered nothing, so every rate column is blank. A
+/// zero would read as an offer that was made and came back at nothing.
+#[test]
+fn a_closed_loop_row_leaves_every_rate_column_blank() {
+    let row = csv_row(&a_point(8));
+    let fields: Vec<&str> = row.split(',').collect();
+
+    assert_eq!(fields.len(), CSV_COLUMNS.len());
+    assert_eq!(fields[17], "", "target_docs_per_s");
+    assert_eq!(fields[18], "", "achieved_offered_ratio");
+    assert_eq!(fields[19], "", "queue_p99_ms");
+    assert_eq!(fields[21], "", "generator_saturated");
+}
+
+#[test]
+fn a_paced_row_carries_what_was_offered_beside_what_landed() {
+    let mut point = a_point(512);
+    point.target_docs_per_s = Some(50_000);
+    point.achieved_offered_ratio = Some(0.5);
+    point.queue_p99_ms = Some(1234.5);
+    point.in_flight_peak = 480;
+    point.saturated = Some(true);
+
+    let fields: Vec<String> = csv_row(&point).split(',').map(str::to_string).collect();
+
+    assert_eq!(fields[17], "50000");
+    assert_eq!(fields[18], "0.5000");
+    assert_eq!(fields[19], "1234.500");
+    assert_eq!(fields[20], "480");
+    assert_eq!(fields[21], "true");
 }

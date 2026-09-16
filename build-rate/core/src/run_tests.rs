@@ -15,6 +15,11 @@ fn a_point(concurrency: usize, errors: u64) -> PointResult {
         p50_ms: Some(1.5),
         p99_ms: Some(9.0),
         index: None,
+        target_docs_per_s: None,
+        achieved_offered_ratio: None,
+        queue_p99_ms: None,
+        in_flight_peak: 0,
+        saturated: None,
     }
 }
 

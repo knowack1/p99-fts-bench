@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::build_rate::IndexWatch;
 use crate::report::{header_lines, CsvSink, PointResult};
-use crate::sweep::{run_sweep, Cancel, Loader, SameInserter, Shape, Watchers, WorkItem};
+use crate::sweep::{run_sweep, Cancel, Loader, Rung, SameInserter, Shape, Watchers, WorkItem};
 use crate::test_support::{quiet_notes, FakeInserter};
 
 /// One document per request, which is what makes `measured_levels` readable as
@@ -65,6 +65,7 @@ async fn sweep_into(
     open_source: impl Fn() -> Result<Docs>,
     levels: &[usize],
 ) -> Result<()> {
+    let rungs: Vec<Rung> = levels.iter().copied().map(Rung::closed_loop).collect();
     let mut collect = |result: PointResult| -> Result<()> {
         sink.append_row(&result)?;
         Ok(())
@@ -73,7 +74,7 @@ async fn sweep_into(
     run_sweep(
         &SameInserter(Arc::new(FakeInserter::<OneDoc>::new())),
         open_source,
-        levels,
+        &rungs,
         LOADER,
         &Watchers {
             index: &index,
@@ -146,7 +147,7 @@ async fn an_interrupted_sweep_keeps_the_levels_it_measured() {
                 Duration::from_millis(1),
             ))),
             || Ok(Box::new(a_source(20)) as Docs),
-            &[2, 4],
+            &[Rung::closed_loop(2), Rung::closed_loop(4)],
             LOADER,
             &Watchers {
                 index: &index,

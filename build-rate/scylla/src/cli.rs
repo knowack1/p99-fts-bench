@@ -4,16 +4,21 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub use build_rate_core::cli::{at_least_one, available_cores, path_setting, split_fields, Levels};
+pub use build_rate_core::cli::{
+    at_least_one, available_cores, path_setting, split_fields, Levels, Rates, OFF,
+};
 
 use clap::Parser;
 use scylla::statement::Consistency;
 
 use crate::build_rate::WatchTiming;
+use build_rate_core::sweep::Rung;
+
 use crate::report::LATENCY_UNIT;
 use crate::reset::{GateTiming, ResetPlan};
 use crate::session::{consistency_from_name, consistency_name, ConnectOptions};
 use crate::vstore::{DEFAULT_VS_INDEX, DEFAULT_VS_URL};
+use build_rate_core::report::latency_basis;
 
 pub const DEFAULT_HOSTS: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "9042";
@@ -50,6 +55,12 @@ pub struct Args {
     /// Documents per point; 0 loads the whole corpus
     #[arg(long, default_value_t = 0)]
     pub max_docs: usize,
+
+    /// Offered load in documents per second, comma-separated, e.g. 20000,40000.
+    /// Makes the rate the ladder and --concurrency a single in-flight cap; left
+    /// off, --concurrency is the ladder and the loader runs closed loop.
+    #[arg(long)]
+    pub target_rate: Option<Rates>,
 
     /// Comma-separated contact points
     #[arg(long, env = "SCYLLA_HOSTS", default_value = DEFAULT_HOSTS)]
@@ -174,10 +185,32 @@ impl Args {
         }
     }
 
+    /// Exactly one of `--concurrency` and `--target-rate` is the ladder.
+    /// Resolved before anything connects, so a run that asked for both costs a
+    /// second rather than a level.
+    pub fn rungs(&self) -> Result<Vec<Rung>, String> {
+        Rung::ladder(
+            &self.concurrency.0,
+            self.target_rate.as_ref().map(|rates| rates.0.as_slice()),
+        )
+    }
+
+    pub fn target_rate_setting(&self) -> String {
+        self.target_rate
+            .as_ref()
+            .map_or_else(|| OFF.to_string(), ToString::to_string)
+    }
+
+    pub fn is_paced(&self) -> bool {
+        self.target_rate.is_some()
+    }
+
     pub fn settings(&self) -> Vec<(String, String)> {
         [
             ("consistency", consistency_name(self.consistency)),
             ("latency_unit", LATENCY_UNIT.to_string()),
+            ("latency_basis", latency_basis(self.is_paced()).to_string()),
+            ("target_rate_docs_per_s", self.target_rate_setting()),
             ("request_timeout_s", self.request_timeout.to_string()),
             ("tokio_workers", self.tokio_workers().to_string()),
             ("driver_metrics", driver_metrics_state().to_string()),

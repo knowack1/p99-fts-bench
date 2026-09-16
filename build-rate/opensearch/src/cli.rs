@@ -3,15 +3,20 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use build_rate_core::cli::{at_least_one, available_cores, path_setting, split_fields, Levels};
+pub use build_rate_core::cli::{
+    at_least_one, available_cores, path_setting, split_fields, Levels, Rates, OFF,
+};
 
 use clap::Parser;
 
 use crate::build_rate::WatchTiming;
 use crate::client::ConnectOptions;
+use build_rate_core::sweep::Rung;
+
 use crate::report::LATENCY_UNIT;
 use crate::reset::{GateTiming, IndexConfig, DEFAULT_INDEX_CONFIG};
 use crate::sweep::QUEUE_DEPTH_PER_WORKER;
+use build_rate_core::report::latency_basis;
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:9200";
 pub const DEFAULT_INDEX: &str = "wiki-articles";
@@ -69,6 +74,15 @@ pub struct Args {
     /// Documents per point; 0 loads the whole corpus
     #[arg(long, default_value_t = 0)]
     pub max_docs: usize,
+
+    /// Offered load in documents per second, comma-separated, e.g. 20000,40000.
+    /// Makes the rate the ladder and --concurrency a single in-flight cap; left
+    /// off, --concurrency is the ladder and the loader runs closed loop. A rate
+    /// is documents, not requests: at --batch-size 1024 a _bulk leaves every
+    /// 1024/rate seconds, which is what makes the number mean the same thing
+    /// here as it does on the single-document half.
+    #[arg(long)]
+    pub target_rate: Option<Rates>,
 
     #[arg(long, env = "OS_URL", default_value = DEFAULT_URL)]
     pub url: String,
@@ -221,10 +235,32 @@ impl Args {
     /// because the harness asked rather than because the engine's own refresh
     /// policy delivered them. Two runs at different values here are not
     /// comparable, and without them in the header nothing says so.
+    /// Exactly one of `--concurrency` and `--target-rate` is the ladder.
+    /// Resolved before anything connects, so a run that asked for both costs a
+    /// second rather than a level.
+    pub fn rungs(&self) -> Result<Vec<Rung>, String> {
+        Rung::ladder(
+            &self.concurrency.0,
+            self.target_rate.as_ref().map(|rates| rates.0.as_slice()),
+        )
+    }
+
+    pub fn target_rate_setting(&self) -> String {
+        self.target_rate
+            .as_ref()
+            .map_or_else(|| OFF.to_string(), ToString::to_string)
+    }
+
+    pub fn is_paced(&self) -> bool {
+        self.target_rate.is_some()
+    }
+
     pub fn settings(&self) -> Vec<(String, String)> {
         [
             ("batch_size", self.batch_size.to_string()),
             ("latency_unit", LATENCY_UNIT.to_string()),
+            ("latency_basis", latency_basis(self.is_paced()).to_string()),
+            ("target_rate_docs_per_s", self.target_rate_setting()),
             ("request_timeout_s", self.request_timeout.to_string()),
             ("queue_depth", self.queue_depth.to_string()),
             ("tls", tls_state().to_string()),

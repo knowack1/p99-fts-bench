@@ -26,7 +26,7 @@ use scyllarate::notes::Notes;
 use scyllarate::report::PointResult;
 use scyllarate::reset::{GateTiming, ResetPlan, ResettingInserters};
 use scyllarate::session::{self, ConnectOptions};
-use scyllarate::sweep::{self, Cancel, Inserter, Watchers};
+use scyllarate::sweep::{self, Cancel, Inserter, Rung, Watchers};
 use scyllarate::vstore::{VectorStoreProbe, DEFAULT_VS_INDEX};
 
 const BENCH_ROOT: &str = "../..";
@@ -188,6 +188,7 @@ async fn ladder(
     levels: &[usize],
     reset: bool,
 ) -> Vec<PointResult> {
+    let rungs: Vec<Rung> = levels.iter().copied().map(Rung::closed_loop).collect();
     let (_tmp, path) = a_corpus(documents);
     let source = CorpusSource::new(&path, 0);
     let inserters = inserters_for(sink, reset).await;
@@ -201,7 +202,7 @@ async fn ladder(
         sweep::run_sweep(
             &inserters,
             || corpus::rows(&source),
-            levels,
+            &rungs,
             sweep::loader(),
             &Watchers {
                 index: &index,
