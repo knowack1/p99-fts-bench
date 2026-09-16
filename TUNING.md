@@ -290,6 +290,37 @@ for the ScyllaDB client (0.85 of a measured 0.879 thread, 12 points). The old
 about 1.4x under its bound — not the ~13x the box-level number suggests — so
 the headroom is in processes, which is what the `N x M` shape exists for.
 
+### Rust harness floors (null sink, one process, i8g.2xlarge pair)
+
+These are the **Rust** loaders (`bench/build-rate/{scylla,opensearch}`), not the
+Python ones in the table below. They are **floors, written `≥`, never
+ceilings**: the null sink is a single-threaded Python process behind one driver
+connection, so its own limit is one core, and where the sink pegged the number
+reported is the instrument's. The harness's real limit is above it, unmeasured.
+
+| Client | Floor | Run |
+|---|---|---|
+| `scyllarate` CQL, 1 doc/op, 3,948 B lines | **≥214,139 docs/s** ≈ 0.85 GB/s (sink at 1.01 cores) | `results/harness-aws-runbook-2026-09-15T1740Z` |
+| `osrate --batch-size 1`, 3,948 B lines | **≥61,124 docs/s** ≈ 0.24 GB/s (sink at 1.01 cores) | same run |
+| `scyllarate` CQL, 1 doc/op, 3,948 B lines | ≥266,578 docs/s (sink-bound) | `results/fleet-rust-harness-null-sink-2026-09-10` |
+
+The 2026-09-15 `scyllarate` floor is **lower** than the 2026-09-10 one. That is
+not a regression and the two cannot be differenced: both are lower bounds set by
+a one-core sink, so the pair says only that the 2026-09-10 session's sink gave
+more. Cost model from 2026-09-10, unchanged: **8.2 µs of CPU per document plus
+2.3 ns per corpus byte**, on this instance pair in this AZ — it does not transfer
+to another line length or network path.
+
+Against the ~12,228 docs/s ScyllaDB engine build rate, the `scyllarate` floor is
+**~17.5x**, where `BUILD-RATE-MATRIX-PLAN.md`'s G7 gate asks for 2x. Revisit
+only when an engine number comes within ~2x of a floor; until then the floor
+settles the question and the harness's ceiling does not need measuring.
+
+**The `osrate` floor bounds the instrument, not the client.** At `batch=1` the
+HTTP sink parses a full request per document and pegged at every level but one,
+so ≥61,124 docs/s is the sink's number. Do not read the ~3.3x gap between the
+two rows as a client comparison — see that run's README.
+
 ### Per-process client ceilings (P0, null sink, one process)
 
 | Client | Ceiling | Note |

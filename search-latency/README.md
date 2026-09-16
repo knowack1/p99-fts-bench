@@ -7,6 +7,7 @@ Two binaries asking one question of three interfaces, over a crate they share.
 | [`core/`](core) | `search-latency-core`: the query set, the closed loop, the percentiles, the matrix, the CSV, and the refusal to measure a partial index. Every part that does not depend on which interface is underneath. Not a binary, and not a workspace member. |
 | [`scylla/`](scylla/README.md) | `scyllasearch`: `BM25()` over CQL, or the vector-store's `/bm25` endpoint with ScyllaDB out of the path. |
 | [`opensearch/`](opensearch/README.md) | `ossearch`: `query_string` over `_search`. |
+| [`HARNESS-AWS-RUNBOOK.md`](HARNESS-AWS-RUNBOOK.md) | The fleet campaign that measures **this harness** rather than an engine: its throughput floor, the service-time constant it adds to every engine number, and whether the closed loop is closed at fleet concurrency. Blocked on `engine-mock` learning to answer a search — its Phase 0 says exactly what that means. |
 
 Both write **the same seventeen-column cell CSV**. Columns 16 and 17 are
 `engine` and `interface`, which is how a consumer tells three series apart once
@@ -135,7 +136,10 @@ The live tests in `scylla/tests/` and `opensearch/tests/` are `#[ignore]`d and
 need a running engine with a built index; `cargo test -- --ignored` with one up.
 Unlike the sibling tree's live tests there is no sink that can stand in: an
 accept-and-discard endpoint stores nothing, and a search against nothing is the
-one answer this harness treats as a failure.
+one answer this harness treats as a failure. What it would take for one to
+stand in — a *null search*, answering a fixed synthetic shape without matching
+anything — is specified in Phase 0 of
+[`HARNESS-AWS-RUNBOOK.md`](HARNESS-AWS-RUNBOOK.md).
 
 ## What still differs between the halves
 
