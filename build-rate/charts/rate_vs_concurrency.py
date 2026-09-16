@@ -117,6 +117,7 @@ def rate_of(row: dict, metric: str) -> float | None:
 
 def points_of(row: dict, config: str,
               metrics: tuple[str, ...]) -> list[tuple[str, str, int, float, float]]:
+    refuse_paced(row)
     return [
         (config, metric, int(row["concurrency"]), rate, float(row["wall_s"]))
         for metric in metrics
@@ -125,24 +126,40 @@ def points_of(row: dict, config: str,
     ]
 
 
+def refuse_paced(row: dict) -> None:
+    """A rate-ladder row has one concurrency for every rung — its cap — so every
+    point would land on a single x and draw a plausible chart that is wrong.
+    Refused rather than plotted; `rate_vs_offered.py` is where those rows go.
+    """
+    if row.get("target_docs_per_s", ""):
+        raise SystemExit(
+            "this CSV was measured on the rate ladder (target_docs_per_s is set), "
+            "where concurrency is a fixed cap and not an axis -- "
+            "render it with build-rate/charts/rate_vs_offered.py")
+
+
 def collect(pattern: str, keep_warmup: bool, engine: str,
-            metrics: tuple[str, ...]) -> list[tuple[str, str, int, float, float]]:
+            metrics: tuple[str, ...], contribute=None) -> list[tuple]:
+    """`contribute` is what one row is worth, so a sibling chart can put a
+    different quantity on x without a second copy of the globbing."""
+    contribute = contribute or points_of
     out = []
     for name in sorted(glob.glob(pattern)):
         for row in grid.read_points(Path(name), keep_warmup):
-            out += points_of(row, grid.series_of(row, engine), metrics)
+            out += contribute(row, grid.series_of(row, engine), metrics)
     return out
 
 
 def collect_named(label: str, pattern: str, keep_warmup: bool,
-                  metrics: tuple[str, ...]) -> list[tuple[str, str, int, float, float]]:
+                  metrics: tuple[str, ...], contribute=None) -> list[tuple]:
     """Every row under the glob lands on the line called `label`, whatever its
     engine or batch column says: the arm is known from where the files are,
     not from what they contain."""
+    contribute = contribute or points_of
     out = []
     for name in sorted(glob.glob(pattern)):
         for row in grid.read_points(Path(name), keep_warmup):
-            out += points_of(row, label, metrics)
+            out += contribute(row, label, metrics)
     return out
 
 

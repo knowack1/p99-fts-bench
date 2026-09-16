@@ -1,12 +1,21 @@
-# charts — the two images a local build-rate run ends in
+# charts — the images a local build-rate run ends in
 
-Two renderers for `HARNESS-LOCAL-RUNBOOK.md`, reading the CSVs the binaries in
+Three renderers for `HARNESS-LOCAL-RUNBOOK.md`, reading the CSVs the binaries in
 `../scylla` and `../opensearch` already write. Nothing here is a deck chart.
 
 | Script | Question | X | Y |
 |---|---|---|---|
 | [`rate_vs_concurrency.py`](rate_vs_concurrency.py) | what did the client offer, and what did the engine (or the sink modelling one) index | concurrency (log2) | docs/s |
+| [`rate_vs_offered.py`](rate_vs_offered.py) | at a rate the client was **told** to send, what did the engine accept and make searchable | offered docs/s (linear) | docs/s |
 | [`rate_vs_index_size.py`](rate_vs_index_size.py) | what did one build do while it was happening | documents in the index | documents indexed per second |
+
+**The first two read different CSVs and each refuses the other's.** A rate-ladder
+row has one concurrency for every rung — its cap — so on the concurrency axis
+every point would stack on one x and draw a plausible chart that is wrong; a
+concurrency-ladder row has no offered rate to put on x at all. Each renderer
+names the other in its refusal rather than guessing. A CSV written before the
+rate columns existed is still a valid concurrency-ladder CSV and renders
+unchanged.
 
 ```bash
 .venv/bin/python3 build-rate/charts/rate_vs_concurrency.py \
@@ -49,6 +58,16 @@ colour, because they are one configuration seen twice and the gap between them
 is the chart. A blank `index_docs_per_s` is a level that ran unwatched and is
 dropped, never read as a zero that would draw an engine indexing nothing.
 `--submitted-only` gives back the sibling's single family.
+
+**`rate_vs_offered.py` draws the diagonal as its reference.** `y = x` is
+everything offered arriving and indexed; where a solid line leaves it is the rate
+the engine stopped accepting everything, and where the dashed line leaves it is
+where the *index* stopped keeping up. A hollow ring marks a saturated rung — and
+a ringed point is read against `in_flight_peak` in the table twin before it is
+read as an engine result, because a peak sitting at the `--concurrency` cap means
+the harness was the limit and the point is void. Everything that is not the x
+axis — series naming, repetitions, colours, the table twin — is imported from
+`rate_vs_concurrency.py`, so an arm keeps its line and its colour across both.
 
 **`--series 'LABEL=GLOB'` names a line by where its rows came from.** The
 engine-flag naming reads a series off the row — engine, and batch size where
