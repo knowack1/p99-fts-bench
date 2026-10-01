@@ -17,7 +17,7 @@ use build_rate_core::notes::Notes;
 use build_rate_core::samples::Submitted;
 use scyllarate::corpus::{self, CorpusSource};
 use scyllarate::reset::ResettingInserters;
-use scyllarate::sweep::{self, LevelSource};
+use scyllarate::sweep::{self, Cancel, LevelSource, Rung};
 use search_latency_core::bootstrap::{IndexLoader, LoadReport};
 use search_latency_core::search::BoxFuture;
 
@@ -52,13 +52,14 @@ impl CqlLoader {
     async fn fill(&self) -> Result<LoadReport> {
         let inserter = self.inserters.open().await?;
         let submitted = Arc::new(Submitted::default());
-        let point = sweep::measure_at_concurrency(
+        let point = sweep::measure_at_rung(
             &inserter,
             corpus::rows(&self.source)?,
             sweep::loader(),
-            self.concurrency,
+            Rung::closed_loop(self.concurrency),
             &self.notes,
             &submitted,
+            &Cancel::default(),
         )
         .await?;
         Ok(LoadReport {

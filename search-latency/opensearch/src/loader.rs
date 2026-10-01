@@ -14,7 +14,7 @@ use build_rate_core::samples::Submitted;
 use osrate::corpus::{self, CorpusSource};
 use osrate::insert::BulkInserter;
 use osrate::reset::{IndexReset, ResettingInserter};
-use osrate::sweep::{self, LevelSource};
+use osrate::sweep::{self, Cancel, LevelSource, Rung};
 use search_latency_core::bootstrap::{IndexLoader, LoadReport};
 use search_latency_core::search::BoxFuture;
 
@@ -58,13 +58,14 @@ impl BulkLoader {
     async fn fill(&self) -> Result<LoadReport> {
         let inserter = self.inserters.open().await?;
         let submitted = Arc::new(Submitted::default());
-        let point = sweep::measure_at_concurrency(
+        let point = sweep::measure_at_rung(
             &inserter,
             corpus::batches(&self.source, self.shape.batch_size)?,
             sweep::loader(self.shape.batch_size, self.shape.queue_depth),
-            self.shape.concurrency,
+            Rung::closed_loop(self.shape.concurrency),
             &self.notes,
             &submitted,
+            &Cancel::default(),
         )
         .await?;
         Ok(LoadReport {
