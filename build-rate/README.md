@@ -12,6 +12,7 @@ Two binaries asking one question of two engines, over a crate they share.
 | [`INDEX-RATE-SCYLLA-RUNBOOK.md`](INDEX-RATE-SCYLLA-RUNBOOK.md) | The plan above, cut into something runnable: the ScyllaDB half (R1, R2, R8) end to end, from starting the boxes to stopping them. |
 | [`INDEX-RATE-OPENSEARCH-RUNBOOK.md`](INDEX-RATE-OPENSEARCH-RUNBOOK.md) | The same, for the OpenSearch half (R4, `os-disk-refresh3`). Both runbooks must write into one results directory — the campaign's only cross-engine read spans them. |
 | [`RATE-HARNESS-AWS-RUNBOOK.md`](RATE-HARNESS-AWS-RUNBOOK.md) | The harness on the **offered-rate** axis against `../engine-mock`: can one loader process actually *offer* rate X, and up to what rate. Produces the pacing ceiling the index-rate campaign's grid must stay under. |
+| [`BUILD-RATE-VS-INDEX-SIZE-RUNBOOK.md`](BUILD-RATE-VS-INDEX-SIZE-RUNBOOK.md) | The **whole corpus** through one engine at a fixed `c=8`, three times, on both halves: x is documents already in the index, y is documents indexed per second. The one runbook whose builds go past the ladders' 2.2%/8.9% slice of the corpus, and the only place `ftsbench.probe_growth` puts CPU and memory on that same x axis. |
 
 Both write **the same twenty-two-column point CSV** and, with `--samples-dir`,
 the same ten-column per-second series. Column 17 is `engine`, which is how a

@@ -13,11 +13,11 @@ deliverable, the budget arithmetic, the gates and the chart.**
 
 | | [`HARNESS-AWS-RUNBOOK.md`](HARNESS-AWS-RUNBOOK.md) | **this file** |
 |---|---|---|
-| Ladder | `--concurrency 4,8,…,128` | `--target-rate 25000,…,400000` |
+| Ladder | `--concurrency 4,8,…,128` | `--target-rate 1024,…,32768` |
 | Loop | closed — the engine sets the pace | **open — the client sets the pace** |
 | `--concurrency` | the axis | **one number: an in-flight cap that must never bind** |
 | Question | *how fast can this client go* | ***can this client offer rate X, faithfully*** |
-| Deliverable | a floor, written `≥` | **a fidelity verdict and a pacing ceiling** |
+| Deliverable | a floor, written `≥` | **a fidelity verdict and a certified band** |
 | `latency_basis` | `service` | **`intended_start`** — coordinated-omission safe |
 | Chart | `tools/plot_harness_grid.py` | **`charts/rate_vs_offered.py`** |
 
@@ -41,26 +41,40 @@ and 50,291.2 on `osrate`, with `queue_p99_ms` under 1.5 ms throughout.
 
 1. It was a laptop, not the fleet. Different cores, different network, different
    corpus line.
-2. It was 50,000 docs/s. The plan's grid goes higher, and **nobody has measured
-   where the claim stops being true.**
+2. It was two points at N=1, and **neither of them is a rate the index-rate
+   campaign will actually offer.** Its engines index in the thousands of
+   documents per second, not the hundreds of thousands, and the band from
+   1,024 to 32,768 has never been paced on this hardware at all.
 
-Until that ceiling is a number, the index-rate campaign cannot tell a rung where
-the *engine* fell short from a rung where the *harness* never offered the rate
-in the first place. Those two look identical on the chart and mean opposite
-things.
+Until fidelity across that band is a measurement, the index-rate campaign cannot
+tell a rung where the *engine* fell short from a rung where the *harness* never
+offered the rate in the first place. Those two look identical on the chart and
+mean opposite things.
+
+**This grid does not hunt the ceiling, and the narrowing is deliberate.** Every
+rung on it is below the 50,000 docs/s the laptop already sustained, so the
+expected outcome is five faithful rungs per half and a ceiling written
+**"unresolved above 32,768"**. That is a certification of the band the
+downstream campaign runs in, not a bracket around the point where the harness
+gives way — and **it is worth exactly as much as the index-rate grid staying
+inside it.** The moment that campaign offers a rate above 32,768, this run says
+nothing about it and the grid here has to be extended upward to match.
 
 ## The three deliverables
 
 **1. Pacer fidelity, per rate.** At every unsaturated rung,
 `achieved_offered_ratio` within a few percent of 1.0 and `queue_p99_ms` a small
 fraction of `p99_ms`. This is what licenses the sentence "the engine was offered
-50,000 docs/s" in any downstream write-up.
+32,768 docs/s" in any downstream write-up.
 
-**2. The faithful-offer ceiling** — the highest rate one loader process can
-offer on this box before something in the harness gives way. This number bounds
-the top rung of every rate grid in the index-rate campaign. **If that campaign's
-grid tops out above this number, its top rungs measure the harness and not the
-engine.** Record it in `../TUNING.md` with the run that produced it.
+**2. The certified band — and a ceiling only if the grid happens to find one.**
+The deliverable is the highest grid rung that came back faithful, which on this
+grid is expected to be its top. That gives a band, not a bracket: **a top rung
+that comes back faithful is not a ceiling**, it is "unresolved above 32,768".
+The index-rate campaign inherits the band as a bound all the same — **a rate it
+offers above the top rung measures the harness and not the engine.** Record the
+band in `../TUNING.md` with the run that produced it, and say there that it is a
+floor on the ceiling rather than the ceiling.
 
 **3. Coordinated-omission-safe latency.** Under a rate ladder a request's clock
 starts when it was *due*, so a stall lands at full size on everything queued
@@ -68,7 +82,7 @@ behind it. The concurrency ladder cannot produce this reading at all — it
 reports service time. These are the first `intended_start` latencies the fleet
 has recorded.
 
-## The finding this runbook is most likely to produce
+## The finding this grid is least likely to reach — and what to do if it does
 
 **The paced producer is one thread, and it is shared by both halves.**
 
@@ -87,8 +101,13 @@ cross-check no other runbook here has:
 > sink.** If they stop at different rates, the ceiling is whatever differs
 > between them, and the sink CPU column says which.
 
-Design the reading around that comparison. It is the one result here that
-would change `core`.
+**On a grid topping out at 32,768 that comparison is a contingency, not the
+plan.** A laptop already paced 50,000 faithfully, so a producer that gave way
+below this grid's top rung would be a surprise — and a large one, worth
+stopping the campaign to chase rather than reporting as a band. The cross-check
+above is how it gets attributed if it happens. What the grid is actually
+budgeted to produce is deliverable 1, across the band the index-rate campaign
+runs in.
 
 ## What this measures, and what it is not
 
@@ -112,7 +131,7 @@ Not to be confused with:
 | [`HARNESS-AWS-RUNBOOK.md`](HARNESS-AWS-RUNBOOK.md) | the same fleet on the **concurrency** axis — the client floor |
 | [`INDEX-RATE-MATRIX-PLAN.md`](INDEX-RATE-MATRIX-PLAN.md) | the **engine** campaign this one is a precondition for |
 | [`INDEX-RATE-SCYLLA-RUNBOOK.md`](INDEX-RATE-SCYLLA-RUNBOOK.md) · [`…-OPENSEARCH-…`](INDEX-RATE-OPENSEARCH-RUNBOOK.md) | that campaign, made runnable, against real engines |
-| `../TUNING.md` § "Per-process client ceilings" | where the ceiling this produces gets recorded |
+| `../TUNING.md` § "Per-process client ceilings" | where the band this produces gets recorded |
 | `../engine-mock/README.md` | the instrument: what it serves, refuses, and does not model |
 | `README.md` § "Two ladders, and exactly one per run" | the columns, in the crate's own words |
 
@@ -173,68 +192,143 @@ the samplers and the box's CPU baseline that Part B is read against.
 
 ## Phase 0 — settle the matrix before anything bills
 
-### One ladder, one budget, and the wall clock is arithmetic
+### One duration, and `--max-docs` is derived from it per rung
 
-**This is the largest simplification the axis change buys, so take it.** Under a
-concurrency ladder nobody knows how long a level will run until it has run, which
-is why the sibling runbook opens with a calibration rep whose only job is to size
-`--max-docs`. Under a rate ladder:
+**Every rung runs for 120 seconds.** That is the campaign-wide constant, and the
+document budget is what moves to hold it. Under a rate ladder the two are the
+same statement read in either direction:
 
 ```
-wall_s  =  max_docs / target_rate
+wall_s   =  max_docs / target_rate            <- what the CSV reports
+max_docs =  target_rate × 120                 <- what the runbook sets
 ```
 
-A rung's duration is known before the box is started. So **one `--max-docs` for
-the whole campaign, both halves, every rung** — no sub-sweeps, no per-arm budget,
-no overlap level to reconcile.
+A rung's duration is still known before the box is started — better than known,
+it is **fixed**, so no rung is shorter than another and no reading has to be
+weighted by how long its rung happened to last.
 
-**`--max-docs 3500000`.** The same constant the index-rate campaign pins to, for
-the same two reasons: every rung then ingests the identical documents and only
-the rate differs, and one number is one thing to check rather than four.
+| Offered rate | `--max-docs` | `wall_s` |
+|---|---|---|
+| 1,024 | 122,880 | 120 s |
+| 2,048 | 245,760 | 120 s |
+| 4,096 | 491,520 | 120 s |
+| 16,384 | 1,966,080 | 120 s |
+| 32,768 | 3,932,160 | 120 s |
+| **per rep** | **6,758,400 documents** | **600 s** |
 
-| Offered rate | `wall_s` at 3,500,000 |
-|---|---|
-| 25,000 | 140 s |
-| 50,000 | 70 s |
-| 100,000 | 35 s |
-| 200,000 | 17.5 s |
-| 400,000 | 8.75 s |
+**Never type that column.** The arm scripts compute `max_docs = rate × 120` in
+the loop, so the grid is the only list in the file and a rung cannot be given
+another rung's budget. `RUNG_S` is the knob if 120 s ever moves.
 
-**The cost shape is inverted from the concurrency ladder's, and it is worth
-internalising: the top of the ladder is cheap and the floor is expensive.**
-Extra resolution near the ceiling — which is the only place this campaign is
-looking — is nearly free. The 25,000 rung alone is half the ladder's load time
-and answers a question nobody asked. Do not lower the floor to be thorough.
+**What this buys.** Equal wall clock per rung means equal exposure to whatever
+drifts during a rung — the sampler's ticks, the mock's ageing, the box's CPU —
+so `achieved_offered_ratio` is comparable across rungs rather than being an
+average over five different windows. It also puts every rung far above the ≥5 s
+floor, which stops being a thing to check at all.
 
-**`--max-docs` is still bounded by the corpus.** `core/src/corpus.rs` opens the
-file fresh per level and stops at EOF — it does not cycle — so a budget above the
-line count silently runs a **shorter** rung instead of a longer one. Phase 4
-generates 3,500,000 for exactly this reason. A budget raised past it is a
-regeneration, not an edit.
+**What it costs, and this is the real trade.** The rungs **no longer ingest the
+same documents**, and that invariant is not recoverable:
+
+- **Document counts differ 32x across the grid** — 122,880 at the floor,
+  3,932,160 at the top. Anything that depends on how much was ingested rather
+  than how fast differs with it.
+- **The index ends each rung at a different size.** `scyllarate`'s and
+  `osrate`'s index-build columns are measured against an index 32x larger at the
+  top rung than at the floor, so **the dashed index-rate family is not
+  comparable across rungs on this grid.** The submitted family is; the chart's
+  `--submitted-only` was already the default reading and is now closer to
+  mandatory.
+- **Each rung reads the corpus from line 1**, so rungs overlap on a prefix
+  rather than sharing a set: the floor rung's 122,880 documents are the top
+  rung's first 122,880. Not identical sets, not disjoint ones.
+
+None of that touches deliverable 1 — pacer fidelity is a property of the
+schedule, not of the document count — which is why the trade is worth taking
+here and would not be in the index-rate campaign.
+
+**It is deliberately not the index-rate campaign's flat 3,500,000.** That
+constant was chosen against a grid 24x higher. Here a flat budget is what forces
+the 32x spread in rung duration that fixing the duration removes.
+
+**The corpus bound moved to the top rung.** `core/src/corpus.rs` opens the file
+fresh per level and stops at EOF — it does not cycle — so a budget above the
+line count silently runs a **shorter** rung instead of a longer one. The largest
+single budget on this grid is the top rung's **3,932,160**, and that is what
+Phase 4's corpus is sized against: **4,000,000 lines**. It is not the sum of the
+column — each invocation reads from the start, so the corpus has to cover the
+biggest rung, not the ladder.
+
+### One invocation per rung — the mechanism, and the one thing it breaks
+
+`--max-docs` is a **single scalar** (`scylla/src/cli.rs`, `opensearch/src/cli.rs`:
+`pub max_docs: usize`), applied to every level the process runs. A per-rung
+budget therefore cannot be expressed as a list, and this runbook does not
+pretend otherwise: **each rung is its own invocation**, with `--target-rate` set
+to that one rate and `--max-docs` to that rate × 120.
+
+The ladder is now a shell loop rather than a comma-separated argument, which
+changes four things and breaks a fifth:
+
+| | Under one invocation per ladder | Now |
+|---|---|---|
+| Point CSVs | one per rep, five data rows | **one per rung**, one data row — named `-r<rate>` |
+| Run windows | one row per rep | **one row per rung**, which is the window Phase 8 wanted anyway |
+| The reset | one per rung, inside the process | one per rung, between processes — unchanged in count |
+| `--keep-warmup` | dropped the floor rung | **drops the entire dataset** — see below |
+| `--samples-dir` | one dir per rep | **one dir per rung, and it is not optional** |
+
+**The samples directory collides, silently, and it would cost the per-second
+series.** `core/src/samples.rs` names a level's file `c{concurrency}-{n}.csv`,
+where `n` counts repeats of that concurrency **within one process**. On a rate
+ladder `concurrency` is the cap, identical on every rung — so one process
+writing five rungs produces `c512-1.csv` … `c512-5.csv`, but **five processes
+each write `c512-1.csv`**, and pointed at a shared directory each rung
+overwrites the one before it. The arm scripts give every invocation its own
+`.../rep<N>/r<rate>/`. Do not flatten those directories back.
+
+**`--keep-warmup` is upgraded from mandatory to load-bearing.** Both renderers
+drop the first data row of *every file* (`tools/plot_harness_grid.py`:
+`rows if keep_warmup else rows[1:]`). With one data row per file that is every
+row of every file — **an empty chart, not a chart missing its floor rung.** If a
+render comes back with no points, this flag is the first thing to check.
 
 ### The default grid
 
 ```
-25000   50000   100000   200000   400000
+1024   2048   4096   16384   32768
 ```
 
-Doubling, five rungs, and **shared by both halves without exception** — a rate
-means the same thing on `scyllarate` and `osrate`, which is the entire reason
-this axis is preferable to concurrency for a cross-engine read. A rung added to
-one arm is added to all of them.
+Powers of two, five rungs, **one deliberate gap at 8,192**, and **shared by both
+halves without exception** — a rate means the same thing on `scyllarate` and
+`osrate`, which is the entire reason this axis is preferable to concurrency for a
+cross-engine read. A rung added to one arm is added to all of them.
 
-**The grid is a starting point that Phase 5's bracket confirms or moves**, and
-there are two rules on the answer:
+**The gap is a stated omission, not an oversight.** It costs the x axis some of
+its evenness and costs the reading nothing: 8,192 sits between two rungs that
+will be read the same way, and a fidelity chart is read at its points, never
+between them. If it is ever wanted back it is a rung added to **every** arm, at
+120 s of extra load per rep — the same price as any other rung, now that the
+duration is what is fixed.
 
-- **At least two rungs strictly below the *slower* half's closed-loop plateau**,
-  so every line has unsaturated points and the chart has a diagonal to sit on.
-  A line whose every rung saturated is not a measurement of fidelity, it is a
-  single ceiling drawn five times.
-- **At least one rung above the *faster* half's plateau**, so the ceiling is
-  **bracketed rather than merely approached.** A top rung that comes back
-  faithful means the ceiling is above the grid, which is not a result — it is
-  **"unresolved above 400,000"**, and it is fixed by adding a rung to every arm,
-  not by reporting the top rung as the ceiling.
+**The grid is a starting point that Phase 5's bracket confirms**, and on this
+grid the bracket's job is not what it was when the grid topped out at 400,000:
+
+- **Every rung is expected to fall strictly below both halves' closed-loop
+  plateaus.** The sibling runbook read `scyllarate` between 140k and 208k docs/s
+  at `c=64` across three reps — unconverged, but four times the top rung here at
+  its lowest — so the whole grid should sit in the unsaturated regime and the
+  chart should be five points on the diagonal, twice. **That is the result, not
+  a run that failed to find anything.**
+- **Confirming that is the bracket's remaining job.** If either half's plateau
+  comes back **below 32,768**, the top rungs will saturate and this grid does
+  bracket a ceiling after all — a stronger result, and Phase 8's decision table
+  is what attributes it.
+- **The ceiling is not bracketed by this grid and must never be reported as
+  though it were.** A faithful top rung is **"unresolved above 32,768"**. If the
+  ceiling is what someone wants, the fix is rungs added upward — 65,536,
+  131,072, … — **to every arm**, with `--max-docs` re-derived from the new top
+  rung, never a re-reading of this grid's top rung as the point where the
+  harness gave way.
 
 **Saturation is a finding here, not a failure.** On the concurrency ladder a
 flattened level is an ambiguity to be attributed. Here, a rung that could not
@@ -266,18 +360,28 @@ cap from being the thing that fails. **A rung whose `in_flight_peak` sat at the
 cap measured the harness's cap and nothing else. It is void and re-run higher —
 never reported as a ceiling of any kind.**
 
-**Default `--concurrency 4096`**, which is `4 × 400,000 × 2 ms` rounded up. Two
-consequences to check before launching, one per half:
+**Default `--concurrency 512`**, and at this grid the **floor** of the rule is
+what sets it, not the arithmetic: `4 × 32,768 × 2 ms` is 262, which the "never
+below 512" clause raises. **That is worth seeing rather than glossing.** At
+32,768 docs/s over the measured 0.142 ms private RTT, Little's Law puts about
+**5 requests in flight** — the cap is two orders of magnitude clear of anything
+this campaign will reach, and Phase 6's gate 5 should pass trivially on every
+rung. Keep the gate anyway: it costs one `awk`, and a bound cap is the one
+failure that invalidates a rung silently.
+
+Two consequences to check before launching, one per half:
 
 - **Memory.** Read-ahead is `queue_depth × concurrency × batch_size` documents
-  at `QUEUE_DEPTH_PER_WORKER = 10`. At `4096 × 1` and this corpus's 3,948 B
-  line that is **~162 MB** — comfortable on 61 GiB. It is not comfortable if
-  a batch level is ever restored; see B3.
+  at `QUEUE_DEPTH_PER_WORKER = 10`. At `512 × 1` and this corpus's 3,948 B
+  line that is **~20 MB** — nothing on 61 GiB. It stops being nothing if a
+  batch level is ever restored; see B3.
 - **File descriptors, on the OpenSearch half only.** `opensearch/src/client.rs`
   leaves reqwest's pool at its default, which is unbounded per host, so **N
-  bulks in flight take N sockets.** A cap of 4096 against AL2023's default
-  soft `ulimit -n` of 1024 is `EMFILE` partway up the ladder. B4's arm script
-  raises it; do not drop that line.
+  bulks in flight take N sockets.** A cap of 512 fits under AL2023's default
+  soft `ulimit -n` of 1024 — but that is margin, not safety: the limit covers
+  the corpus reader and every other descriptor the process holds. B4's arm
+  script still raises it to 65536, and **it is not to be dropped on the grounds
+  that the cap now fits.**
 
 `scyllarate` has no `--queue-depth` flag — it hardcodes the shared default — so
 leaving `osrate`'s flag alone is what keeps the two halves' read-ahead
@@ -293,13 +397,13 @@ why. **All of them were closed-loop artifacts:**
 | The **two sub-sweeps** | low `4,8,16,32` and high `32,64,128` |
 | The **`400000` / `1250000` split** | one `--max-docs` per sub-sweep |
 | The **`c=32` overlap check** | "if the two sweeps disagree at 32 by more than the rep spread" |
-| The **calibration rep that sized a budget** | replaced by `wall_s = max_docs / rate`, computed on the laptop |
-| The **≥5 s floor as a thing to discover** | now a property of the grid, checkable before the boxes start |
+| The **calibration rep that sized a budget** | replaced by a fixed 120 s rung, with `max_docs = rate × 120` computed in the arm script |
+| The **≥5 s floor as a thing to discover** | gone entirely: every rung is 120 s by construction |
 | **"Any series still rising at c=128 is unresolved"** | becomes "unresolved above the top rate", same rule, new axis |
 
 **One rule survives unchanged and catches people every time.** Both renderers
 drop the first data row of every CSV by default, which on a five-rung ladder
-would delete the 25,000 rung outright. **Every chart command here passes
+would delete the 1,024 rung outright. **Every chart command here passes
 `--keep-warmup`**, and a ladder must never be given a repeated first rung
 without dropping that flag.
 
@@ -598,8 +702,8 @@ setsid ~/sample-box-cpu.sh /tmp/box-cpu.tsv </dev/null >/dev/null 2>&1 & disown'
 ```
 
 **The loader-box sampler earns its keep on this axis in a way it did not
-before.** The producer-thread ceiling (see "The finding this runbook is most
-likely to produce") shows up as **one core pinned while the box as a whole is
+before.** The producer-thread ceiling (see "The finding this grid is least
+likely to reach") shows up as **one core pinned while the box as a whole is
 idle**. Whole-box CPU out of 8 is what makes that visible, and it is the
 difference between "the harness ran out" and "one thread in the harness ran
 out" — which are different findings with different fixes.
@@ -620,17 +724,23 @@ session**, because the wrapper's own command line contains the pattern. Put any
 Synthetic, generated on the loader box. The client does not read the words: its
 per-document cost is a function of size and shape only.
 
-**Generate 3,500,000, matching `--max-docs`.** The corpus is the hard ceiling on
-the budget, and on this axis the budget is a single campaign-wide constant that
-every rung's wall clock is computed from — so a corpus short of it does not make
-one level shorter, it makes **every rung's duration wrong** while the CSV still
-looks plausible.
+**Generate 4,000,000, sized by the *top rung*.** Every rung opens the corpus
+from line 1 and stops at its own `--max-docs`, so the corpus has to cover the
+largest single budget on the grid — 32,768 × 120 = **3,932,160** — and not the
+ladder's 6,758,400-document total. Phase 5A's closed-loop bracket at
+`--max-docs 1250000` fits inside that with room to spare.
+
+**A corpus short of the top rung is the failure this gate exists for.** It does
+not make one level shorter in a way anyone notices: the rung ends early, reports
+a `wall_s` under 120 s and a `docs_per_s` that looks entirely plausible, and the
+rung that gets read as the top of the certified band is the one that ran for 90
+seconds on a corpus that ran out.
 
 ```bash
 ssh fts-harness 'cat > ~/gen-corpus.sh << "EOF"
 #!/bin/bash
 set -e
-DOCS="${1:-3500000}"; MEAN="${2:-3948}"; SIGMA="${3:-0.6}"
+DOCS="${1:-4000000}"; MEAN="${2:-3948}"; SIGMA="${3:-0.6}"
 OUT="${4:-/mnt/nvme/work/corpus.jsonl}"
 cd /mnt/nvme/work/gen
 rm -rf /mnt/nvme/work/parts && mkdir -p /mnt/nvme/work/parts
@@ -648,8 +758,8 @@ chmod +x ~/gen-corpus.sh'
 cd <repo>/bench && tar czf - --exclude=__pycache__ ftsbench \
   | ssh fts-harness 'mkdir -p /mnt/nvme/work/gen && tar xzf - -C /mnt/nvme/work/gen'
 
-ssh fts-harness 'setsid ~/gen-corpus.sh 3500000 3948 0.6 </dev/null >/tmp/gen.log 2>&1 & disown'
-# ~34 min for 3.5 M x 3,948 B (13.8 GB) on /mnt/nvme, extrapolated from the
+ssh fts-harness 'setsid ~/gen-corpus.sh 4000000 3948 0.6 </dev/null >/tmp/gen.log 2>&1 & disown'
+# ~39 min for 4 M x 3,948 B (15.8 GB) on /mnt/nvme, extrapolated from the
 # recorded ~24 min for 2.5 M. Poll for GEN_DONE; do not poll every few seconds.
 ```
 
@@ -658,7 +768,7 @@ not measuring NVMe:
 
 ```bash
 ssh fts-harness 'cat /mnt/nvme/work/corpus.jsonl > /dev/null'
-ssh fts-harness 'wc -l /mnt/nvme/work/corpus.jsonl'   # must be >= 3500000
+ssh fts-harness 'wc -l /mnt/nvme/work/corpus.jsonl'   # must be >= 3932160
 ```
 
 **That line count is a gate, not a note.** Check it before Phase 5.
@@ -666,7 +776,11 @@ ssh fts-harness 'wc -l /mnt/nvme/work/corpus.jsonl'   # must be >= 3500000
 **The page cache matters more on this axis.** The producer thread reads the
 corpus inline, so a cold read is latency charged directly to the pacer and shows
 up as `queue_p99_ms` — indistinguishable, in the CSV, from a producer that
-cannot keep up. Warm it, and warm it once for the whole session.
+cannot keep up. Warm it, and warm it once for the whole session. 15.8 GB sits
+comfortably in 61 GiB of RAM, so one pass holds for the whole campaign — **but
+only the top rung ever touches all of it.** The floor rung reads the first
+122,880 lines and nothing else, which is why warming is a single up-front pass
+rather than something each rung can be trusted to do for itself.
 
 Record documents, bytes, mean line and **sha256** into `$R/corpus/`. The
 generator is deterministic given `--seed` (default 20260908).
@@ -676,13 +790,15 @@ generator is deterministic given `--seed` (default 20260908).
 ## Phase 5 — run the arms
 
 **Two phases, and the first one is on the other axis.** A concurrency ladder
-finds a ceiling without knowing where it is; a rate ladder has to bracket one.
-So the ceiling is found first, with the instrument that is correct for it.
+finds a plateau without knowing where it is; a rate ladder has to be placed
+against one. **On this grid the placement is the whole of it** — the bracket is
+what says the five rungs sit in the unsaturated regime rather than assuming it —
+and it also hands over the p99 the cap is sized from.
 
 | Phase | Ladder | Reps | Published | What it produces |
 |---|---|---|---|---|
 | **5A — the bracket** | `--concurrency 4,8,16,32,64,128` (closed loop) | 1 | **never** | each half's plateau and its p99 — what sets the grid and the cap |
-| **5B — measurement** | `--target-rate <the grid>` (open loop) | 3 | yes | the chart, the fidelity verdict, the ceiling |
+| **5B — measurement** | `--target-rate <the grid>` (open loop) | 3 | yes | the chart, the fidelity verdict, the certified band |
 
 ### The reader — write it before anything runs
 
@@ -765,11 +881,13 @@ They run **one at a time, never concurrently.** Each would otherwise be
 measuring a loader box the other is also using, and the whole point of the
 bracket is an uncontended plateau.
 
-**`--max-docs 1250000` here, not 3,500,000.** The bracket is closed loop, so its
-wall clock is not arithmetic and the campaign budget would make its slow rungs
-enormous for a number nobody publishes. This is the one place in the runbook
-where a different budget is correct, precisely because nothing from 5A is
-plotted against anything from 5B.
+**`--max-docs 1250000` here, and it is a flat budget on purpose.** The bracket
+is closed loop, so its wall clock is not arithmetic and a fixed duration is not
+available to it: nobody knows how fast a level will go until it has gone. A flat
+1,250,000 gives its levels a few seconds each at a plateau in the hundreds of
+thousands of documents per second, which is enough for the two numbers 5B needs
+from it. This is the one place in the runbook where the budget is flat,
+precisely because nothing from 5A is plotted against anything from 5B.
 
 Then settle three numbers and write them down before spending another minute:
 
@@ -795,22 +913,29 @@ ssh fts-harness 'cat > ~/run-rate-arm.sh << "SCRIPT"
 #!/bin/bash
 # One arm: the same offered-rate ladder, N times, against the sink on fts-sut.
 #
-# --target-rate is the ladder, so --concurrency is ONE number and it is a cap
-# that must never bind. A rung whose in_flight_peak reached it measured the cap.
+# ONE INVOCATION PER RUNG. --max-docs is a single scalar in both binaries, so a
+# per-rung budget cannot be a list: the rung is the loop, and max_docs is
+# computed as rate * RUNG_S so that every rung runs for the same wall clock.
 #
-# stderr is timestamped per line. The tool announces each rung as it starts it,
-# so the log carries the exact wall-clock window of every point and the sink CPU
-# sampler on the other box can be cut to that window rather than to the whole
-# sweep.
+# --target-rate is the ladder, so --concurrency is ONE number and it is a cap
+# that must never bind. A rung whose in_flight_peak reached the cap measured the cap.
+#
+# Each rung gets its own --samples-dir. core/src/samples.rs names a series
+# c<concurrency>-<n>.csv and <n> counts only within one process, so five
+# processes sharing a directory would each write c512-1.csv over the last.
+#
+# stderr is timestamped per line, and one process per rung means the window in
+# run-windows.tsv IS the rung's window -- the sink CPU series on the other box
+# is cut to it directly.
 # NB: no apostrophes in this script -- it is delivered inside a single-quoted
 # ssh argument, and one would close the quote.
 set -u
 ARM="$1"; shift
 REPS="${REPS:-3}"
-RATES="${RATES:-25000,50000,100000,200000,400000}"
-CAP="${CAP:-4096}"
+RATES="${RATES:-1024,2048,4096,16384,32768}"
+RUNG_S="${RUNG_S:-120}"
+CAP="${CAP:-512}"
 CORPUS="${CORPUS:-/mnt/nvme/work/corpus.jsonl}"
-MAX_DOCS="${MAX_DOCS:-3500000}"
 SINK="${SINK:-172.31.47.166}"
 PORT="${PORT:-9042}"
 # The launcher in Phase 3 puts the vector-store endpoint at CQL port + 7000.
@@ -825,36 +950,45 @@ BIN=/mnt/nvme/work/target/release/scyllarate
 
 mkdir -p "$OUT_DIR" "$SAMPLES_DIR"
 WINDOWS="$OUT_DIR/run-windows.tsv"
-[ -f "$WINDOWS" ] || printf "arm\trep\tstart_epoch\tend_epoch\texit_code\trates\tcap\tmax_docs\tcsv\n" > "$WINDOWS"
+[ -f "$WINDOWS" ] || printf "arm\trep\trate\tstart_epoch\tend_epoch\texit_code\tcap\tmax_docs\tcsv\n" > "$WINDOWS"
 stamp() { awk "{ printf \"%d\t%s\n\", systime(), \$0; fflush() }"; }
 
 for rep in $(seq 1 "$REPS"); do
-    csv="$OUT_DIR/$ARM-rep$rep.csv"
-    log="$OUT_DIR/$ARM-rep$rep.stderr.tsv"
-    echo "######## arm=$ARM rep=$rep rates=$RATES cap=$CAP $(date -u +%H:%M:%S)"
-    start=$(date +%s)
-    "$BIN" --corpus "$CORPUS" --target-rate "$RATES" --concurrency "$CAP" \
-           --max-docs "$MAX_DOCS" \
-           --hosts "$SINK" --port "$PORT" \
-           --vs-url "http://$SINK:$VS_PORT" \
-           --out "$csv" --samples-dir "$SAMPLES_DIR/$ARM-rep$rep" \
-           "$@" 2>&1 | stamp > "$log"
-    code=${PIPESTATUS[0]}
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$ARM" "$rep" "$start" "$(date +%s)" "$code" "$RATES" "$CAP" "$MAX_DOCS" "$csv" >> "$WINDOWS"
-    ~/rungs.sh "$csv"
+    for rate in $(echo "$RATES" | tr , " "); do
+        max_docs=$((rate * RUNG_S))
+        csv="$OUT_DIR/$ARM-rep$rep-r$rate.csv"
+        log="$OUT_DIR/$ARM-rep$rep-r$rate.stderr.tsv"
+        echo "######## arm=$ARM rep=$rep rate=$rate max_docs=$max_docs cap=$CAP $(date -u +%H:%M:%S)"
+        start=$(date +%s)
+        "$BIN" --corpus "$CORPUS" --target-rate "$rate" --concurrency "$CAP" \
+               --max-docs "$max_docs" \
+               --hosts "$SINK" --port "$PORT" \
+               --vs-url "http://$SINK:$VS_PORT" \
+               --out "$csv" --samples-dir "$SAMPLES_DIR/$ARM-rep$rep/r$rate" \
+               "$@" 2>&1 | stamp > "$log"
+        code=${PIPESTATUS[0]}
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+            "$ARM" "$rep" "$rate" "$start" "$(date +%s)" "$code" "$CAP" \
+            "$max_docs" "$csv" >> "$WINDOWS"
+        ~/rungs.sh "$csv"
+    done
 done
 SCRIPT
 chmod +x ~/run-rate-arm.sh'
 ```
 
 One rep first — the ladder is long enough that a wrong cap is worth catching
-before three of them:
+before three of them. It writes **one CSV per rung**, so read them together:
 
 ```bash
 ssh fts-harness 'REPS=1 CAP=<cap> ~/run-rate-arm.sh probe-scylla'
-ssh fts-harness '~/rungs.sh /mnt/nvme/work/results-rate/probe-scylla-rep1.csv'
+ssh fts-harness '~/rungs.sh /mnt/nvme/work/results-rate/probe-scylla-rep1-r*.csv'
 ```
+
+**Check the wall clock on that probe before anything else.** Every rung should
+report `wall_s` within a second or two of 120. A rung that came back much
+shorter ran out of corpus — the top rung needs 3,932,160 lines — and Phase 4's
+gate is what should have caught it.
 
 **Read `peak=` against the cap on every rung before committing.** If any rung's
 `in_flight_peak` reached the cap, raise the cap and re-run the probe. That is
@@ -867,9 +1001,10 @@ Then the matrix:
 ssh fts-harness 'REPS=3 CAP=<cap> ~/run-rate-arm.sh rate-scylla'
 ```
 
-Per rep: ~271 s of load at the default grid and budget, plus a reset per rung.
-Run it in the background or with a generous timeout; **do not poll every few
-seconds — it wastes the session.**
+Per rep: **600 s of load — five rungs, 120 s each, by construction** — plus a
+reset and a settle per rung outside that figure, and now a process start per
+rung as well. Run it in the background or with a generous timeout; **do not poll
+every few seconds — it wastes the session.**
 
 ### There is no N-process arm
 
@@ -926,7 +1061,8 @@ The first four are the sibling runbook's, unchanged. **The last four are this
 axis's own, and they are the ones that decide whether a rung is a measurement.**
 
 ```bash
-# 1. every ladder CSV has one row per rung
+# 1. every rung CSV has EXACTLY ONE data row -- one invocation, one rung.
+#    Anything else means a CSV was appended to or a ladder was run in one process.
 for f in $R/scylla/points/rate-*.csv; do
   echo "$(grep -vc '^#\|^concurrency' $f) $(basename $f)"; done
 
@@ -934,10 +1070,11 @@ for f in $R/scylla/points/rate-*.csv; do
 awk -F, '!/^#/ && $1!="concurrency" && $3+0>0 {print FILENAME": errors="$3}' \
   $R/scylla/points/*.csv
 
-# 3. every arm left a series: one directory per rep, one CSV per rung
-for d in $R/scylla/samples/*/; do echo "$(ls $d | wc -l) $(basename $d)"; done
+# 3. every arm left a series: one directory per rep, one SUBDIRECTORY per rung,
+#    one CSV in each. Five per rep -- fewer means the samples dirs collided.
+for d in $R/scylla/samples/*/; do echo "$(ls $d | wc -l) rungs  $(basename $d)"; done
 awk -F, 'FNR==1 { rows=0 } !/^#/ && $1!="level" { rows++ } \
-     ENDFILE { if (rows < 3) print FILENAME": "rows" readings" }' $R/scylla/samples/*/*.csv
+     ENDFILE { if (rows < 3) print FILENAME": "rows" readings" }' $R/scylla/samples/*/*/*.csv
 
 # 4. the CPU samplers cover every run window
 head -2 $R/scylla/logs/box-cpu.tsv; tail -1 $R/scylla/logs/box-cpu.tsv
@@ -959,12 +1096,20 @@ awk -F, '!/^#/ && $1!="concurrency" && $18=="" \
   {print "BLAD "FILENAME": row has no target_docs_per_s -- this is a bracket CSV"}' \
   $R/scylla/points/rate-*.csv
 
-# 7. THE LADDER IS THE ONE THAT WAS ASKED FOR. The set of offered rates is
-#    identical in every rep and every arm -- a shared x is the whole basis on
-#    which the halves are drawn together.
-for f in $R/scylla/points/rate-*.csv; do
-  printf "%s  %s\n" "$(awk -F, '!/^#/ && $1!="concurrency" {print $18}' $f | paste -sd,)" \
-                    "$(basename $f)"; done | sort | uniq -c
+# 7. THE LADDER IS THE ONE THAT WAS ASKED FOR. Each rep contributed the five
+#    rates once -- a shared x is the whole basis on which the halves are drawn
+#    together, and with one CSV per rung a missing rung is a missing FILE.
+for rep in 1 2 3; do
+  printf "rep%s: %s\n" "$rep" \
+    "$(awk -F, '!/^#/ && $1!="concurrency" {print $18}' \
+        $R/scylla/points/rate-scylla-rep$rep-r*.csv | sort -n | paste -sd,)"
+done   # expect 1024,2048,4096,16384,32768 on every line
+
+# 7b. THE RUNG RAN FOR ITS DURATION. wall_s (col 4) is 120 s by construction now,
+#     not an arithmetic consequence -- so it is a direct check.
+awk -F, '!/^#/ && $1!="concurrency" && ($4 < 108 || $4 > 132) \
+  {print "OFF-DURATION "FILENAME": offered="$18" wall="$4"s, expected ~120"}' \
+  $R/scylla/points/rate-*.csv
 
 # 8. latency_basis says intended_start. If it says service, the run was closed
 #    loop and every p99 in it is a service time wearing a latency's name.
@@ -975,19 +1120,20 @@ Gates 5 and 6 are **blocking**. Gate 7 failing means the reps cannot be
 aggregated and the arm is re-run. Gate 8 failing means the arm was not a rate
 ladder at all.
 
-**A note on the wall-clock gate the sibling has and this one does not.** There
-is no "every point ran at least 3 s" check here, because `wall_s` is
-`max_docs / rate` and was known before the boxes started. If a rung came back
-much shorter than its arithmetic says, that is not a short point — it is the
-corpus running out, and Phase 4's line-count gate is what catches it. Check it
-that way round:
+**Gate 7b replaces the sibling's "every point ran at least 3 s", and it is a
+stronger check than the one this runbook carried an edition ago.** When the
+budget was flat, a rung's expected duration was `max_docs / rate` — a different
+number per rung, and a short rung had to be told from a short *rate* by
+arithmetic. With the duration fixed, **every rung on both halves should report
+the same `wall_s`, 120 s**, so a single comparison catches all of it.
 
-```bash
-awk -F, -v md=3500000 '!/^#/ && $1!="concurrency" && $18>0 {
-    want = md / $18; if ($4 < 0.8 * want)
-      print "SHORT "FILENAME": offered="$18" wall="$4"s, arithmetic says "want"s -- corpus exhausted?"
-}' $R/scylla/points/rate-*.csv
-```
+Read a failure in this order:
+
+| `wall_s` | What it is |
+|---|---|
+| much **shorter** than 120 s | the corpus ran out — the top rung alone needs 3,932,160 lines. Phase 4's line-count gate should have caught it; re-check `wc -l` before blaming the client. |
+| much **longer** than 120 s | the rung could not hold its schedule. Not a duration fault — a saturated rung, and `generator_saturated` and the ratio say so. Read Phase 8's table, not this gate. |
+| ~120 s but `docs` below `rate × 120` | `cut_short` fired. Grep the rung's stderr for `offered rate abandoned`. |
 
 ### Then reconcile against the instrument's own witness — in B5, once the sinks stop
 
@@ -1047,7 +1193,11 @@ The `~/.ssh/config` entries now point at released IPs.
 ## Phase 8 — analyse and write up
 
 Per rung, join the CSV row to what both boxes were doing over **that rung's own
-window**, cut from the timestamped stderr log:
+window**. One invocation per rung makes this direct: the rung's row in
+`run-windows.tsv` carries its own `start_epoch` and `end_epoch`, so the sink and
+box CPU series are cut to those two numbers rather than to a window read out of
+the timestamped stderr log. The log is still the authority on when a rung was
+*abandoned*:
 
 - `sink_cores` — the mock's whole-process CPU (all threads), median and peak
 - `box_cores` — loader box CPU out of 8, median and peak
@@ -1068,7 +1218,7 @@ ceiling.
 | **≥ 0.95** | below the cap | `queue_p99_ms` small beside `p99_ms` | **FAITHFUL.** The rung measured what its x says. |
 | **≥ 0.95** | below the cap | `queue_p99_ms` a material fraction of `p99_ms` | **FAITHFUL ON AVERAGE ONLY.** The schedule held over the rung but not instant to instant. Usable for throughput, **not** for latency. |
 | < 0.95 | **at the cap** | — | **VOID.** The cap bound. Re-run the rung at a higher cap. Never a ceiling of anything. |
-| < 0.95 | **well below the cap** | `sink_cores` under budget | **THE PRODUCER IS THE CEILING.** Workers were starved: the single paced producer thread could not release documents fast enough. **This is the number this runbook exists to find.** |
+| < 0.95 | **well below the cap** | `sink_cores` under budget | **THE PRODUCER IS THE CEILING.** Workers were starved: the single paced producer thread could not release documents fast enough. **Below 32,768 this is a surprise, not a band** — a laptop already paced 50,000 — so chase it before continuing the campaign. |
 | < 0.95 | **well below the cap** | `sink_cores` at budget | the mock gave way, not the client. Lower bound, write it `≥`. |
 | < 0.95 | between | — | ambiguous. Report as such; do not pick. |
 
@@ -1107,8 +1257,8 @@ sink_budget_cores = 0.85 x min(tokio_workers, connections the loader held)
 **On this axis Part B's denominator is `in_flight_peak`, not `concurrency`.**
 Under a concurrency ladder those were the same number by construction. Under a
 rate ladder `concurrency` is a cap the run is trying *not* to reach, so using it
-would divide by 4096 and make the gate unfireable. `in_flight_peak` is how many
-sockets the mock actually had.
+would divide by 512 against a peak expected in the single digits, and make the
+gate unfireable. `in_flight_peak` is how many sockets the mock actually had.
 
 Then classify every rung with a **three-state** gate, never pass/fail:
 
@@ -1126,10 +1276,13 @@ exists to prevent.
 
 Everything above exists to produce these. Put them at the top of `$R/README.md`:
 
-1. **The faithful-offer ceiling, per half**, as the highest grid rung that came
-   back FAITHFUL, and the lowest that did not. Write it as a bracket — *"between
-   200,000 and 400,000 docs/s at 3,948 B"* — not as a point the grid cannot
-   resolve.
+1. **The certified band, per half**, as the highest grid rung that came back
+   FAITHFUL and the lowest that did not. If none did — **the expected outcome
+   on this grid** — the sentence is *"faithful at every rung to 32,768 docs/s at
+   3,948 B; unresolved above it"*, and that second clause is half the finding,
+   not a hedge to trim. If a rung did fall short, write a bracket instead —
+   *"between 16,384 and 32,768 docs/s at 3,948 B"* — never a point the grid
+   cannot resolve.
 2. **What gave way**, from the decision table: the producer, the cap, or the
    mock. If both halves stopped at the same rate with peaks low and one core
    pinned, say plainly that the ceiling is `core`'s single paced producer and
@@ -1146,7 +1299,7 @@ itself without reference to this file:
 
 Run `rate-harness-aws-runbook-2026-09-16T0900Z`, produced by
 `bench/build-rate/RATE-HARNESS-AWS-RUNBOOK.md`. Fleet up <HH:MM>-<HH:MM> UTC on <date>.
-Offered-rate ladder <grid> at cap <cap>, --max-docs 3500000, N=3 per half.
+Offered-rate ladder <grid> at cap <cap>, 120 s per rung (--max-docs = rate x 120), N=3 per half.
 Binary: crate commit <sha>. Instrument: engine-mock <sha256>.
 **No number here is an engine number.**
 ```
@@ -1244,8 +1397,9 @@ and recreates the index before every rung. Leaving both defaults alone is what
 keeps the halves' per-rung overhead comparable.
 
 **On this axis the reset also costs wall clock that is not in the arithmetic.**
-`wall_s = max_docs / rate` is the *load*; a `DELETE`, a `PUT` and two gate polls
-sit outside it on every rung. That is why the cost table below adds a reset
+The fixed 120 s is the *load*; a `DELETE`, a `PUT`, two gate polls and — now
+that each rung is its own process — a start and a connect sit outside it on
+every rung. That is why the cost table below adds a reset
 allowance rather than quoting the arithmetic as the total.
 
 **One probe still has to be suppressed.** A reset run sends `_analyze` once
@@ -1268,10 +1422,13 @@ two and nothing else. B5 checks it.
 
 **Descriptors first, because this is the failure that is new on this axis.**
 `opensearch/src/client.rs` leaves reqwest's pool at its default, which is
-unbounded per host: **N bulks in flight take N sockets.** The cap here is
-4096 by default, and AL2023's soft `ulimit -n` is 1024. The arm script raises it
-to 65536 in the same shell that execs the binary — **that is the only place it
-can be raised**, since `ulimit` does not cross an `ssh` invocation.
+unbounded per host: **N bulks in flight take N sockets.** At this grid's cap of
+512, with an expected `in_flight_peak` in the single digits, AL2023's soft
+`ulimit -n` of 1024 would very likely hold on its own. **The arm script raises
+it to 65536 regardless**, in the same shell that execs the binary — the only
+place it can be raised, since `ulimit` does not cross an `ssh` invocation — and
+the line costs nothing beside an `EMFILE` reported halfway up a ladder as
+failed requests.
 
 ```bash
 ssh fts-harness 'ulimit -n; ulimit -Hn'   # expect a soft limit near 1024
@@ -1285,15 +1442,16 @@ the ladder, reported as failed requests rather than as a setup fault.
 documents at the shared default depth of 10:
 
 ```
-10 * 4096 * 1 * 3948 bytes  ~  162 MB
+10 * 512 * 1 * 3948 bytes  ~  20 MB
 ```
 
-Comfortable on 61 GiB. **Nothing sets the depth, and that is the point** —
+Nothing on 61 GiB. **Nothing sets the depth, and that is the point** —
 `scyllarate` hardcodes it and has no flag, so leaving `osrate`'s flag off is
 what keeps the two halves' read-ahead identical. It becomes a real constraint
-only if a batch level is restored: at `batch=512` the same cap is ~83 GB and the
-box has no swap, so an overshoot is an OOM kill. Check the product before any
-arm that changes either factor.
+only if a batch level is restored, and the lower cap has bought room rather than
+removed the hazard: at `batch=512` this cap is ~10 GB, where the old cap of 4096
+was ~83 GB on a box with no swap. Check the product before any arm that changes
+either factor.
 
 ```bash
 ssh fts-harness 'while pgrep -x osrate >/dev/null; do \
@@ -1307,19 +1465,22 @@ ssh fts-harness 'while pgrep -x osrate >/dev/null; do \
 ssh fts-harness 'cat > ~/run-os-rate-arm.sh << "SCRIPT"
 #!/bin/bash
 # One osrate arm: the offered-rate ladder at ONE batch size, N times, against
-# the HTTP mock on fts-sut. The rates and the budget come from Part A, unchanged --
-# a document per second is the same quantity on both halves and sharing the
-# grid is the whole reason this axis was chosen.
+# the HTTP mock on fts-sut. The rates and the rung duration come from Part A,
+# unchanged -- a document per second is the same quantity on both halves and
+# sharing the grid is the whole reason this axis was chosen.
+#
+# ONE INVOCATION PER RUNG, exactly as Part A, and for the same reason:
+# --max-docs is one scalar, so rate * RUNG_S is computed in the loop.
 # NB: no apostrophes in this script -- it is delivered inside a single-quoted
 # ssh argument, and one would close the quote.
 set -u
 ARM="$1"; shift
 REPS="${REPS:-3}"
-RATES="${RATES:-25000,50000,100000,200000,400000}"
-CAP="${CAP:-4096}"
+RATES="${RATES:-1024,2048,4096,16384,32768}"
+RUNG_S="${RUNG_S:-120}"
+CAP="${CAP:-512}"
 BATCH="${BATCH:-1}"
 CORPUS="${CORPUS:-/mnt/nvme/work/corpus.jsonl}"
-MAX_DOCS="${MAX_DOCS:-3500000}"
 SINK_URL="${SINK_URL:-http://172.31.47.166:9200}"
 INDEX="${INDEX:-wiki-articles}"
 # Reset stays ON, as on the ScyllaDB side. Only the analyzer probe is
@@ -1329,39 +1490,44 @@ RESET_FLAGS="${RESET_FLAGS:---no-analyzer-check}"
 OUT_DIR="${OUT_DIR:-/mnt/nvme/work/results-os-rate}"
 BIN=/mnt/nvme/work/target-os/release/osrate
 
-# One socket per in-flight bulk, and the cap is in the thousands. This must be
-# raised in the shell that execs the binary; it does not cross an ssh.
+# One socket per in-flight bulk. The cap is 512 here and the soft limit 1024,
+# which is margin rather than safety. Raised in the shell that execs the
+# binary; it does not cross an ssh.
 ulimit -n 65536
 
 mkdir -p "$OUT_DIR"
 WINDOWS="$OUT_DIR/os-windows.tsv"
-[ -f "$WINDOWS" ] || printf "arm\tbatch\trep\tstart_epoch\tend_epoch\texit_code\trates\tcap\tmax_docs\tcsv\n" > "$WINDOWS"
+[ -f "$WINDOWS" ] || printf "arm\tbatch\trep\trate\tstart_epoch\tend_epoch\texit_code\tcap\tmax_docs\tcsv\n" > "$WINDOWS"
 stamp() { awk "{ printf \"%d\t%s\n\", systime(), \$0; fflush() }"; }
 
 for rep in $(seq 1 "$REPS"); do
-    csv="$OUT_DIR/$ARM-b$BATCH-rep$rep.csv"
-    log="$OUT_DIR/$ARM-b$BATCH-rep$rep.stderr.tsv"
-    echo "######## arm=$ARM batch=$BATCH rep=$rep rates=$RATES cap=$CAP $(date -u +%H:%M:%S)"
-    start=$(date +%s)
-    "$BIN" --corpus "$CORPUS" --target-rate "$RATES" --concurrency "$CAP" \
-           --batch-size "$BATCH" --max-docs "$MAX_DOCS" \
-           --url "$SINK_URL" --index "$INDEX" --out "$csv" \
-           $RESET_FLAGS "$@" 2>&1 | stamp > "$log"
-    code=${PIPESTATUS[0]}
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$ARM" "$BATCH" "$rep" "$start" "$(date +%s)" "$code" "$RATES" "$CAP" \
-        "$MAX_DOCS" "$csv" >> "$WINDOWS"
-    ~/rungs.sh "$csv"
+    for rate in $(echo "$RATES" | tr , " "); do
+        max_docs=$((rate * RUNG_S))
+        csv="$OUT_DIR/$ARM-b$BATCH-rep$rep-r$rate.csv"
+        log="$OUT_DIR/$ARM-b$BATCH-rep$rep-r$rate.stderr.tsv"
+        echo "######## arm=$ARM batch=$BATCH rep=$rep rate=$rate max_docs=$max_docs cap=$CAP $(date -u +%H:%M:%S)"
+        start=$(date +%s)
+        "$BIN" --corpus "$CORPUS" --target-rate "$rate" --concurrency "$CAP" \
+               --batch-size "$BATCH" --max-docs "$max_docs" \
+               --url "$SINK_URL" --index "$INDEX" --out "$csv" \
+               $RESET_FLAGS "$@" 2>&1 | stamp > "$log"
+        code=${PIPESTATUS[0]}
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+            "$ARM" "$BATCH" "$rep" "$rate" "$start" "$(date +%s)" "$code" "$CAP" \
+            "$max_docs" "$csv" >> "$WINDOWS"
+        ~/rungs.sh "$csv"
+    done
 done
 SCRIPT
 chmod +x ~/run-os-rate-arm.sh'
 ```
 
-One rep first, same as Part A, and check `peak=` against the cap on every rung:
+One rep first, same as Part A, and check `peak=` against the cap and `wall_s`
+against 120 on every rung:
 
 ```bash
 ssh fts-harness 'REPS=1 CAP=<cap> ~/run-os-rate-arm.sh probe-os'
-ssh fts-harness '~/rungs.sh /mnt/nvme/work/results-os-rate/probe-os-b1-rep1.csv'
+ssh fts-harness '~/rungs.sh /mnt/nvme/work/results-os-rate/probe-os-b1-rep1-r*.csv'
 ```
 
 Then the matrix:
@@ -1370,13 +1536,16 @@ Then the matrix:
 ssh fts-harness 'REPS=3 CAP=<cap> ~/run-os-rate-arm.sh rate-os'
 ```
 
-**The grid and the budget are Part A's and are not negotiable per half.** On the
-concurrency ladder that sharing had to be argued for, because a rung's document
-count depended on the client's speed. Here `--max-docs` is a constant and the
-rates are the axis, so **both halves push exactly the same documents at exactly
-the same schedule** — which is as close to a controlled comparison as these two
-clients get. If a session has to be shortened, cut **reps**, or drop the bottom
-rung from **both** halves; never change one half's grid alone.
+**The grid and the rung duration are Part A's and are not negotiable per half.**
+On the concurrency ladder that sharing had to be argued for, because a rung's
+document count depended on the client's speed. Here the rate is the axis and the
+duration is fixed, so at each rung **both halves push the same documents on the
+same schedule for the same 120 seconds** — which is as close to a controlled
+comparison as these two clients get. `RUNG_S` moving on one half and not the
+other is the way to destroy that, and it is why the scripts default it rather
+than taking it per arm. If a session has to be shortened, cut **reps**, or drop the bottom rung —
+1,024, which is over half the ladder's load time — from **both** halves; never
+change one half's grid alone.
 
 ### Measuring searchability is a separate run
 
@@ -1385,7 +1554,7 @@ become *searchable* (`--index-watch`, with `--samples-dir`), and the script
 forwards `"$@"` so it is a separate run rather than an edit:
 
 ```
-ssh fts-harness 'REPS=3 CAP=<cap> RATES=25000,50000,100000 \
+ssh fts-harness 'REPS=3 CAP=<cap> RATES=1024,4096,16384 RUNG_S=120 \
     ~/run-os-rate-arm.sh os-build --index-watch \
     --samples-dir /mnt/nvme/work/samples-os-rate/os-build'
 ```
@@ -1400,7 +1569,7 @@ The point CSVs and the logs first, while the mocks are still running:
 
 ```bash
 scp 'fts-harness:/mnt/nvme/work/results-os-rate/*'    $R/opensearch/points/
-scp -r 'fts-harness:/mnt/nvme/work/samples-os-rate/*' $R/opensearch/samples/  # only with --index-watch
+scp -r 'fts-harness:/mnt/nvme/work/samples-os-rate/*' $R/opensearch/samples/  # rep<N>/r<rate>/, only with --index-watch
 scp 'fts-sut:/tmp/sink-9200.log'                      $R/opensearch/sinks/
 mv $R/opensearch/points/*.stderr.tsv                  $R/opensearch/logs/
 mv $R/opensearch/points/os-windows.tsv                $R/opensearch/
@@ -1444,13 +1613,13 @@ under "Then reconcile against the instrument's own witness", once against
 `unexpected_requests`; the HTTP mock must show exactly the two header read-backs
 checked below.
 
-Run Phase 6's gates 1–8 against `$R/opensearch/points/rate-*.csv`, plus these
-three:
+Run Phase 6's gates 1–8 (including 7b, the 120 s duration check) against
+`$R/opensearch/points/rate-*.csv`, plus these three:
 
 ```bash
 # the batch_size COLUMN (8) agrees with the filename on every data row
 for f in $R/opensearch/points/*.csv; do
-  want=$(basename "$f" | sed 's/.*-b\([0-9]*\)-rep.*/\1/')
+  want=$(basename "$f" | sed 's/.*-b\([0-9]*\)-rep.*/\1/')   # -b<batch>-rep<N>-r<rate>.csv
   got=$(awk -F, '!/^#/ && $1!="concurrency" {print $8}' "$f" | sort -u | paste -sd,)
   [ "$want" = "$got" ] && echo "  OK   $(basename $f) batch=$got" \
                        || echo "  BLAD $(basename $f) name=$want column=$got"
@@ -1517,19 +1686,37 @@ a feature.** The error arrives before anything connects, so it costs a second
 rather than a level. Do not "fix" it by looping the runbook over concurrencies —
 that reconfounds the axis the rate ladder exists to disentangle.
 
-**R7. `--max-docs` above the corpus makes every rung's arithmetic a lie.** On the
-concurrency ladder that mistake shortened one level. Here `wall_s =
-max_docs / rate` is how every duration in this file was computed, so a short
-corpus makes all of them wrong at once while the CSV still looks clean. Phase 4
-gates the line count; Phase 6's SHORT check catches what gets through.
+**R7. `--max-docs` above the corpus silently shortens the rung that matters
+most.** The budget is `rate × 120` now, so the **top** rung asks for the most
+documents — 3,932,160 — and is the first to run off the end of the file. It
+comes back with a plausible `docs_per_s`, a `wall_s` under 120 and no error, and
+it is the rung the certified band is read from. Phase 4 gates the line count at
+3,932,160; Phase 6's gate 7b catches what gets through.
 
 **R8. `ulimit -n` does not cross an `ssh`.** It has to be raised inside the
-script that execs `osrate`, which B4 does. A cap of 4096 against a 1024 soft
-limit is `EMFILE` reported as failed requests.
+script that execs `osrate`, which B4 does. This grid's cap of 512 sits under the
+1024 soft limit with margin to spare, which is exactly the condition under which
+the line gets dropped as unnecessary — and then a raised cap meets `EMFILE`
+reported as failed requests.
 
-**R9. An abandoned rung's `wall_s` is not `max_docs / rate`.** `cut_short` fires
-at `3.0x` the schedule after a 10 s grace. Read the stderr log for
-`offered rate abandoned` before treating any short rung as arithmetic.
+**R9. An abandoned rung's `wall_s` is not 120 s.** `cut_short` fires at `3.0x`
+the schedule after a 10 s grace, so a saturated rung runs **longer** than its
+duration, not shorter. Read the stderr log for `offered rate abandoned` before
+reading an over-long rung as a clock problem.
+
+**R11. Five processes write the same samples filename.** `core/src/samples.rs`
+names a series `c<concurrency>-<n>.csv` and `<n>` counts repeats **within one
+process**. Under a rate ladder `concurrency` is the cap and never varies, so
+with one invocation per rung every rung writes `c512-1.csv` — pointed at a
+shared directory, each overwrites the last and four rungs' per-second series are
+gone with no error anywhere. The arm scripts give each invocation
+`.../rep<N>/r<rate>/`. Phase 6 gate 3 counts the subdirectories, and it is the
+only thing that would notice.
+
+**R12. One CSV per rung plus the default warm-up drop is an empty chart.** Both
+renderers drop the first data row of every file, and every file now has exactly
+one. `--keep-warmup` was already mandatory; the failure it prevents has gone
+from a missing rung to no data at all.
 
 **R10. `VS_PORT` must match the launcher's `--vs-port`.** Phase 3 puts it at CQL
 port + 7000 and Phase 5's script computes the same. A mismatch fails every
@@ -1602,32 +1789,42 @@ Two `i8g.2xlarge` on-demand in `eu-north-1`.
 | | wall |
 |---|---|
 | bring-up, toolchain, both harness builds, mock build + copy | ~21 min |
-| corpus generation (3.5 M, once, serves both parts) | ~34 min |
+| corpus generation (4 M, once, serves both parts) | ~39 min |
 | Phase 5A bracket (1 rep per half, closed loop) | ~6 min |
-| Part A probe rep + N=3 at the default grid | ~18 min |
-| Part B probe rep + N=3 at the default grid | ~18 min |
+| Part A probe rep + N=3 at the default grid | ~45 min |
+| Part B probe rep + N=3 at the default grid | ~45 min |
 | collect, verify, stop | ~6 min |
-| **both parts, one session** | **~1 h 40 min – 2 h** |
+| **both parts, one session** | **~2 h 40 min – 3 h** |
 
-**The measurement rows are arithmetic plus an allowance, which is the one thing
-this axis gives that the concurrency ladder could not.** One rep of the default
-grid at `--max-docs 3500000` is 140+70+35+17.5+8.75 = **271 s of load**. Four
-reps per half (one probe, three measured) is ~18 min, plus five resets per rep
-outside that figure. **Both halves push identical documents on identical
-schedules, so their load times are equal by construction** — any difference in
-the observed wall clock is reset overhead and saturation, and is itself a
-reading.
+**The measurement rows are no longer arithmetic — they are a multiplication.**
+One rep is five rungs × 120 s = **600 s of load**, on both halves, whatever the
+grid's rates are. Four reps per half (one probe, three measured) is 40 min of
+load, plus five resets, five settles and five process starts per rep outside
+that figure. **The grid's rates stopped being a cost input at all**, which is
+the one budgeting simplification the fixed duration buys: adding a rung costs
+120 s, moving a rung costs nothing. **At any one rung both halves push the same
+documents on the same schedule for the same time, so their load times are equal
+by construction** — any difference in the observed wall clock is reset overhead
+and saturation, and is itself a reading. Across rungs they are not equal and are
+not meant to be; that is the trade Phase 0 sets out.
 
-**The corpus row is the session's largest line item and it grew.** 3.5 M rather
-than 2.5 M costs ~10 extra minutes once, and it is what makes `--max-docs` a
-constant instead of a negotiation. Both of the two rows above it are smaller
-than the sibling's because the grid is five rungs rather than seven across two
-sub-sweeps.
+**The fixed duration is what this session is paying for, and the bill is about
+an hour.** The previous edition's flat 200,000 documents ran a rep in 360 s;
+120 s a rung runs it in 600. The measurement rows roughly doubled and the corpus row grew
+with them — 4 M lines rather than 1.5 M, because the top rung alone consumes
+3,932,160 of them. **What it buys is the only thing that makes rungs comparable
+to each other:** equal exposure per rung, so a fidelity ratio at 1,024 and one
+at 32,768 are averages over the same amount of time rather than over 195 s and
+6 s.
 
-**The floor rung is where the money is.** The 25,000 rung is 140 s of every 271,
-i.e. ~52% of the ladder's load time, and it is the rung least likely to be near
-anything interesting. If a session has to be shortened, drop it from **both**
-halves before touching reps.
+**Every rung now costs the same, so shortening a session is a different
+decision.** There is no expensive floor rung to drop: each is 120 s of every
+600. Cut **reps** first — three to two is a whole ladder, 600 s a half, and it
+costs only the min..max bar's width — and drop a rung only if the band can afford to lose its
+edge, in which case it is the floor, from **both** halves, and the write-up says
+the certified band starts at 2,048. `RUNG_S=60` is the other lever and it halves
+everything at once; it also halves what each ratio is averaged over, so say so
+beside any number produced that way.
 
 **Every row here is an estimate; none has been timed on the fleet.** Time them
 and write the real numbers in.
@@ -1658,19 +1855,34 @@ ssh, something was not collected and Phase 6's gate was skipped.
 
 Four flags, and three of them are load-bearing:
 
-- **`--keep-warmup` is mandatory.** Without it the renderer drops the first data
-  row of every CSV, which on a five-rung ladder deletes the 25,000 rung.
+- **`--keep-warmup` is mandatory, and it is now the difference between a chart
+  and nothing.** The renderer drops the first data row of every CSV, and with
+  one invocation per rung every CSV holds exactly one row. Without the flag the
+  render is empty, not missing its floor rung.
 - **`--submitted-only` drops the dashed index-rate family.** Against
   `engine-mock --mode cql` the mock counts a document into its modelled index as
   it accepts it, so the two families lie on top of each other by construction
   and the second one carries no information. Run it **once without the flag** as
   a zero reading — any daylight between the families is the harness's own — then
-  use the flag for the chart people read.
+  use the flag for the chart people read. **The fixed rung duration strengthens
+  this from a preference to a rule:** each rung ends at a different index size
+  now (Phase 0), so the dashed family is not comparable rung to rung even when
+  the mock makes it comparable to the submitted one.
 - **Do not pass `--no-diagonal`.** The `y=x` line *is* the measurement here.
   Fidelity is points sitting on it; the rate at which the line departs is the
   ceiling. A fidelity chart without its diagonal is a throughput chart.
-- **The globs must exclude `bracket-*` and `probe-*`.** `rate-scylla-rep*` and
-  `rate-os-b1-rep*` do that; `*-rep*` would not.
+- **The globs must exclude `bracket-*` and `probe-*`, and must reach every
+  rung.** `rate-scylla-rep*` and `rate-os-b1-rep*` still do both: the rung
+  suffix `-r<rate>.csv` is inside the trailing wildcard, so all fifteen files
+  per half are collected and the renderer aggregates them by the offered rate in
+  column 18 — the file boundaries stop meaning anything once they are read.
+  `*-rep*` would drag the probe in.
+
+**Both axes are in thousands and the x is linear, so this grid plots from 1.02
+to 32.77.** Nothing has to be changed for that — but the four lower rungs sit in
+the left third of the image, and the eye reads a cluster there as a short line
+rather than as four faithful points. **The table is where the bottom of the grid
+is read**, and a caption that names the rungs is worth the line.
 
 **A hollow ring marks a saturated rung** — `generator_saturated`, i.e. under 95%
 of the offered rate delivered. Rung markers are rung verdicts: **a ring is a
@@ -1718,7 +1930,7 @@ table is what a reader checks R1 against without opening a CSV.
 
 ```
 .venv/bin/python3 build-rate/charts/rate_vs_index_size.py \
-    --scylla   "$R/scylla/samples/rate-scylla-rep*/*.csv" \
+    --scylla   "$R/scylla/samples/rate-scylla-rep*/r*/*.csv" \
     --output   "$R/build-growth.png" \
     --table    "$R/build-growth.csv" \
     --title    "Build rate as the index grows (rate ladder, engine-mock)" \
@@ -1739,7 +1951,10 @@ Put `rate-fidelity.png`, `rate-fidelity.csv` and the three numbers from Phase 8
 at the top of `$R/README.md`, name the saturated rungs and their verdicts in the
 caption, and hand the user the absolute path of `$R`.
 
-**Then record the ceiling where the next campaign will look for it:**
-`../TUNING.md` § "Per-process client ceilings", as a bracket, with the document
-size, the box pair and the run id beside it. A ceiling nobody can find is a
-ceiling the index-rate campaign will exceed without noticing.
+**Then record the band where the next campaign will look for it:**
+`../TUNING.md` § "Per-process client ceilings", written as the band plus its
+unresolved clause — *"faithful to 32,768 docs/s at 3,948 B; unresolved above"* —
+with the box pair and the run id beside it. **Both halves of that sentence
+belong in the file.** A band recorded as a ceiling invites the index-rate
+campaign to treat 32,768 as a measured limit; a band nobody can find is one that
+campaign will exceed without noticing.
