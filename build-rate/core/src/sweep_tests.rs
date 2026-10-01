@@ -117,6 +117,28 @@ async fn in_flight_never_exceeds_the_concurrency_level() {
     );
 }
 
+/// Each of the levels the concurrency ladder actually starts at: with enough
+/// requests queued behind a slow inserter, the closed loop should not just stay
+/// under the cap, it should reach it exactly — N workers, each blocked on its
+/// own reply before it asks for the next.
+#[tokio::test]
+async fn closed_loop_reaches_exactly_n_in_flight_at_each_low_concurrency() {
+    for concurrency in 1usize..=4 {
+        let inserter = Arc::new(FakeInserter::<Batch>::with_latency(Duration::from_millis(
+            5,
+        )));
+        measure(&inserter, a_source(40, 1), ONE_DOC, concurrency)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            inserter.max_in_flight(),
+            concurrency,
+            "concurrency={concurrency}"
+        );
+    }
+}
+
 /// `c=64` and `c=64 batch=512` are not the same offer, and the product is what
 /// a reader has to be told.
 #[tokio::test]
