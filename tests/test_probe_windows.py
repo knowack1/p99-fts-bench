@@ -322,3 +322,24 @@ def test_a_probe_header_without_started_at_cannot_be_placed_on_a_clock(tmp_path)
 def test_no_matching_stderr_log_is_an_error_not_an_empty_table(tmp_path):
     with pytest.raises(ValueError):
         probe_windows.collect_windows([str(tmp_path / "nothing-*.tsv")])
+
+
+def test_a_search_sweep_result_line_closes_its_window(tmp_path):
+    """search-latency's scyllasearch/ossearch report queries, not docs, and
+    every measured search sweep runs --no-index-build so there is no SERVING
+    line to open the window either. Matching only '-> N docs in' silently
+    yielded zero windows for the whole search campaign — an empty
+    resource-by-cell.csv reads as 'no CPU attribution', which the runbook
+    scores as '?' and '?' is not a pass."""
+    lines = [
+        (BASE_EPOCH, "[1/2] concurrency=8 class=rare_term (200 distinct queries)"),
+        (BASE_EPOCH + 5,
+         "  -> 9130 queries in 5.01s = 1823.8 q/s, p50 4.26 / p90 5.28 / p99 10.71 ms, 0 errors"),
+    ]
+    samples = [sample(elapsed) for elapsed in range(0, 6)]
+    code, rows = default_run(tmp_path, samples, lines)
+
+    assert code == 0
+    assert len(rows) == 1
+    assert rows[0]["concurrency"] == "8"
+    assert rows[0]["samples"] == "6"

@@ -66,7 +66,7 @@ SAMPLE_RECORD = "resource_sample"
 
 LEVEL_RE = re.compile(r"\[\d+/\d+\] concurrency=(\d+)")
 BUILD_START_RE = re.compile(r"index is (?:SERVING|answering) at 0 documents")
-BUILD_END_RE = re.compile(r"->\s+\d+ docs in ")
+BUILD_END_RE = re.compile(r"->\s+\d+ (?:docs|queries) in ")
 REP_RE = re.compile(r"^(?P<sweep>.+)-rep(?P<rep>\d+)\.stderr\.tsv$")
 
 MEMORY_FIELDS = {
