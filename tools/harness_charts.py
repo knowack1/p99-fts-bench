@@ -11,6 +11,7 @@ writer, because a chart nobody can get the numbers out of is not evidence.
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -29,6 +30,25 @@ def read_csv_rows(path: Path | str) -> list[dict]:
             line for line in handle if not line.startswith("#")))
 
 
+def read_preamble(path: Path | str) -> dict[str, str]:
+    """The `# key=value` facts a harness writes above the column header.
+
+    The rows alone do not say what a latency column MEANS -- whether a request
+    is one document or 1,024 of them, and whether it was timed from when it was
+    sent or from when it was due. Both live here, and a chart that puts two
+    different answers on one axis needs to be able to read them to refuse.
+    """
+    facts: dict[str, str] = {}
+    with Path(path).open() as handle:
+        for line in handle:
+            if not line.startswith("#"):
+                break
+            key, seam, value = line.lstrip("#").strip().partition("=")
+            if seam:
+                facts[key.strip()] = value.strip()
+    return facts
+
+
 def colours(count: int, ramp: str = RAMP) -> list:
     # matplotlib.colormaps rather than cm.get_cmap: the latter was removed in
     # 3.11, which is what bench/.venv carries.
@@ -39,7 +59,7 @@ def colours(count: int, ramp: str = RAMP) -> list:
     return [scale(0.08 + 0.80 * i / (count - 1)) for i in range(count)]
 
 
-def label_right_edge(axes: Any, ends: Sequence[tuple]) -> None:
+def label_right_edge(axes: Any, ends: Sequence[tuple], log_y: bool = False) -> None:
     """Direct labels at each line's right end, nudged apart so they stay legible.
 
     Lines bunch up wherever the knob has stopped buying anything — which is
@@ -48,18 +68,21 @@ def label_right_edge(axes: Any, ends: Sequence[tuple]) -> None:
     gap keeps every series readable without giving up the direct label, which
     is what carries identity when a ramp step cannot.
     """
-    span = axes.get_ylim()[1] - axes.get_ylim()[0]
-    gap = span * 0.045
+    low, high = axes.get_ylim()
+    scale = (lambda y: math.log10(y)) if log_y else (lambda y: y)
+    unscale = (lambda y: 10.0 ** y) if log_y else (lambda y: y)
+    gap = (scale(high) - scale(low)) * 0.045
     placed: list[float] = []
     for x, y, name, colour in sorted(ends, key=lambda end: end[1]):
-        target = y
+        target = scale(y)
         for taken in placed:
             if abs(target - taken) < gap:
                 target = taken + gap
         placed.append(target)
-        axes.annotate(f" {name}", xy=(x, y), xytext=(x, target), color=colour,
-                      fontsize=8, va="center", ha="left", annotation_clip=False,
-                      arrowprops=None if abs(target - y) < gap / 2 else
+        axes.annotate(f" {name}", xy=(x, y), xytext=(x, unscale(target)),
+                      color=colour, fontsize=8, va="center", ha="left",
+                      annotation_clip=False,
+                      arrowprops=None if abs(target - scale(y)) < gap / 2 else
                       dict(arrowstyle="-", color=colour, linewidth=0.5, alpha=0.6))
 
 
