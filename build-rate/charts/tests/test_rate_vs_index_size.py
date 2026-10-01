@@ -153,3 +153,101 @@ def test_the_footer_warns_about_the_y_axis_only_when_both_engines_are_on_it():
     assert "y does NOT" in both
     assert "y does NOT" not in alone
     assert "NOT QUOTABLE" in alone
+
+
+def test_two_arms_of_one_engine_at_one_concurrency_collapse_without_a_label(tmp_path):
+    """Why `--series` exists. Two vector-store configurations built at the same
+    `c=8` write the same `c8-1.csv` and derive the same name, so the chart draws
+    their pointwise median as a single build — the arm difference disappears
+    exactly as an engine difference would without the prefix."""
+    write_series(tmp_path / "buf376", "c8-1.csv")
+    write_series(tmp_path / "buf15", "c8-1.csv")
+
+    levels = (CHART.load(str(tmp_path / "buf376" / "c*.csv"), CHART.SCYLLA_ENGINE)[0]
+              + CHART.load(str(tmp_path / "buf15" / "c*.csv"), CHART.SCYLLA_ENGINE)[0])
+
+    assert list(CHART.by_series(levels)) == ["scylladb c=8"]
+
+
+def test_a_labelled_glob_is_its_own_series(tmp_path):
+    write_series(tmp_path / "buf376", "c8-1.csv")
+    write_series(tmp_path / "buf15", "c8-1.csv")
+
+    levels = (CHART.load(str(tmp_path / "buf376" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                         "376 MB buffer")[0]
+              + CHART.load(str(tmp_path / "buf15" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                           "15 MB buffer")[0])
+    grouped = CHART.by_series(levels)
+
+    assert sorted(grouped) == ["15 MB buffer", "376 MB buffer"]
+    assert all(len(reps) == 1 for reps in grouped.values())
+
+
+def test_repetitions_of_a_labelled_arm_stay_one_series(tmp_path):
+    write_series(tmp_path / "rep1", "c8-1.csv")
+    write_series(tmp_path / "rep2", "c8-2.csv")
+
+    levels = (CHART.load(str(tmp_path / "rep1" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                         "376 MB buffer")[0]
+              + CHART.load(str(tmp_path / "rep2" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                           "376 MB buffer")[0])
+
+    assert len(CHART.by_series(levels)["376 MB buffer"]) == 2
+
+
+def test_labelled_arms_keep_the_order_they_were_asked_for(tmp_path):
+    """Command-line order, not alphabetical: the arms of a sweep are asked for
+    in the order they were run, and a legend that reorders them silently
+    re-tells the story."""
+    write_series(tmp_path / "buf376", "c8-1.csv")
+    write_series(tmp_path / "buf15", "c8-1.csv")
+
+    levels = (CHART.load(str(tmp_path / "buf376" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                         "376 MB buffer", order=0)[0]
+              + CHART.load(str(tmp_path / "buf15" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                           "15 MB buffer", order=1)[0])
+    grouped = CHART.by_series(levels)
+
+    assert CHART.series_order(grouped) == ["376 MB buffer", "15 MB buffer"]
+
+
+def test_labelled_arms_do_not_all_take_the_pinned_scylladb_blue(tmp_path):
+    """Two ScyllaDB arms are two lines; the engine colour can only pin one."""
+    write_series(tmp_path / "buf376", "c8-1.csv")
+    write_series(tmp_path / "buf15", "c8-1.csv")
+
+    levels = (CHART.load(str(tmp_path / "buf376" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                         "376 MB buffer", order=0)[0]
+              + CHART.load(str(tmp_path / "buf15" / "c*.csv"), CHART.SCYLLA_ENGINE,
+                           "15 MB buffer", order=1)[0])
+    grouped = CHART.by_series(levels)
+    palette = CHART.colour_for(grouped, CHART.series_order(grouped))
+
+    assert len(set(palette)) == 2
+
+
+def test_a_labelled_spec_is_split_on_the_first_equals_only(tmp_path):
+    """A glob may contain `=`; the label may not."""
+    assert CHART.parse_series_spec("15 MB buffer=/tmp/a=b/*.csv") == (
+        "15 MB buffer", "/tmp/a=b/*.csv")
+
+
+def test_a_spec_without_an_equals_is_refused():
+    import pytest
+    with pytest.raises(SystemExit):
+        CHART.parse_series_spec("/tmp/a/*.csv")
+
+
+def test_the_provenance_line_can_name_the_box_the_run_was_actually_on():
+    """The footer's last line is the disclosure, and a fleet run that says
+    "laptop" discloses the wrong thing. It stays NOT QUOTABLE either way."""
+    fleet = CHART.footer_lines(1000, [], False, both_engines=False,
+                               provenance="AWS i8g.2xlarge pair, N=1")
+
+    assert "AWS i8g.2xlarge pair, N=1: NOT QUOTABLE." == fleet[-1]
+    assert "Laptop" not in " ".join(fleet)
+
+
+def test_the_default_provenance_is_the_one_every_chart_has_carried():
+    assert "Laptop, shared box" in CHART.footer_lines(1000, [], False,
+                                                      both_engines=False)[-1]

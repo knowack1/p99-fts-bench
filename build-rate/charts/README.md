@@ -1,6 +1,6 @@
 # charts — the images a local build-rate run ends in
 
-Three renderers for `HARNESS-LOCAL-RUNBOOK.md`, reading the CSVs the binaries in
+Four renderers for `HARNESS-LOCAL-RUNBOOK.md`, reading the CSVs the binaries in
 `../scylla` and `../opensearch` already write. Nothing here is a deck chart.
 
 | Script | Question | X | Y |
@@ -8,6 +8,7 @@ Three renderers for `HARNESS-LOCAL-RUNBOOK.md`, reading the CSVs the binaries in
 | [`rate_vs_concurrency.py`](rate_vs_concurrency.py) | what did the client offer, and what did the engine (or the sink modelling one) index | concurrency (log2) | docs/s |
 | [`rate_vs_offered.py`](rate_vs_offered.py) | at a rate the client was **told** to send, what did the engine accept and make searchable | offered docs/s (linear) | docs/s |
 | [`rate_vs_index_size.py`](rate_vs_index_size.py) | what did one build do while it was happening | documents in the index | documents indexed per second |
+| [`latency_vs_offered.py`](latency_vs_offered.py) | at that offered rate, what did **one write request** cost | offered docs/s | `p50_ms` and `p99_ms`, log |
 
 **The first two read different CSVs and each refuses the other's.** A rate-ladder
 row has one concurrency for every rung — its cap — so on the concurrency axis
@@ -77,6 +78,43 @@ and would collapse onto one line. Repeatable; named series are drawn first in
 the order given, ahead of anything `--scylla`/`--opensearch` collected, and a
 label is never parsed for a batch size. `INDEX-RATE-MATRIX-PLAN.md` is the
 campaign it exists for, and carries the full eight-arm command.
+
+**`latency_vs_offered.py` draws the price of the rate the other chart draws.**
+Same rows, same x, same colours: `rate_vs_offered.py` says how much the engine
+accepted and this one says what a request waited to be accepted, so the pair is
+read together and neither alone. Solid filled is `p50_ms`, dashed hollow is
+`p99_ms`, y is log because a ladder that reaches saturation spans three decades.
+
+It is the one chart here that has to read the CSV **preamble**, because the rows
+alone do not say what a millisecond measured:
+
+- **`latency_unit`** — `bulk_request` carries `batch_size` documents and
+  `insert_request` carries one, so two units on one axis would draw the engine
+  doing more work per request as the slower engine. Refused unless
+  `--allow-mixed-units` says the caption handles it.
+- **`latency_basis`** — under the rate ladder these columns run from when a
+  request was **due** (`intended_start`), not from when it was sent, so a rung
+  the client fell behind on shows its backlog rather than hiding it. A `service`
+  CSV is a closed-loop run measuring something else, and a mix is refused with
+  no override.
+
+**A ring is saturated and a cross is void.** `--concurrency-cap N` is what turns
+the sibling's "read `in_flight_peak` against the cap yourself" into a mark on the
+image: a saturated rung whose peak reached the cap measured the **harness**, its
+latency is the cap's, and the footer names it as unquotable. Without the flag
+nothing is crossed and the judgement stays with the reader, which is what
+`rate_vs_offered.py` does.
+
+**`--queue-share` is the "Schedule held" gate, drawn.** `queue_p99_ms/p99_ms`
+over the threshold and the point is annotated with its share and named in the
+footer — on a saturated rung most of a p99 is the wait to be sent, and a reader
+who takes that number for engine latency has been misled by the axis rather than
+by the data.
+
+**`--log-x` puts the rungs on a log2 axis**, one tick per rung. Linear is the
+default so the image stacks on `rate_vs_offered.py`'s x; reach for `--log-x`
+when saturation has stretched the top of the ladder and squeezed every rung that
+can actually be quoted into the left of the frame.
 
 **`rate_vs_index_size.py` puts the engine on the series name.** Both halves
 write `c32-1.csv` into their own samples directory, so globbed onto one axis

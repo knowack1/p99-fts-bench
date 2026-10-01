@@ -14,6 +14,16 @@ draining.
         --output     '<R>/build-rate-vs-index-size.png' \\
         --table      '<R>/build-rate-vs-index-size.csv'
 
+Two arms of ONE engine built at one concurrency both derive `scylladb c=8` and
+would group as repetitions of a single build. `--series 'LABEL=GLOB'`, repeated,
+names them instead — the arms of a sweep, drawn in the order they were asked
+for:
+
+    build-rate/charts/rate_vs_index_size.py \\
+        --series '376 MB buffer=<R>/scylla-buf376/samples/*/c8-*.csv' \\
+        --series '15 MB buffer=<R>/scylla-buf15/samples/*/c8-*.csv' \\
+        --output '<R>/build-rate-vs-index-size.png'
+
 Which builds land on the chart is chosen by the **glob** — `c32-*` takes the
 `c=32` slice of every ladder — because "every build we ran" is one line per
 concurrency per batch level and stops being readable somewhere around a dozen.
@@ -61,12 +71,22 @@ def parse_args() -> argparse.Namespace:
                         help="glob of scyllarate series CSVs, e.g. '<dir>/*/c32-*.csv'")
     parser.add_argument("--opensearch", default="",
                         help="glob of osrate series CSVs, e.g. '<dir>/*/c32-b*-*.csv'")
+    parser.add_argument("--series", action="append", default=[], metavar="LABEL=GLOB",
+                        help="a named series, repeatable: two arms of ONE engine built "
+                             "at one concurrency derive the same name and would "
+                             "otherwise be drawn as repetitions of a single build")
+    parser.add_argument("--series-engine", default=SCYLLA_ENGINE,
+                        help="which engine --series globs came from (colours the "
+                             "ScyllaDB half's y-axis warning, not the lines)")
     parser.add_argument("--output", required=True, help="PNG path")
     parser.add_argument("--table", default="", help="also write every plotted point as CSV")
     parser.add_argument("--grid-step", type=int, default=0,
                         help="documents per bucket; 0 picks one from the corpus size")
     parser.add_argument("--title", default="Build rate as the index grows")
     parser.add_argument("--subtitle", default="")
+    parser.add_argument("--provenance", default=DEFAULT_PROVENANCE,
+                        help="what the footer discloses the run was measured on; "
+                             "NOT QUOTABLE is appended either way")
     parser.add_argument("--width", type=float, default=12.0)
     parser.add_argument("--height", type=float, default=7.5)
     parser.add_argument("--dpi", type=int, default=160)
@@ -88,15 +108,19 @@ def name_of(engine: str, concurrency: int, batch_size: int) -> str:
 
 
 class Level(growth.Level):
-    """One build, tagged with the engine that performed it."""
+    """One build, tagged with the engine that performed it and, when the caller
+    gave one, the name it is to be drawn under."""
 
-    def __init__(self, path: Path, rows: Sequence[dict], engine: str) -> None:
+    def __init__(self, path: Path, rows: Sequence[dict], engine: str,
+                 label: str = "", order: int = 0) -> None:
         super().__init__(path, rows)
         self.engine = engine
+        self.label = label
+        self.order = order
 
     @property
     def series(self) -> str:
-        return name_of(self.engine, self.concurrency, self.batch_size)
+        return self.label or name_of(self.engine, self.concurrency, self.batch_size)
 
 
 def skip_reason(path: Path, rows: Sequence[dict]) -> str:
@@ -113,7 +137,16 @@ def skip_reason(path: Path, rows: Sequence[dict]) -> str:
     return ""
 
 
-def load(pattern: str, engine: str = "") -> tuple[list[Level], list[str]]:
+def parse_series_spec(spec: str) -> tuple[str, str]:
+    """`LABEL=GLOB`, split on the first `=` because a path may hold others."""
+    label, separator, pattern = spec.partition("=")
+    if not separator or not label.strip() or not pattern.strip():
+        raise SystemExit(f"--series wants LABEL=GLOB, got: {spec}")
+    return label.strip(), pattern.strip()
+
+
+def load(pattern: str, engine: str = "", label: str = "",
+         order: int = 0) -> tuple[list[Level], list[str]]:
     levels, skipped = [], []
     for name in sorted(glob.glob(pattern)):
         path = Path(name)
@@ -122,7 +155,7 @@ def load(pattern: str, engine: str = "") -> tuple[list[Level], list[str]]:
         if reason:
             skipped.append(reason)
             continue
-        level = Level(path, rows, engine)
+        level = Level(path, rows, engine, label, order)
         if level.readings < growth.MIN_READINGS:
             skipped.append(f"{path.name} ({level.readings} readings)")
             continue
@@ -140,24 +173,38 @@ def by_series(levels: Sequence[Level]) -> dict[str, list[Level]]:
 
 
 def series_order(grouped: dict[str, list[Level]]) -> list[str]:
-    """ScyllaDB first, then OpenSearch by ascending batch size and concurrency.
+    """Series the caller named first, in the order asked for; then ScyllaDB, then
+    OpenSearch by ascending batch size and concurrency.
 
-    ScyllaDB leads so it keeps the pinned blue on both charts of a run: a reader
-    who learned that colour on the concurrency chart has to find it here.
+    Named arms keep command-line order because that is the order they were run
+    in, and a legend that sorts them alphabetically re-tells the story. Behind
+    them ScyllaDB leads so it keeps the pinned blue on both charts of a run: a
+    reader who learned that colour on the concurrency chart has to find it here.
     """
     def key(name: str) -> tuple:
         level = grouped[name][0]
-        return (0 if level.engine == SCYLLA_ENGINE else 1,
+        if level.label:
+            return (0, level.order, 0)
+        return (1 if level.engine == SCYLLA_ENGINE else 2,
                 level.batch_size, level.concurrency)
     return sorted(grouped, key=key)
 
 
 def colour_for(grouped: dict[str, list[Level]], order: Sequence[str]) -> list:
+    """The pinned blue is an engine's, and an engine can only pin one line: arms
+    the caller named are two ScyllaDB builds and take the ramp instead."""
+    named = [name for name in order if grouped[name][0].label]
     warm = colours(len([name for name in order
-                        if grouped[name][0].engine != SCYLLA_ENGINE]))
-    palette, warm_index = [], 0
+                        if not grouped[name][0].label
+                        and grouped[name][0].engine != SCYLLA_ENGINE]))
+    ramp = colours(len(named))
+    palette, warm_index, ramp_index = [], 0, 0
     for name in order:
-        if grouped[name][0].engine == SCYLLA_ENGINE:
+        level = grouped[name][0]
+        if level.label:
+            palette.append(ramp[ramp_index])
+            ramp_index += 1
+        elif level.engine == SCYLLA_ENGINE:
             palette.append(SCYLLA_COLOR)
         else:
             palette.append(warm[warm_index])
@@ -165,8 +212,12 @@ def colour_for(grouped: dict[str, list[Level]], order: Sequence[str]) -> list:
     return palette
 
 
+DEFAULT_PROVENANCE = "Laptop, shared box, docker/.env laptop-simulation caps"
+
+
 def footer_lines(step: int, skipped: Sequence[str], floored: bool,
-                 both_engines: bool) -> list[str]:
+                 both_engines: bool,
+                 provenance: str = DEFAULT_PROVENANCE) -> list[str]:
     lines = [
         "x is the documents THIS build put in the index, y is how fast they went "
         f"in. Rate is recomputed on a shared grid of {step:,} documents per "
@@ -193,8 +244,7 @@ def footer_lines(step: int, skipped: Sequence[str], floored: bool,
             "OpenSearch it is refresh-gated visibility. Compare the SHAPE of a "
             "line against its own budget, not one engine's height against the "
             "other's.")
-    lines.append(
-        "Laptop, shared box, docker/.env laptop-simulation caps: NOT QUOTABLE.")
+    lines.append(f"{provenance}: NOT QUOTABLE.")
     if skipped:
         lines.append(f"SKIPPED ({len(skipped)}): {'; '.join(skipped[:6])}"
                      f"{' ...' if len(skipped) > 6 else ''}")
@@ -209,6 +259,11 @@ def main() -> int:
     from matplotlib.ticker import FuncFormatter
 
     levels, skipped = [], []
+    for index, spec in enumerate(args.series):
+        label, pattern = parse_series_spec(spec)
+        found, missed = load(pattern, args.series_engine, label, index)
+        levels += found
+        skipped += missed
     for pattern, engine in ((args.scylla, SCYLLA_ENGINE),
                             (args.opensearch, OPENSEARCH_ENGINE)):
         if not pattern:
@@ -217,7 +272,7 @@ def main() -> int:
         levels += found
         skipped += missed
     if not levels:
-        print("no series matched --scylla / --opensearch"
+        print("no series matched --series / --scylla / --opensearch"
               + ("; skipped: " + "; ".join(skipped) if skipped else ""))
         return 1
 
@@ -246,7 +301,8 @@ def main() -> int:
     label_right_edge(axes, ends)
 
     figure.subplots_adjust(right=0.82, bottom=0.32)
-    draw_footer(figure, footer_lines(step, skipped, floored, len(engines) > 1))
+    draw_footer(figure, footer_lines(step, skipped, floored, len(engines) > 1,
+                                     args.provenance))
     figure.savefig(args.output, dpi=args.dpi)
     print(f"wrote {args.output}  ({len(order)} series)")
 
