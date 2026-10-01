@@ -1,0 +1,2350 @@
+{
+  "engine": "opensearch",
+  "run_at": "2026-09-19T19:34:55.127075+00:00",
+  "limit": 10,
+  "warmup": 3,
+  "iterations": 20,
+  "queries_file": "/tmp/claude-1000/-home-karolnowacki-Projects-Scylla-p99-bench/af6273ef-24ef-40f9-83d9-74206a7b5591/scratchpad/q-3class.json",
+  "classes": {
+    "phrase": {
+      "summary": {
+        "count": 800,
+        "mean_ms": 3.631,
+        "min_ms": 1.871,
+        "p50_ms": 3.207,
+        "p90_ms": 5.615,
+        "p95_ms": 6.165,
+        "p99_ms": 7.214,
+        "p999_ms": 7.786,
+        "p9999_ms": 7.833,
+        "max_ms": 7.838,
+        "unsupported_percentiles": [
+          99.9,
+          99.99
+        ]
+      },
+      "queries": [
+        {
+          "query": "\"you can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 6.902,
+          "min_ms": 6.088,
+          "p50_ms": 6.945,
+          "p90_ms": 7.575,
+          "p95_ms": 7.776,
+          "p99_ms": 7.825,
+          "p999_ms": 7.836,
+          "p9999_ms": 7.838,
+          "max_ms": 7.838,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"can help\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 5.63,
+          "min_ms": 4.488,
+          "p50_ms": 5.628,
+          "p90_ms": 6.231,
+          "p95_ms": 6.467,
+          "p99_ms": 6.952,
+          "p999_ms": 7.062,
+          "p9999_ms": 7.073,
+          "max_ms": 7.074,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"short article\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 4.883,
+          "min_ms": 3.534,
+          "p50_ms": 4.519,
+          "p90_ms": 6.165,
+          "p95_ms": 6.331,
+          "p99_ms": 6.55,
+          "p999_ms": 6.599,
+          "p9999_ms": 6.604,
+          "max_ms": 6.604,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"made longer\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 4.403,
+          "min_ms": 3.535,
+          "p50_ms": 4.382,
+          "p90_ms": 4.88,
+          "p95_ms": 5.327,
+          "p99_ms": 5.996,
+          "p999_ms": 6.146,
+          "p9999_ms": 6.161,
+          "max_ms": 6.163,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"help wikipedia\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 4.468,
+          "min_ms": 3.401,
+          "p50_ms": 4.217,
+          "p90_ms": 5.881,
+          "p95_ms": 6.033,
+          "p99_ms": 6.066,
+          "p999_ms": 6.073,
+          "p9999_ms": 6.074,
+          "max_ms": 6.074,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"longer you\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 4.241,
+          "min_ms": 3.269,
+          "p50_ms": 4.193,
+          "p90_ms": 5.17,
+          "p95_ms": 5.676,
+          "p99_ms": 5.946,
+          "p999_ms": 6.007,
+          "p9999_ms": 6.013,
+          "max_ms": 6.014,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"article about\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.396,
+          "min_ms": 2.958,
+          "p50_ms": 3.31,
+          "p90_ms": 3.835,
+          "p95_ms": 3.899,
+          "p99_ms": 4.01,
+          "p999_ms": 4.034,
+          "p9999_ms": 4.037,
+          "max_ms": 4.037,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"archived from\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.481,
+          "min_ms": 3.143,
+          "p50_ms": 3.459,
+          "p90_ms": 3.743,
+          "p95_ms": 3.974,
+          "p99_ms": 4.144,
+          "p999_ms": 4.182,
+          "p9999_ms": 4.186,
+          "max_ms": 4.187,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"united states\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.118,
+          "min_ms": 2.598,
+          "p50_ms": 3.056,
+          "p90_ms": 3.469,
+          "p95_ms": 3.629,
+          "p99_ms": 3.782,
+          "p999_ms": 3.817,
+          "p9999_ms": 3.82,
+          "max_ms": 3.821,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"states can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 6.27,
+          "min_ms": 5.368,
+          "p50_ms": 6.194,
+          "p90_ms": 6.864,
+          "p95_ms": 6.885,
+          "p99_ms": 6.936,
+          "p999_ms": 6.947,
+          "p9999_ms": 6.948,
+          "max_ms": 6.948,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"wikimedia commons\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.844,
+          "min_ms": 2.498,
+          "p50_ms": 2.695,
+          "p90_ms": 3.448,
+          "p95_ms": 3.5,
+          "p99_ms": 3.788,
+          "p999_ms": 3.853,
+          "p9999_ms": 3.86,
+          "max_ms": 3.86,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"media related\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.319,
+          "min_ms": 2.766,
+          "p50_ms": 3.25,
+          "p90_ms": 3.758,
+          "p95_ms": 3.893,
+          "p99_ms": 4.038,
+          "p999_ms": 4.07,
+          "p9999_ms": 4.074,
+          "max_ms": 4.074,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"wayback machine\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.913,
+          "min_ms": 2.433,
+          "p50_ms": 2.865,
+          "p90_ms": 3.239,
+          "p95_ms": 3.49,
+          "p99_ms": 3.555,
+          "p999_ms": 3.569,
+          "p9999_ms": 3.571,
+          "max_ms": 3.571,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"people can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 5.781,
+          "min_ms": 5.081,
+          "p50_ms": 5.786,
+          "p90_ms": 6.384,
+          "p95_ms": 6.438,
+          "p99_ms": 6.605,
+          "p999_ms": 6.643,
+          "p9999_ms": 6.647,
+          "max_ms": 6.647,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"new york\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.877,
+          "min_ms": 2.49,
+          "p50_ms": 2.92,
+          "p90_ms": 3.21,
+          "p95_ms": 3.324,
+          "p99_ms": 3.384,
+          "p999_ms": 3.397,
+          "p9999_ms": 3.399,
+          "max_ms": 3.399,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"commons has\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.65,
+          "min_ms": 2.179,
+          "p50_ms": 2.53,
+          "p90_ms": 3.116,
+          "p95_ms": 3.202,
+          "p99_ms": 3.359,
+          "p999_ms": 3.394,
+          "p9999_ms": 3.398,
+          "max_ms": 3.398,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"has media\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.688,
+          "min_ms": 2.709,
+          "p50_ms": 3.558,
+          "p90_ms": 4.586,
+          "p95_ms": 4.677,
+          "p99_ms": 4.698,
+          "p999_ms": 4.703,
+          "p9999_ms": 4.704,
+          "max_ms": 4.704,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"u s\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.737,
+          "min_ms": 2.249,
+          "p50_ms": 2.739,
+          "p90_ms": 3.074,
+          "p95_ms": 3.475,
+          "p99_ms": 3.491,
+          "p999_ms": 3.495,
+          "p9999_ms": 3.495,
+          "max_ms": 3.495,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"person can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 5.036,
+          "min_ms": 4.319,
+          "p50_ms": 4.852,
+          "p90_ms": 5.501,
+          "p95_ms": 5.818,
+          "p99_ms": 7.368,
+          "p999_ms": 7.717,
+          "p9999_ms": 7.752,
+          "max_ms": 7.756,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"sports person\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.951,
+          "min_ms": 2.464,
+          "p50_ms": 2.782,
+          "p90_ms": 3.434,
+          "p95_ms": 3.9,
+          "p99_ms": 4.221,
+          "p999_ms": 4.293,
+          "p9999_ms": 4.3,
+          "max_ms": 4.301,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"france can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 4.717,
+          "min_ms": 3.853,
+          "p50_ms": 4.65,
+          "p90_ms": 5.185,
+          "p95_ms": 5.299,
+          "p99_ms": 6.83,
+          "p999_ms": 7.175,
+          "p9999_ms": 7.209,
+          "max_ms": 7.213,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"has been\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.941,
+          "min_ms": 2.254,
+          "p50_ms": 2.876,
+          "p90_ms": 3.434,
+          "p95_ms": 3.859,
+          "p99_ms": 4.076,
+          "p999_ms": 4.124,
+          "p9999_ms": 4.129,
+          "max_ms": 4.13,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"person from\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 5.003,
+          "min_ms": 4.115,
+          "p50_ms": 4.97,
+          "p90_ms": 5.785,
+          "p95_ms": 5.866,
+          "p99_ms": 6.13,
+          "p999_ms": 6.19,
+          "p9999_ms": 6.196,
+          "max_ms": 6.196,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"about europe\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.839,
+          "min_ms": 2.514,
+          "p50_ms": 2.819,
+          "p90_ms": 3.071,
+          "p95_ms": 3.181,
+          "p99_ms": 3.228,
+          "p999_ms": 3.239,
+          "p9999_ms": 3.24,
+          "max_ms": 3.24,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"europe can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.033,
+          "min_ms": 2.734,
+          "p50_ms": 2.959,
+          "p90_ms": 3.241,
+          "p95_ms": 3.424,
+          "p99_ms": 4.11,
+          "p999_ms": 4.264,
+          "p9999_ms": 4.28,
+          "max_ms": 4.282,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"official website\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.431,
+          "min_ms": 2.139,
+          "p50_ms": 2.367,
+          "p90_ms": 2.805,
+          "p95_ms": 2.934,
+          "p99_ms": 3.045,
+          "p999_ms": 3.07,
+          "p9999_ms": 3.072,
+          "max_ms": 3.073,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"com retrieved\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.881,
+          "min_ms": 3.173,
+          "p50_ms": 3.783,
+          "p90_ms": 4.594,
+          "p95_ms": 4.613,
+          "p99_ms": 4.821,
+          "p999_ms": 4.868,
+          "p9999_ms": 4.872,
+          "max_ms": 4.873,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"united kingdom\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.972,
+          "min_ms": 2.649,
+          "p50_ms": 2.866,
+          "p90_ms": 3.52,
+          "p95_ms": 3.569,
+          "p99_ms": 3.965,
+          "p999_ms": 4.054,
+          "p9999_ms": 4.063,
+          "max_ms": 4.064,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"census bureau\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.617,
+          "min_ms": 2.238,
+          "p50_ms": 2.528,
+          "p90_ms": 2.882,
+          "p95_ms": 3.428,
+          "p99_ms": 3.684,
+          "p999_ms": 3.742,
+          "p9999_ms": 3.748,
+          "max_ms": 3.748,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"states census\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.117,
+          "min_ms": 2.65,
+          "p50_ms": 3.059,
+          "p90_ms": 3.629,
+          "p95_ms": 3.892,
+          "p99_ms": 4.215,
+          "p999_ms": 4.287,
+          "p9999_ms": 4.295,
+          "max_ms": 4.296,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"feature can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.762,
+          "min_ms": 2.47,
+          "p50_ms": 2.705,
+          "p90_ms": 3.014,
+          "p95_ms": 3.243,
+          "p99_ms": 3.331,
+          "p999_ms": 3.351,
+          "p9999_ms": 3.353,
+          "max_ms": 3.353,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"bureau retrieved\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.861,
+          "min_ms": 2.508,
+          "p50_ms": 2.798,
+          "p90_ms": 3.271,
+          "p95_ms": 3.38,
+          "p99_ms": 3.481,
+          "p999_ms": 3.504,
+          "p9999_ms": 3.506,
+          "max_ms": 3.507,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"also known\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.732,
+          "min_ms": 2.963,
+          "p50_ms": 3.547,
+          "p90_ms": 4.304,
+          "p95_ms": 4.785,
+          "p99_ms": 5.287,
+          "p999_ms": 5.4,
+          "p9999_ms": 5.411,
+          "max_ms": 5.413,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"dead link\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.214,
+          "min_ms": 2.41,
+          "p50_ms": 2.935,
+          "p90_ms": 4.056,
+          "p95_ms": 4.345,
+          "p99_ms": 4.833,
+          "p999_ms": 4.942,
+          "p9999_ms": 4.953,
+          "max_ms": 4.955,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"permanent dead\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.086,
+          "min_ms": 1.871,
+          "p50_ms": 2.106,
+          "p90_ms": 2.217,
+          "p95_ms": 2.274,
+          "p99_ms": 2.303,
+          "p999_ms": 2.309,
+          "p9999_ms": 2.31,
+          "max_ms": 2.31,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"people lived\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.262,
+          "min_ms": 2.006,
+          "p50_ms": 2.228,
+          "p90_ms": 2.483,
+          "p95_ms": 2.579,
+          "p99_ms": 2.593,
+          "p999_ms": 2.596,
+          "p9999_ms": 2.596,
+          "max_ms": 2.596,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"have been\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.899,
+          "min_ms": 2.229,
+          "p50_ms": 2.592,
+          "p90_ms": 3.753,
+          "p95_ms": 4.651,
+          "p99_ms": 5.095,
+          "p999_ms": 5.195,
+          "p9999_ms": 5.205,
+          "max_ms": 5.206,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"about music\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.119,
+          "min_ms": 2.63,
+          "p50_ms": 2.935,
+          "p90_ms": 3.609,
+          "p95_ms": 3.957,
+          "p99_ms": 5.497,
+          "p999_ms": 5.844,
+          "p9999_ms": 5.879,
+          "max_ms": 5.883,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"music can\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 4.134,
+          "min_ms": 3.131,
+          "p50_ms": 4.019,
+          "p90_ms": 4.807,
+          "p95_ms": 4.858,
+          "p99_ms": 5.228,
+          "p999_ms": 5.311,
+          "p9999_ms": 5.32,
+          "max_ms": 5.321,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "\"about movies\"",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 3.017,
+          "min_ms": 2.338,
+          "p50_ms": 3.003,
+          "p90_ms": 3.527,
+          "p95_ms": 3.924,
+          "p99_ms": 4.024,
+          "p999_ms": 4.046,
+          "p9999_ms": 4.049,
+          "max_ms": 4.049,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        }
+      ]
+    },
+    "common_term": {
+      "summary": {
+        "count": 800,
+        "mean_ms": 1.948,
+        "min_ms": 1.357,
+        "p50_ms": 1.809,
+        "p90_ms": 2.6,
+        "p95_ms": 2.902,
+        "p99_ms": 3.323,
+        "p999_ms": 3.895,
+        "p9999_ms": 4.021,
+        "max_ms": 4.035,
+        "unsupported_percentiles": [
+          99.9,
+          99.99
+        ]
+      },
+      "queries": [
+        {
+          "query": "made",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.596,
+          "min_ms": 2.001,
+          "p50_ms": 2.581,
+          "p90_ms": 2.992,
+          "p95_ms": 3.034,
+          "p99_ms": 3.265,
+          "p999_ms": 3.317,
+          "p9999_ms": 3.322,
+          "max_ms": 3.323,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "can",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.723,
+          "min_ms": 2.152,
+          "p50_ms": 2.532,
+          "p90_ms": 3.355,
+          "p95_ms": 3.707,
+          "p99_ms": 3.771,
+          "p999_ms": 3.785,
+          "p9999_ms": 3.786,
+          "max_ms": 3.787,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "about",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.877,
+          "min_ms": 2.396,
+          "p50_ms": 2.823,
+          "p90_ms": 3.154,
+          "p95_ms": 3.291,
+          "p99_ms": 3.886,
+          "p999_ms": 4.02,
+          "p9999_ms": 4.033,
+          "max_ms": 4.035,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "help",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.405,
+          "min_ms": 1.898,
+          "p50_ms": 2.361,
+          "p90_ms": 2.816,
+          "p95_ms": 2.905,
+          "p99_ms": 3.002,
+          "p999_ms": 3.024,
+          "p9999_ms": 3.026,
+          "max_ms": 3.027,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "you",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.143,
+          "min_ms": 1.799,
+          "p50_ms": 2.079,
+          "p90_ms": 2.473,
+          "p95_ms": 2.73,
+          "p99_ms": 3.028,
+          "p999_ms": 3.094,
+          "p9999_ms": 3.101,
+          "max_ms": 3.102,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "short",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.984,
+          "min_ms": 1.589,
+          "p50_ms": 1.824,
+          "p90_ms": 2.402,
+          "p95_ms": 2.57,
+          "p99_ms": 3.294,
+          "p999_ms": 3.458,
+          "p9999_ms": 3.474,
+          "max_ms": 3.476,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "article",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.274,
+          "min_ms": 1.788,
+          "p50_ms": 2.108,
+          "p90_ms": 2.808,
+          "p95_ms": 3.091,
+          "p99_ms": 3.237,
+          "p999_ms": 3.269,
+          "p9999_ms": 3.273,
+          "max_ms": 3.273,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "longer",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.126,
+          "min_ms": 1.548,
+          "p50_ms": 2.042,
+          "p90_ms": 2.714,
+          "p95_ms": 2.826,
+          "p99_ms": 2.982,
+          "p999_ms": 3.017,
+          "p9999_ms": 3.02,
+          "max_ms": 3.021,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "wikipedia",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.631,
+          "min_ms": 1.475,
+          "p50_ms": 1.595,
+          "p90_ms": 1.835,
+          "p95_ms": 1.925,
+          "p99_ms": 1.935,
+          "p999_ms": 1.937,
+          "p9999_ms": 1.937,
+          "max_ms": 1.937,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "adding",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.931,
+          "min_ms": 1.575,
+          "p50_ms": 1.845,
+          "p90_ms": 2.436,
+          "p95_ms": 2.554,
+          "p99_ms": 2.641,
+          "p999_ms": 2.661,
+          "p9999_ms": 2.663,
+          "max_ms": 2.663,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "from",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.773,
+          "min_ms": 1.566,
+          "p50_ms": 1.677,
+          "p90_ms": 2.194,
+          "p95_ms": 2.224,
+          "p99_ms": 2.298,
+          "p999_ms": 2.314,
+          "p9999_ms": 2.316,
+          "max_ms": 2.316,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "retrieved",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.077,
+          "min_ms": 1.831,
+          "p50_ms": 1.979,
+          "p90_ms": 2.468,
+          "p95_ms": 2.86,
+          "p99_ms": 2.874,
+          "p999_ms": 2.877,
+          "p9999_ms": 2.878,
+          "max_ms": 2.878,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "has",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.902,
+          "min_ms": 1.648,
+          "p50_ms": 1.841,
+          "p90_ms": 2.188,
+          "p95_ms": 2.23,
+          "p99_ms": 2.339,
+          "p999_ms": 2.363,
+          "p9999_ms": 2.366,
+          "max_ms": 2.366,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "archived",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.889,
+          "min_ms": 1.702,
+          "p50_ms": 1.842,
+          "p90_ms": 2.19,
+          "p95_ms": 2.238,
+          "p99_ms": 2.253,
+          "p999_ms": 2.256,
+          "p9999_ms": 2.257,
+          "max_ms": 2.257,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "also",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.852,
+          "min_ms": 1.694,
+          "p50_ms": 1.876,
+          "p90_ms": 1.995,
+          "p95_ms": 2.0,
+          "p99_ms": 2.033,
+          "p999_ms": 2.04,
+          "p9999_ms": 2.041,
+          "max_ms": 2.041,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "people",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.97,
+          "min_ms": 1.65,
+          "p50_ms": 1.906,
+          "p90_ms": 2.39,
+          "p95_ms": 2.444,
+          "p99_ms": 2.464,
+          "p999_ms": 2.469,
+          "p9999_ms": 2.469,
+          "max_ms": 2.469,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "united",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.946,
+          "min_ms": 1.566,
+          "p50_ms": 1.763,
+          "p90_ms": 2.599,
+          "p95_ms": 3.2,
+          "p99_ms": 3.274,
+          "p999_ms": 3.29,
+          "p9999_ms": 3.292,
+          "max_ms": 3.292,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "original",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.91,
+          "min_ms": 1.72,
+          "p50_ms": 1.788,
+          "p90_ms": 2.202,
+          "p95_ms": 2.261,
+          "p99_ms": 2.687,
+          "p999_ms": 2.783,
+          "p9999_ms": 2.793,
+          "max_ms": 2.794,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "born",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.579,
+          "min_ms": 1.885,
+          "p50_ms": 2.613,
+          "p90_ms": 3.303,
+          "p95_ms": 3.382,
+          "p99_ms": 3.49,
+          "p999_ms": 3.514,
+          "p9999_ms": 3.516,
+          "max_ms": 3.517,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "person",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.784,
+          "min_ms": 1.58,
+          "p50_ms": 1.72,
+          "p90_ms": 2.006,
+          "p95_ms": 2.069,
+          "p99_ms": 2.264,
+          "p999_ms": 2.308,
+          "p9999_ms": 2.313,
+          "max_ms": 2.313,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "states",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.891,
+          "min_ms": 1.557,
+          "p50_ms": 1.776,
+          "p90_ms": 2.26,
+          "p95_ms": 2.358,
+          "p99_ms": 2.886,
+          "p999_ms": 3.005,
+          "p9999_ms": 3.017,
+          "max_ms": 3.018,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "first",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.198,
+          "min_ms": 1.756,
+          "p50_ms": 2.071,
+          "p90_ms": 2.62,
+          "p95_ms": 2.911,
+          "p99_ms": 3.088,
+          "p999_ms": 3.128,
+          "p9999_ms": 3.132,
+          "max_ms": 3.133,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "new",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.72,
+          "min_ms": 1.491,
+          "p50_ms": 1.67,
+          "p90_ms": 2.001,
+          "p95_ms": 2.159,
+          "p99_ms": 2.163,
+          "p999_ms": 2.164,
+          "p9999_ms": 2.165,
+          "max_ms": 2.165,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "his",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.711,
+          "min_ms": 1.576,
+          "p50_ms": 1.716,
+          "p90_ms": 1.829,
+          "p95_ms": 1.834,
+          "p99_ms": 1.89,
+          "p999_ms": 1.903,
+          "p9999_ms": 1.904,
+          "max_ms": 1.904,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "one",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.715,
+          "min_ms": 1.524,
+          "p50_ms": 1.675,
+          "p90_ms": 1.819,
+          "p95_ms": 1.872,
+          "p99_ms": 2.141,
+          "p999_ms": 2.201,
+          "p9999_ms": 2.207,
+          "max_ms": 2.208,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "place",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.668,
+          "min_ms": 1.478,
+          "p50_ms": 1.652,
+          "p90_ms": 1.826,
+          "p95_ms": 2.049,
+          "p99_ms": 2.064,
+          "p999_ms": 2.067,
+          "p9999_ms": 2.067,
+          "max_ms": 2.067,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "american",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.317,
+          "min_ms": 1.784,
+          "p50_ms": 2.137,
+          "p90_ms": 3.044,
+          "p95_ms": 3.086,
+          "p99_ms": 3.705,
+          "p999_ms": 3.845,
+          "p9999_ms": 3.859,
+          "max_ms": 3.86,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "group",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.859,
+          "min_ms": 1.54,
+          "p50_ms": 1.767,
+          "p90_ms": 2.233,
+          "p95_ms": 2.48,
+          "p99_ms": 2.837,
+          "p999_ms": 2.917,
+          "p9999_ms": 2.925,
+          "max_ms": 2.926,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "which",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.723,
+          "min_ms": 1.521,
+          "p50_ms": 1.726,
+          "p90_ms": 1.901,
+          "p95_ms": 2.111,
+          "p99_ms": 2.183,
+          "p999_ms": 2.199,
+          "p9999_ms": 2.2,
+          "max_ms": 2.201,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "may",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.816,
+          "min_ms": 1.658,
+          "p50_ms": 1.779,
+          "p90_ms": 2.076,
+          "p95_ms": 2.119,
+          "p99_ms": 2.175,
+          "p999_ms": 2.187,
+          "p9999_ms": 2.188,
+          "max_ms": 2.189,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "known",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.81,
+          "min_ms": 1.487,
+          "p50_ms": 1.743,
+          "p90_ms": 2.229,
+          "p95_ms": 2.282,
+          "p99_ms": 2.317,
+          "p999_ms": 2.324,
+          "p9999_ms": 2.325,
+          "max_ms": 2.325,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "after",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.834,
+          "min_ms": 1.658,
+          "p50_ms": 1.758,
+          "p90_ms": 2.057,
+          "p95_ms": 2.219,
+          "p99_ms": 2.281,
+          "p999_ms": 2.295,
+          "p9999_ms": 2.296,
+          "max_ms": 2.296,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "january",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.732,
+          "min_ms": 1.538,
+          "p50_ms": 1.702,
+          "p90_ms": 1.951,
+          "p95_ms": 1.963,
+          "p99_ms": 2.105,
+          "p999_ms": 2.136,
+          "p9999_ms": 2.14,
+          "max_ms": 2.14,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "national",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.798,
+          "min_ms": 1.502,
+          "p50_ms": 1.647,
+          "p90_ms": 2.056,
+          "p95_ms": 2.251,
+          "p99_ms": 3.298,
+          "p999_ms": 3.533,
+          "p9999_ms": 3.557,
+          "max_ms": 3.559,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "were",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.536,
+          "min_ms": 1.393,
+          "p50_ms": 1.486,
+          "p90_ms": 1.715,
+          "p95_ms": 1.782,
+          "p99_ms": 1.848,
+          "p999_ms": 1.863,
+          "p9999_ms": 1.865,
+          "max_ms": 1.865,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "who",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.613,
+          "min_ms": 1.402,
+          "p50_ms": 1.548,
+          "p90_ms": 1.854,
+          "p95_ms": 1.885,
+          "p99_ms": 1.987,
+          "p999_ms": 2.009,
+          "p9999_ms": 2.012,
+          "max_ms": 2.012,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "december",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.622,
+          "min_ms": 1.462,
+          "p50_ms": 1.592,
+          "p90_ms": 1.777,
+          "p95_ms": 2.049,
+          "p99_ms": 2.064,
+          "p999_ms": 2.067,
+          "p9999_ms": 2.068,
+          "max_ms": 2.068,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "feature",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.846,
+          "min_ms": 1.378,
+          "p50_ms": 1.751,
+          "p90_ms": 2.288,
+          "p95_ms": 2.44,
+          "p99_ms": 2.757,
+          "p999_ms": 2.829,
+          "p9999_ms": 2.836,
+          "max_ms": 2.837,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "have",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.552,
+          "min_ms": 1.383,
+          "p50_ms": 1.518,
+          "p90_ms": 1.671,
+          "p95_ms": 1.734,
+          "p99_ms": 2.178,
+          "p999_ms": 2.278,
+          "p9999_ms": 2.288,
+          "max_ms": 2.29,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "other",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.574,
+          "min_ms": 1.357,
+          "p50_ms": 1.554,
+          "p90_ms": 1.772,
+          "p95_ms": 1.886,
+          "p99_ms": 1.892,
+          "p999_ms": 1.893,
+          "p9999_ms": 1.893,
+          "max_ms": 1.893,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        }
+      ]
+    },
+    "rare_term": {
+      "summary": {
+        "count": 800,
+        "mean_ms": 1.613,
+        "min_ms": 1.233,
+        "p50_ms": 1.513,
+        "p90_ms": 2.017,
+        "p95_ms": 2.274,
+        "p99_ms": 2.774,
+        "p999_ms": 3.626,
+        "p9999_ms": 3.814,
+        "max_ms": 3.835,
+        "unsupported_percentiles": [
+          99.9,
+          99.99
+        ]
+      },
+      "queries": [
+        {
+          "query": "abolished",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.408,
+          "min_ms": 1.304,
+          "p50_ms": 1.404,
+          "p90_ms": 1.471,
+          "p95_ms": 1.524,
+          "p99_ms": 1.604,
+          "p999_ms": 1.622,
+          "p9999_ms": 1.624,
+          "max_ms": 1.624,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "accompanied",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.535,
+          "min_ms": 1.359,
+          "p50_ms": 1.487,
+          "p90_ms": 1.798,
+          "p95_ms": 1.892,
+          "p99_ms": 1.942,
+          "p999_ms": 1.953,
+          "p9999_ms": 1.955,
+          "max_ms": 1.955,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "accurate",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.554,
+          "min_ms": 1.281,
+          "p50_ms": 1.471,
+          "p90_ms": 1.875,
+          "p95_ms": 1.924,
+          "p99_ms": 1.938,
+          "p999_ms": 1.941,
+          "p9999_ms": 1.942,
+          "max_ms": 1.942,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "ages",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.727,
+          "min_ms": 1.306,
+          "p50_ms": 1.677,
+          "p90_ms": 2.109,
+          "p95_ms": 2.428,
+          "p99_ms": 2.522,
+          "p999_ms": 2.543,
+          "p9999_ms": 2.545,
+          "max_ms": 2.545,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "aircraft",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.708,
+          "min_ms": 1.307,
+          "p50_ms": 1.682,
+          "p90_ms": 2.269,
+          "p95_ms": 2.275,
+          "p99_ms": 2.346,
+          "p999_ms": 2.362,
+          "p9999_ms": 2.363,
+          "max_ms": 2.363,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "airplay",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.467,
+          "min_ms": 1.329,
+          "p50_ms": 1.453,
+          "p90_ms": 1.587,
+          "p95_ms": 1.656,
+          "p99_ms": 1.679,
+          "p999_ms": 1.684,
+          "p9999_ms": 1.684,
+          "max_ms": 1.684,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "allied",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.477,
+          "min_ms": 1.3,
+          "p50_ms": 1.445,
+          "p90_ms": 1.588,
+          "p95_ms": 1.737,
+          "p99_ms": 1.86,
+          "p999_ms": 1.888,
+          "p9999_ms": 1.891,
+          "max_ms": 1.891,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "applied",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.835,
+          "min_ms": 1.358,
+          "p50_ms": 1.798,
+          "p90_ms": 2.355,
+          "p95_ms": 2.399,
+          "p99_ms": 2.688,
+          "p999_ms": 2.753,
+          "p9999_ms": 2.76,
+          "max_ms": 2.761,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "appointment",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.48,
+          "min_ms": 1.255,
+          "p50_ms": 1.381,
+          "p90_ms": 1.887,
+          "p95_ms": 2.016,
+          "p99_ms": 2.278,
+          "p999_ms": 2.337,
+          "p9999_ms": 2.343,
+          "max_ms": 2.344,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "approach",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.444,
+          "min_ms": 1.281,
+          "p50_ms": 1.433,
+          "p90_ms": 1.568,
+          "p95_ms": 1.622,
+          "p99_ms": 1.698,
+          "p999_ms": 1.714,
+          "p9999_ms": 1.716,
+          "max_ms": 1.716,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "arrow",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.449,
+          "min_ms": 1.35,
+          "p50_ms": 1.434,
+          "p90_ms": 1.552,
+          "p95_ms": 1.552,
+          "p99_ms": 1.553,
+          "p999_ms": 1.553,
+          "p9999_ms": 1.553,
+          "max_ms": 1.553,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "astronomer",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.534,
+          "min_ms": 1.304,
+          "p50_ms": 1.463,
+          "p90_ms": 1.915,
+          "p95_ms": 2.061,
+          "p99_ms": 2.068,
+          "p999_ms": 2.07,
+          "p9999_ms": 2.07,
+          "max_ms": 2.07,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "athens",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.411,
+          "min_ms": 1.259,
+          "p50_ms": 1.367,
+          "p90_ms": 1.548,
+          "p95_ms": 1.761,
+          "p99_ms": 1.89,
+          "p999_ms": 1.919,
+          "p9999_ms": 1.922,
+          "max_ms": 1.922,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "auto",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.498,
+          "min_ms": 1.346,
+          "p50_ms": 1.479,
+          "p90_ms": 1.626,
+          "p95_ms": 1.646,
+          "p99_ms": 1.765,
+          "p999_ms": 1.792,
+          "p9999_ms": 1.795,
+          "max_ms": 1.795,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "aviation",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.427,
+          "min_ms": 1.304,
+          "p50_ms": 1.41,
+          "p90_ms": 1.518,
+          "p95_ms": 1.54,
+          "p99_ms": 1.719,
+          "p999_ms": 1.759,
+          "p9999_ms": 1.763,
+          "max_ms": 1.764,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "banks",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.518,
+          "min_ms": 1.386,
+          "p50_ms": 1.461,
+          "p90_ms": 1.627,
+          "p95_ms": 1.77,
+          "p99_ms": 1.976,
+          "p999_ms": 2.022,
+          "p9999_ms": 2.026,
+          "max_ms": 2.027,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "bennett",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.542,
+          "min_ms": 1.233,
+          "p50_ms": 1.398,
+          "p90_ms": 2.299,
+          "p95_ms": 2.323,
+          "p99_ms": 2.412,
+          "p999_ms": 2.432,
+          "p9999_ms": 2.434,
+          "max_ms": 2.435,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "blood",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.518,
+          "min_ms": 1.315,
+          "p50_ms": 1.442,
+          "p90_ms": 1.728,
+          "p95_ms": 1.802,
+          "p99_ms": 1.895,
+          "p999_ms": 1.916,
+          "p9999_ms": 1.918,
+          "max_ms": 1.918,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "bone",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.859,
+          "min_ms": 1.45,
+          "p50_ms": 1.775,
+          "p90_ms": 2.328,
+          "p95_ms": 2.637,
+          "p99_ms": 2.8,
+          "p999_ms": 2.837,
+          "p9999_ms": 2.84,
+          "max_ms": 2.841,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "boys",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.607,
+          "min_ms": 1.307,
+          "p50_ms": 1.571,
+          "p90_ms": 1.815,
+          "p95_ms": 1.86,
+          "p99_ms": 2.069,
+          "p999_ms": 2.116,
+          "p9999_ms": 2.121,
+          "max_ms": 2.122,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "breathing",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.751,
+          "min_ms": 1.442,
+          "p50_ms": 1.695,
+          "p90_ms": 2.119,
+          "p95_ms": 2.201,
+          "p99_ms": 2.287,
+          "p999_ms": 2.306,
+          "p9999_ms": 2.308,
+          "max_ms": 2.308,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "buddhism",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.596,
+          "min_ms": 1.328,
+          "p50_ms": 1.542,
+          "p90_ms": 1.795,
+          "p95_ms": 1.899,
+          "p99_ms": 2.199,
+          "p999_ms": 2.266,
+          "p9999_ms": 2.273,
+          "max_ms": 2.274,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "burton",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.424,
+          "min_ms": 1.275,
+          "p50_ms": 1.385,
+          "p90_ms": 1.6,
+          "p95_ms": 1.628,
+          "p99_ms": 1.714,
+          "p999_ms": 1.734,
+          "p9999_ms": 1.736,
+          "max_ms": 1.736,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "cancelled",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.573,
+          "min_ms": 1.322,
+          "p50_ms": 1.533,
+          "p90_ms": 1.868,
+          "p95_ms": 1.884,
+          "p99_ms": 2.028,
+          "p999_ms": 2.061,
+          "p9999_ms": 2.064,
+          "max_ms": 2.065,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "canon",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.503,
+          "min_ms": 1.295,
+          "p50_ms": 1.518,
+          "p90_ms": 1.64,
+          "p95_ms": 1.697,
+          "p99_ms": 1.699,
+          "p999_ms": 1.699,
+          "p9999_ms": 1.699,
+          "max_ms": 1.699,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "capitals",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.946,
+          "min_ms": 1.399,
+          "p50_ms": 1.916,
+          "p90_ms": 2.197,
+          "p95_ms": 2.44,
+          "p99_ms": 2.895,
+          "p999_ms": 2.998,
+          "p9999_ms": 3.008,
+          "max_ms": 3.009,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "carol",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.591,
+          "min_ms": 1.432,
+          "p50_ms": 1.585,
+          "p90_ms": 1.749,
+          "p95_ms": 1.758,
+          "p99_ms": 1.806,
+          "p999_ms": 1.816,
+          "p9999_ms": 1.818,
+          "max_ms": 1.818,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "carrier",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.588,
+          "min_ms": 1.305,
+          "p50_ms": 1.66,
+          "p90_ms": 1.793,
+          "p95_ms": 1.874,
+          "p99_ms": 1.906,
+          "p999_ms": 1.913,
+          "p9999_ms": 1.914,
+          "max_ms": 1.914,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "cartoonist",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.393,
+          "min_ms": 1.303,
+          "p50_ms": 1.389,
+          "p90_ms": 1.505,
+          "p95_ms": 1.516,
+          "p99_ms": 1.518,
+          "p999_ms": 1.518,
+          "p9999_ms": 1.518,
+          "max_ms": 1.518,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "casino",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.52,
+          "min_ms": 1.335,
+          "p50_ms": 1.48,
+          "p90_ms": 1.714,
+          "p95_ms": 1.828,
+          "p99_ms": 1.968,
+          "p999_ms": 2.0,
+          "p9999_ms": 2.003,
+          "max_ms": 2.004,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "centers",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.694,
+          "min_ms": 1.386,
+          "p50_ms": 1.609,
+          "p90_ms": 1.982,
+          "p95_ms": 2.15,
+          "p99_ms": 2.238,
+          "p999_ms": 2.258,
+          "p9999_ms": 2.26,
+          "max_ms": 2.26,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "chancellor",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.988,
+          "min_ms": 1.423,
+          "p50_ms": 1.972,
+          "p90_ms": 2.433,
+          "p95_ms": 2.544,
+          "p99_ms": 2.673,
+          "p999_ms": 2.702,
+          "p9999_ms": 2.705,
+          "max_ms": 2.705,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "claire",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.79,
+          "min_ms": 1.339,
+          "p50_ms": 1.861,
+          "p90_ms": 2.05,
+          "p95_ms": 2.101,
+          "p99_ms": 2.242,
+          "p999_ms": 2.273,
+          "p9999_ms": 2.276,
+          "max_ms": 2.277,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "clarence",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.628,
+          "min_ms": 1.289,
+          "p50_ms": 1.542,
+          "p90_ms": 2.081,
+          "p95_ms": 2.227,
+          "p99_ms": 2.246,
+          "p999_ms": 2.25,
+          "p9999_ms": 2.25,
+          "max_ms": 2.25,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "clear",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.636,
+          "min_ms": 1.433,
+          "p50_ms": 1.604,
+          "p90_ms": 1.754,
+          "p95_ms": 1.889,
+          "p99_ms": 2.257,
+          "p999_ms": 2.34,
+          "p9999_ms": 2.349,
+          "max_ms": 2.35,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "closely",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.637,
+          "min_ms": 1.308,
+          "p50_ms": 1.639,
+          "p90_ms": 1.837,
+          "p95_ms": 1.95,
+          "p99_ms": 2.031,
+          "p999_ms": 2.049,
+          "p9999_ms": 2.051,
+          "max_ms": 2.052,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "collapse",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 2.636,
+          "min_ms": 1.708,
+          "p50_ms": 2.611,
+          "p90_ms": 3.485,
+          "p95_ms": 3.586,
+          "p99_ms": 3.786,
+          "p999_ms": 3.83,
+          "p9999_ms": 3.835,
+          "max_ms": 3.835,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "collecting",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.636,
+          "min_ms": 1.341,
+          "p50_ms": 1.511,
+          "p90_ms": 2.018,
+          "p95_ms": 2.188,
+          "p99_ms": 2.406,
+          "p999_ms": 2.455,
+          "p9999_ms": 2.46,
+          "max_ms": 2.46,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "collective",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.481,
+          "min_ms": 1.237,
+          "p50_ms": 1.408,
+          "p90_ms": 1.768,
+          "p95_ms": 1.957,
+          "p99_ms": 1.99,
+          "p999_ms": 1.997,
+          "p9999_ms": 1.998,
+          "max_ms": 1.998,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        },
+        {
+          "query": "colors",
+          "hits": 10,
+          "count": 20,
+          "mean_ms": 1.526,
+          "min_ms": 1.33,
+          "p50_ms": 1.499,
+          "p90_ms": 1.692,
+          "p95_ms": 1.738,
+          "p99_ms": 1.912,
+          "p999_ms": 1.951,
+          "p9999_ms": 1.955,
+          "max_ms": 1.955,
+          "unsupported_percentiles": [
+            99.0,
+            99.9,
+            99.99
+          ]
+        }
+      ]
+    }
+  }
+}

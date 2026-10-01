@@ -1,0 +1,115 @@
+diff --git a/crates/vector-store/src/fts_index/tantivy.rs b/crates/vector-store/src/fts_index/tantivy.rs
+index 99efc388..ca694b89 100644
+--- a/crates/vector-store/src/fts_index/tantivy.rs
++++ b/crates/vector-store/src/fts_index/tantivy.rs
+@@ -4,6 +4,8 @@
+  */
+ 
+ use std::collections::BTreeMap;
++use std::collections::HashMap;
++use std::collections::hash_map::Entry;
+ use std::fmt;
+ use std::ops::Deref;
+ use std::path::Path;
+@@ -21,19 +23,20 @@ use tantivy::IndexWriter;
+ use tantivy::ReloadPolicy;
+ use tantivy::TantivyDocument;
+ use tantivy::collector::TopDocs;
++use tantivy::columnar::Column;
+ use tantivy::indexer::IndexWriterOptions;
+ use tantivy::query::BooleanQuery;
+ use tantivy::query::BoostQuery;
+ use tantivy::query::Occur;
+ use tantivy::query::Query;
+ use tantivy::query::QueryParser;
++use tantivy::schema::FAST;
+ use tantivy::schema::INDEXED;
+ use tantivy::schema::IndexRecordOption;
+ use tantivy::schema::STORED;
+ use tantivy::schema::Schema;
+ use tantivy::schema::TextFieldIndexing;
+ use tantivy::schema::TextOptions;
+-use tantivy::schema::Value;
+ use tantivy::snippet::SnippetGenerator;
+ use tantivy::tokenizer::Language;
+ use tantivy::tokenizer::LowerCaser;
+@@ -293,6 +296,7 @@ impl IngestMetrics {
+ }
+ 
+ const TOKENIZER_NAME: &str = "standard";
++const PRIMARY_ID_FIELD: &str = "primary_id";
+ 
+ impl IndexState {
+     fn new(key: &IndexKey, index_id: IndexId, tuning: &crate::FtsTuning) -> anyhow::Result<Self> {
+@@ -361,13 +365,16 @@ fn body_text_options() -> TextOptions {
+ 
+ fn build_schema() -> Schema {
+     let mut schema_builder = Schema::builder();
+-    schema_builder.add_u64_field("primary_id", INDEXED | STORED);
++    // FAST puts primary_id in the columnar store, which is what the search
++    // path reads it from; STORED stays because `create_doc`/`explain` and any
++    // document-oriented access still expect it in the doc store.
++    schema_builder.add_u64_field(PRIMARY_ID_FIELD, INDEXED | STORED | FAST);
+     schema_builder.add_text_field("body", body_text_options());
+     schema_builder.build()
+ }
+ 
+ fn create_doc(schema: &Schema, primary_id: PrimaryId, document: &str) -> TantivyDocument {
+-    let primary_id_field = schema.get_field("primary_id").unwrap();
++    let primary_id_field = schema.get_field(PRIMARY_ID_FIELD).unwrap();
+     let body_field = schema.get_field("body").unwrap();
+ 
+     let mut doc = TantivyDocument::new();
+@@ -490,7 +497,7 @@ fn handle_add_document(
+ }
+ 
+ fn create_term(schema: &Schema, primary_id: PrimaryId) -> tantivy::Term {
+-    let primary_id_field = schema.get_field("primary_id").unwrap();
++    let primary_id_field = schema.get_field(PRIMARY_ID_FIELD).unwrap();
+     tantivy::Term::from_field_u64(primary_id_field, u64::from(primary_id))
+ }
+ 
+@@ -542,7 +549,6 @@ fn handle_search(
+     limit: Limit,
+ ) -> FtsSearchR {
+     let body_field = state.schema.get_field("body").unwrap();
+-    let primary_id_field = state.schema.get_field("primary_id").unwrap();
+ 
+     let searcher = state.reader.searcher();
+     let query = make_query(&state.index, body_field, query_str)?;
+@@ -555,15 +561,29 @@ fn handle_search(
+     let table = table.read().unwrap();
+     let partition_id = find_partition_id(table.deref(), index_key)?;
+ 
++    // `primary_id` is read from the columnar fast field rather than from the
++    // document store. `searcher.doc()` decompresses a stored-field block per
++    // hit — measured at ~20 µs per returned document, which was the largest
++    // engine-side cost left in a single-term query once matching itself had
++    // been made cheap. The column is opened once per segment, not per hit.
++    let mut columns: HashMap<u32, Column<u64>> = HashMap::new();
+     let (primary_keys, scores) = top_docs
+         .into_iter()
+         .map(|(score, doc_address)| {
+-            let doc: TantivyDocument = searcher
+-                .doc(doc_address)
+-                .map_err(|e| anyhow!("fts: failed to retrieve doc: {e}"))?;
+-            let raw_id = doc
+-                .get_first(primary_id_field)
+-                .and_then(|v| v.as_u64())
++            let column = match columns.entry(doc_address.segment_ord) {
++                Entry::Occupied(entry) => entry.into_mut(),
++                Entry::Vacant(entry) => entry.insert(
++                    searcher
++                        .segment_reader(doc_address.segment_ord)
++                        .fast_fields()
++                        .u64(PRIMARY_ID_FIELD)
++                        .map_err(|e| {
++                            anyhow!("fts: primary_id fast field unavailable: {e}")
++                        })?,
++                ),
++            };
++            let raw_id = column
++                .first(doc_address.doc_id)
+                 .ok_or_else(|| anyhow!("fts: missing primary_id in doc"))?;
+             Ok((score, PrimaryId::from(raw_id)))
+         })

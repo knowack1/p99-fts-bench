@@ -1,0 +1,86 @@
+{
+  "noise_floor_v0_vs_v0_rebuilt": {
+    "common_term": {
+      "identical": 154,
+      "changed": 15,
+      "reordered": 31
+    },
+    "bool_and": {
+      "identical": 170,
+      "reordered": 21,
+      "changed": 8
+    },
+    "bool_mixed": {
+      "identical": 168,
+      "changed": 4,
+      "reordered": 28
+    },
+    "rare_term": {
+      "identical": 151,
+      "reordered": 32,
+      "changed": 17
+    },
+    "phrase": {
+      "reordered": 57,
+      "identical": 78,
+      "changed": 65
+    },
+    "bool_not": {
+      "reordered": 32,
+      "identical": 154,
+      "changed": 14
+    }
+  },
+  "patch_v0_vs_v1": {
+    "common_term": {
+      "reordered": 29,
+      "identical": 161,
+      "changed": 10
+    },
+    "bool_and": {
+      "identical": 171,
+      "reordered": 22,
+      "changed": 6
+    },
+    "bool_mixed": {
+      "identical": 169,
+      "reordered": 26,
+      "changed": 5
+    },
+    "rare_term": {
+      "identical": 149,
+      "reordered": 37,
+      "changed": 14
+    },
+    "phrase": {
+      "reordered": 61,
+      "identical": 72,
+      "changed": 67
+    },
+    "bool_not": {
+      "identical": 154,
+      "reordered": 38,
+      "changed": 8
+    }
+  },
+  "determinism_same_index": {
+    "common_term": {
+      "identical": 200
+    },
+    "bool_and": {
+      "identical": 199
+    },
+    "bool_mixed": {
+      "identical": 200
+    },
+    "rare_term": {
+      "identical": 200
+    },
+    "phrase": {
+      "identical": 200
+    },
+    "bool_not": {
+      "identical": 200
+    }
+  }
+}

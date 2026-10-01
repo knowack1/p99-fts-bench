@@ -1,0 +1,13 @@
+rep,variant,segments,class,p50_ms,p95_ms,p99_ms
+1,p99-v1-prune,9,phrase,1.301,2.751,4.12
+1,p99-v1-prune,9,common_term,0.605,0.913,1.163
+1,p99-v1-prune,9,rare_term,0.548,0.875,1.243
+1,p99-v2-fastfield,22,phrase,1.446,2.841,3.867
+1,p99-v2-fastfield,22,common_term,0.763,1.157,1.591
+1,p99-v2-fastfield,22,rare_term,0.596,0.882,1.116
+2,p99-v1-prune,20,phrase,1.355,2.776,3.486
+2,p99-v1-prune,20,common_term,0.719,0.947,1.095
+2,p99-v1-prune,20,rare_term,0.595,0.877,1.157
+2,p99-v2-fastfield,21,phrase,1.408,2.948,3.779
+2,p99-v2-fastfield,21,common_term,0.735,0.925,1.104
+2,p99-v2-fastfield,21,rare_term,0.606,0.713,0.853
